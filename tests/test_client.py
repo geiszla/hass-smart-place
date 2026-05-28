@@ -133,6 +133,93 @@ async def test_handler_exception_does_not_crash_dispatch(caplog: pytest.LogCaptu
     assert any("frame handler raised" in rec.message for rec in caplog.records)
 
 
+async def test_live_logs_unknown_frame_to_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each unknown frame seen in live mode is appended to the unknown-log file."""
+
+    async def _iter(items: list[str]):
+        for item in items:
+            yield item
+
+    out = tmp_path / "unknown.ndjson"
+    client = SmartPlaceClient.live(token="dummy", unknown_log=out)
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        await self_._dispatch_loop(
+            _iter(
+                [
+                    "GoToLinkSSL:h:8770/Start1:Leer",
+                    "WINDGESCHWINDIGKEIT:2.9",
+                    "TEMPIST2:26.3",
+                    "WINDGESCHWINDIGKEIT:3.1",
+                ],
+            ),
+        )
+        self_._closing = True
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+
+    lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line]
+    assert [entry["raw"] for entry in lines] == [
+        "WINDGESCHWINDIGKEIT:2.9",
+        "TEMPIST2:26.3",
+        "WINDGESCHWINDIGKEIT:3.1",
+    ]
+    # Every entry has both a numeric and an ISO timestamp.
+    for entry in lines:
+        assert isinstance(entry["ts"], float)
+        assert entry["iso_ts"].startswith("20")
+
+
+async def test_live_unknown_log_disabled_by_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """unknown_log=None disables the log even in live mode."""
+
+    async def _iter(items: list[str]):
+        for item in items:
+            yield item
+
+    sentinel = tmp_path / "should-not-exist.ndjson"
+    client = SmartPlaceClient.live(token="dummy", unknown_log=None)
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        await self_._dispatch_loop(_iter(["WINDGESCHWINDIGKEIT:2.9"]))
+        self_._closing = True
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+
+    assert not sentinel.exists()
+    assert client._unknown_handle is None
+
+
+async def test_replay_mode_does_not_write_unknown_log(tmp_path: Path) -> None:
+    """Replay-mode unknowns are not logged — they're already in the fixture."""
+    out = tmp_path / "unknown.ndjson"
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    # bootstrap.ndjson contains a `leuchte12:75` UnknownFrame; replay
+    # mode should still skip writing the unknown log because the user
+    # already had this frame in the fixture and re-logging would just
+    # duplicate work.
+    client.unknown_log_path = out
+    async with client:
+        await client.run()
+    assert not out.exists()
+
+
 async def test_phase3_capture_replays_to_bootstrapped_state() -> None:
     """The committed Phase 3 fixture from a real session replays cleanly.
 

@@ -50,6 +50,7 @@ from smart_place_client.protocol import (
     SessionState,
     SmartPlaceAuthError,
     StatusListe,
+    UnknownFrame,
     discovery_ws_url,
     encode_frame,
     parse_frame,
@@ -223,9 +224,11 @@ class SmartPlaceClient:
     state: SessionState
     handlers: list[FrameHandler]
     capture_path: Path | None
+    unknown_log_path: Path | None = None
     on_reauth: ReauthCallback | None = None
     backoff: ExponentialBackoff = field(default_factory=ExponentialBackoff)
     _capture_handle: object | None = None
+    _unknown_handle: object | None = None
     _ws: aiohttp.ClientWebSocketResponse | None = None
     _live: _LiveSources | None = None
     _replay: _ReplaySources | None = None
@@ -241,6 +244,7 @@ class SmartPlaceClient:
         *,
         session: aiohttp.ClientSession | None = None,
         capture: Path | str | None = None,
+        unknown_log: Path | str | None = None,
         heartbeat: float = 30.0,
         handlers: list[FrameHandler] | None = None,
         on_reauth: ReauthCallback | None = None,
@@ -254,6 +258,10 @@ class SmartPlaceClient:
                 its own pooled session; the CLI lets us create one).
             capture: optional path to tee every frame (both directions)
                 as ndjson — tokens are redacted on the way in.
+            unknown_log: optional path to record every frame that the
+                parser doesn't recognise. Each occurrence is appended
+                (not deduped) so we can compare instances of the same
+                shape later. Tokens redacted defensively.
             heartbeat: aiohttp WS ping interval, in seconds.
             handlers: optional initial frame handlers.
             on_reauth: coroutine invoked once if the token is rejected;
@@ -272,6 +280,7 @@ class SmartPlaceClient:
         return cls(
             state=SessionState(),
             handlers=list(handlers or []),
+            unknown_log_path=Path(unknown_log) if unknown_log else None,
             capture_path=Path(capture) if capture else None,
             on_reauth=on_reauth,
             backoff=backoff or ExponentialBackoff(),
@@ -333,6 +342,9 @@ class SmartPlaceClient:
             if self.capture_path is not None and self._capture_handle is not None:
                 self._capture_handle.close()  # type: ignore[attr-defined]
                 self._capture_handle = None
+            if self._unknown_handle is not None:
+                self._unknown_handle.close()  # type: ignore[attr-defined]
+                self._unknown_handle = None
 
     async def _run_live_with_reconnect(self) -> None:
         """Live-mode outer loop: reconnect on errors, stop on auth/cancel."""
@@ -518,6 +530,9 @@ class SmartPlaceClient:
                 _LOGGER.warning("parse error %s on frame %r — skipping", err, text)
                 continue
 
+            if isinstance(frame, UnknownFrame):
+                self._log_unknown(frame)
+
             current_phase = self.state.phase
             if current_phase in (SessionPhase.DISCOVERY_OPEN, SessionPhase.ROUTED):
                 # In replay we may walk through the discovery frame here.
@@ -553,6 +568,7 @@ class SmartPlaceClient:
         if self.capture_path is None:
             return
         if self._capture_handle is None:
+            self.capture_path.parent.mkdir(parents=True, exist_ok=True)
             self._capture_handle = self.capture_path.open("a", encoding="utf-8")
         scrubbed_text = _scrub_token(frame.text)
         sanitized = CapturedFrame(
@@ -562,6 +578,30 @@ class SmartPlaceClient:
         )
         self._capture_handle.write(sanitized.to_json() + "\n")  # type: ignore[attr-defined]
         self._capture_handle.flush()  # type: ignore[attr-defined]
+
+    def _log_unknown(self, frame: UnknownFrame) -> None:
+        """Append an unknown frame to the unknown-log file.
+
+        Only fires in live mode and when ``unknown_log_path`` is set —
+        replay-mode unknowns would just re-log the same frames we
+        already recorded the first time we saw them live. Every
+        occurrence is appended (not deduped) so we can compare the
+        payloads of repeated shapes when figuring out what they mean.
+        """
+        if self._live is None or self.unknown_log_path is None:
+            return
+        if self._unknown_handle is None:
+            self.unknown_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._unknown_handle = self.unknown_log_path.open("a", encoding="utf-8")
+            _LOGGER.info("logging unknown frames to %s", self.unknown_log_path)
+        ts = _now_ts()
+        entry = {
+            "ts": ts,
+            "iso_ts": datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec="milliseconds"),
+            "raw": _scrub_token(frame.raw),
+        }
+        self._unknown_handle.write(json.dumps(entry, ensure_ascii=False) + "\n")  # type: ignore[attr-defined]
+        self._unknown_handle.flush()  # type: ignore[attr-defined]
 
 
 # -------------------------- module helpers ---------------------------
@@ -672,6 +712,11 @@ def _build_cli(click: Any) -> Callable[..., None]:
         mode is bidirectional: server frames print to stdout, lines
         typed on stdin are sent. There is no software gate against
         accidental sends — see DESIGN.md §5.3.
+
+        In --live mode, frames the parser doesn't recognise are always
+        appended to ``output/unknown_frames.ndjson`` (gitignored) so
+        they can be inspected later. Capture files (``--capture``) can
+        be placed anywhere; ``output/`` is a good default home.
         """
         if live_mode == (replay_path is not None):
             raise click.UsageError("exactly one of --live and --replay <file> is required")
@@ -681,6 +726,13 @@ def _build_cli(click: Any) -> Callable[..., None]:
         asyncio.run(_run_cli(live_mode, replay_path, capture_path))
 
     return cli
+
+
+# CLI-default output directory. User-supplied --capture paths can target
+# anywhere; only the always-on unknown-frame log defaults under here.
+# Gitignored so captures don't get committed by accident.
+_CLI_OUTPUT_DIR = Path("output")
+_CLI_UNKNOWN_LOG = _CLI_OUTPUT_DIR / "unknown_frames.ndjson"
 
 
 async def _run_cli(
@@ -710,7 +762,12 @@ async def _run_cli(
                 "SMART_PLACE_TOKEN is required for --live. Put it in .env "
                 "(SMART_PLACE_TOKEN=...) or export it in your shell."
             )
-        client = SmartPlaceClient.live(token=token, capture=capture_path, handlers=[printer])
+        client = SmartPlaceClient.live(
+            token=token,
+            capture=capture_path,
+            unknown_log=_CLI_UNKNOWN_LOG,
+            handlers=[printer],
+        )
     else:
         assert replay_path is not None
         client = SmartPlaceClient.replay(path=replay_path, capture=capture_path, handlers=[printer])

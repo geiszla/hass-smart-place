@@ -17,6 +17,7 @@ from smart_place_client.protocol import (
     DISCOVERY_PORT,
     DISCOVERY_WS_PATH,
     GLOBAL_CONFIG_REQUEST,
+    KNOWN_MESSAGES,
     LEGACY_HOST,
     LEGACY_PORT,
     STATUS_LISTE_REQUEST,
@@ -24,6 +25,7 @@ from smart_place_client.protocol import (
     GoToLinkOldSystem,
     GoToLinkSSL,
     HostNotOnline,
+    MessageDefinition,
     ProtocolError,
     SessionPhase,
     SessionState,
@@ -251,3 +253,35 @@ def test_session_state_app_open_without_route_raises() -> None:
     state = SessionState()
     with pytest.raises(ProtocolError):
         state.on_app_open()
+
+
+# --------------------------- KNOWN_MESSAGES --------------------------
+
+
+def test_known_messages_registry_covers_all_known_dataclasses() -> None:
+    """Every name in KNOWN_MESSAGES corresponds to a real frame dataclass."""
+    expected = {"HostNotOnline", "GoToLinkSSL", "GoToLinkOldSystem", "GlobalConfig", "StatusListe"}
+    assert {defn.name for defn in KNOWN_MESSAGES} == expected
+
+
+def test_known_messages_entries_have_descriptions_and_parsers() -> None:
+    for defn in KNOWN_MESSAGES:
+        assert isinstance(defn, MessageDefinition)
+        assert defn.name
+        assert defn.description, f"{defn.name} missing description"
+        assert defn.prefix, f"{defn.name} missing prefix"
+        assert callable(defn.parse), f"{defn.name} parse not callable"
+
+
+def test_known_messages_drive_parse_frame() -> None:
+    """parse_frame returns the dataclass declared by the matching entry."""
+    for defn in KNOWN_MESSAGES:
+        sample = defn.prefix if defn.exact else defn.prefix + "0"
+        try:
+            frame = parse_frame(sample)
+        except ProtocolError:
+            # Synthetic samples can be malformed for some shapes; the
+            # important thing is parse_frame routed through the registry
+            # (an UnknownFrame here would mean the registry is bypassed).
+            continue
+        assert type(frame).__name__ == defn.name

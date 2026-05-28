@@ -57,3 +57,6 @@ coverage.xml
 # Captures from sp-cli that aren't checked-in fixtures
 *.ndjson
 !tests/fixtures/*.ndjson
+
+# sp-cli default output directory (unknown-frame log + ad-hoc captures)
+output/

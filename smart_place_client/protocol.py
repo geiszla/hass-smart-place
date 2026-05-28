@@ -16,6 +16,7 @@ References:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -159,31 +160,17 @@ ServerFrame = GoToLinkSSL | GoToLinkOldSystem | HostNotOnline | GlobalConfig | S
 """Any frame the server may emit, post-parsing."""
 
 
-def parse_frame(text: str) -> ServerFrame:
-    """Parse a text frame from the server.
+def _parse_host_not_online(_text: str) -> HostNotOnline:
+    """Return the singleton offline marker."""
+    return HostNotOnline()
 
-    The Smart Place wire format is prefix-delimited text; binary frames
-    have not been observed and would currently be raised by the caller.
-    """
-    if text == "HostNotOnline":
-        return HostNotOnline()
 
-    if text.startswith("GoToLinkSSL:"):
-        return _parse_go_to_link_ssl(text)
-
-    if text.startswith("GoToLinkOLDSYSTEM:"):
-        _, _, token2 = text.partition(":")
-        if not token2:
-            raise ProtocolError("GoToLinkOLDSYSTEM frame missing token2")
-        return GoToLinkOldSystem(token2=token2)
-
-    if text.startswith("EINSTELLUNGENGLOBAL>"):
-        return _parse_global_config(text)
-
-    if text.startswith("StatusListe>"):
-        return _parse_status_liste(text)
-
-    return UnknownFrame(raw=text)
+def _parse_go_to_link_old_system(text: str) -> GoToLinkOldSystem:
+    """Parse ``GoToLinkOLDSYSTEM:<token2>``."""
+    _, _, token2 = text.partition(":")
+    if not token2:
+        raise ProtocolError("GoToLinkOLDSYSTEM frame missing token2")
+    return GoToLinkOldSystem(token2=token2)
 
 
 def _parse_go_to_link_ssl(text: str) -> GoToLinkSSL:
@@ -245,6 +232,125 @@ def _parse_status_liste(text: str) -> StatusListe:
     """
     _, _, payload = text.partition(">")
     return StatusListe(fields=tuple(payload.split(">")))
+
+
+@dataclass(frozen=True, slots=True)
+class MessageDefinition:
+    """Declarative entry in :data:`KNOWN_MESSAGES`.
+
+    One per known wire-frame shape. ``parse_frame()`` walks
+    :data:`KNOWN_MESSAGES` in order; the first definition whose prefix
+    matches takes the frame. Adding a new known frame: write a parser,
+    append a ``MessageDefinition`` here, add a unit test.
+
+    Attributes:
+        name: CamelCase identifier; matches the dataclass name returned
+            by :attr:`parse`.
+        description: Plain-English meaning + when the frame appears.
+            Read by future-us when debugging.
+        prefix: Wire prefix used for identification.
+        exact: If ``True``, ``prefix`` must equal the full frame text
+            (no payload); otherwise ``text.startswith(prefix)`` matches.
+        parse: Callable that takes the full frame text and returns the
+            parsed dataclass. Must raise :class:`ProtocolError` on
+            malformed frames.
+    """
+
+    name: str
+    description: str
+    prefix: str
+    exact: bool
+    parse: Callable[[str], ServerFrame]
+
+
+KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
+    MessageDefinition(
+        name="HostNotOnline",
+        description=(
+            "Installation is offline; the discovery WS returns this when the user's "
+            "home server is unreachable from spr1. Surfaces as a typed error so the "
+            "integration can mark entities unavailable."
+        ),
+        prefix="HostNotOnline",
+        exact=True,
+        parse=_parse_host_not_online,
+    ),
+    MessageDefinition(
+        name="GoToLinkSSL",
+        description=(
+            "Modern SSL routing frame. Format: GoToLinkSSL:<host>:<port-or-port/path>:<token2>. "
+            "The middle field is a bare port or port-with-path; the routed port is dynamic "
+            "per session (DESIGN §10)."
+        ),
+        prefix="GoToLinkSSL:",
+        exact=False,
+        parse=_parse_go_to_link_ssl,
+    ),
+    MessageDefinition(
+        name="GoToLinkOldSystem",
+        description=(
+            "Legacy server routing. Format: GoToLinkOLDSYSTEM:<token2>. Redirects "
+            "to spr0.smartplace.ch:8770/Start2?<token2>. Seen only in javallg.js, "
+            "not yet as a live frame."
+        ),
+        prefix="GoToLinkOLDSYSTEM:",
+        exact=False,
+        parse=_parse_go_to_link_old_system,
+    ),
+    MessageDefinition(
+        name="GlobalConfig",
+        description=(
+            "Response to GiveMeGlobalConfig. Format: EINSTELLUNGENGLOBAL>language>"
+            "standby>brightness>screensaver_mode>screensaver_start>screensaver_duration. "
+            "Values are wire-typed strings (brightness is 0..1 float-as-string)."
+        ),
+        prefix="EINSTELLUNGENGLOBAL>",
+        exact=False,
+        parse=_parse_global_config,
+    ),
+    MessageDefinition(
+        name="StatusListe",
+        description=(
+            "Response to GiveStatusListe. Format: StatusListe>f1>f2>... — observed "
+            "fields look like info-board tab labels (Wetter, Tagesverbrauch), NOT "
+            "per-device state (DESIGN §9 Q2)."
+        ),
+        prefix="StatusListe>",
+        exact=False,
+        parse=_parse_status_liste,
+    ),
+]
+"""All known server frame shapes, in identification order.
+
+Two reasons for keeping this declarative rather than a chain of
+``startswith`` checks:
+
+- Single source of truth for the protocol surface. ``len(KNOWN_MESSAGES)``
+  is how many shapes we know. Future maintainers can add a frame in one
+  place without grepping for an ``if text.startswith(...)`` chain.
+- Tooling can introspect it — e.g. a CLI ``--list-known`` flag (not
+  built yet) could dump the table for documentation.
+
+Per the ``smart-place-prior-art`` memory: every ``MessageDefinition``
+should cite its source in the surrounding parser's docstring.
+"""
+
+
+def parse_frame(text: str) -> ServerFrame:
+    """Parse a text frame from the server.
+
+    Walks :data:`KNOWN_MESSAGES` in declaration order and returns the
+    first matching frame. Unknown shapes return :class:`UnknownFrame`
+    so the dispatch layer can log + skip + record for later analysis
+    rather than crashing.
+    """
+    for defn in KNOWN_MESSAGES:
+        if defn.exact:
+            if text == defn.prefix:
+                return defn.parse(text)
+        elif text.startswith(defn.prefix):
+            return defn.parse(text)
+    return UnknownFrame(raw=text)
 
 
 def encode_global_config_request() -> str:

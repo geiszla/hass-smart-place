@@ -13,10 +13,12 @@ from smart_place_client.client import (
     install_token_redaction_filter,
 )
 from smart_place_client.protocol import (
+    KNOWN_MESSAGES,
     GlobalConfig,
     GoToLinkOldSystem,
     GoToLinkSSL,
     HostNotOnline,
+    MessageDefinition,
     ProtocolError,
     ServerFrame,
     SessionPhase,
@@ -31,6 +33,7 @@ from smart_place_client.protocol import (
 )
 
 __all__ = [
+    "KNOWN_MESSAGES",
     "CapturedFrame",
     "ExponentialBackoff",
     "FrameHandler",
@@ -38,6 +41,7 @@ __all__ = [
     "GoToLinkOldSystem",
     "GoToLinkSSL",
     "HostNotOnline",
+    "MessageDefinition",
     "ProtocolError",
     "ReauthCallback",
     "ServerFrame",
