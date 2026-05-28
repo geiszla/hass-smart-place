@@ -20,12 +20,13 @@ from smart_place_client import (
     GoToLinkSSL,
     ServerFrame,
     SessionPhase,
+    SmartPlaceAuthError,
     SmartPlaceClient,
     StatusListe,
     UnknownFrame,
     install_token_redaction_filter,
 )
-from smart_place_client.client import _LOGGER, _scrub_token
+from smart_place_client.client import _LOGGER, ExponentialBackoff, _scrub_token
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -259,6 +260,123 @@ def test_live_constructor_does_not_open_network() -> None:
     assert client._live.session is None
     assert client._ws is None
     assert client.state.phase is SessionPhase.DISCOVERY_OPEN
+
+
+def test_exponential_backoff_basic_progression() -> None:
+    """Without jitter, the sequence is base^n until cap."""
+    backoff = ExponentialBackoff(base=2.0, cap=10.0, jitter=0.0, initial=1.0)
+    delays = [backoff.next() for _ in range(6)]
+    assert delays == [1.0, 2.0, 4.0, 8.0, 10.0, 10.0]
+
+
+def test_exponential_backoff_reset_returns_to_initial() -> None:
+    backoff = ExponentialBackoff(base=2.0, cap=60.0, jitter=0.0, initial=1.0)
+    backoff.next()
+    backoff.next()
+    assert backoff.peek() > 1.0
+    backoff.reset()
+    assert backoff.peek() == 1.0
+
+
+def test_exponential_backoff_jitter_within_range() -> None:
+    backoff = ExponentialBackoff(base=2.0, cap=60.0, jitter=0.3, initial=1.0)
+    # First delay is in [1.0, 1.3) with jitter 0.3.
+    for _ in range(20):
+        peek = backoff.peek()
+        assert 1.0 <= peek < 1.3
+    delay = backoff.next()
+    assert 1.0 <= delay < 1.3
+
+
+async def test_run_live_reconnects_after_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-auth failure triggers backoff sleep, then a successful retry."""
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+
+    client = SmartPlaceClient.live(
+        token="t",
+        backoff=ExponentialBackoff(base=2.0, cap=10.0, jitter=0.0, initial=1.0),
+    )
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        attempts.append(len(attempts))
+        if len(attempts) < 3:
+            raise RuntimeError(f"transient failure {len(attempts)}")
+        self_._closing = True
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+    assert len(attempts) == 3
+    assert sleeps == [1.0, 2.0]
+
+
+async def test_run_live_auth_error_stops_and_calls_on_reauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    reauth_called: list[bool] = []
+
+    async def on_reauth() -> None:
+        reauth_called.append(True)
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+
+    client = SmartPlaceClient.live(token="t", on_reauth=on_reauth)
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        raise SmartPlaceAuthError("token rejected")
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+    assert reauth_called == [True]
+
+
+async def test_run_live_auth_error_without_callback_returns_quietly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SmartPlaceClient.live(token="t")
+
+    async def fake_once(_: SmartPlaceClient) -> None:
+        raise SmartPlaceAuthError("nope")
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+    assert client.on_reauth is None
+
+
+async def test_run_live_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = SmartPlaceClient.live(token="t")
+
+    async def fake_once(_: SmartPlaceClient) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    with pytest.raises(asyncio.CancelledError):
+        await client.run()
+
+
+async def test_run_live_exits_when_closing_after_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If aclose() flips `_closing` mid-failure, we don't sleep again."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    client = SmartPlaceClient.live(token="t")
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        self_._closing = True
+        raise RuntimeError("dropping while shutting down")
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+    assert sleeps == []
 
 
 def test_unknown_frame_dispatched_without_state_advance() -> None:

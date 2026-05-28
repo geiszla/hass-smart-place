@@ -4,7 +4,14 @@ Has no homeassistant dependency; safe to import from a notebook or CLI.
 The HA integration in custom_components/smart_place/ is a thin wrapper.
 """
 
-from smart_place_client.client import CapturedFrame, FrameHandler, SmartPlaceClient, install_token_redaction_filter
+from smart_place_client.client import (
+    CapturedFrame,
+    ExponentialBackoff,
+    FrameHandler,
+    ReauthCallback,
+    SmartPlaceClient,
+    install_token_redaction_filter,
+)
 from smart_place_client.protocol import (
     GlobalConfig,
     GoToLinkOldSystem,
@@ -25,12 +32,14 @@ from smart_place_client.protocol import (
 
 __all__ = [
     "CapturedFrame",
+    "ExponentialBackoff",
     "FrameHandler",
     "GlobalConfig",
     "GoToLinkOldSystem",
     "GoToLinkSSL",
     "HostNotOnline",
     "ProtocolError",
+    "ReauthCallback",
     "ServerFrame",
     "SessionPhase",
     "SessionState",

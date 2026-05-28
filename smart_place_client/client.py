@@ -26,6 +26,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import random
 import re
 import sys
 from types import TracebackType
@@ -126,6 +127,49 @@ class CapturedFrame:
 
 
 FrameHandler = Callable[[ServerFrame], Awaitable[None]]
+ReauthCallback = Callable[[], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class ExponentialBackoff:
+    """Exponential backoff with full-additive jitter.
+
+    Sequence (no jitter): 1, 2, 4, 8, 16, 32, 60, 60, ... seconds.
+    With jitter=0.3 each delay is multiplied by a random factor in
+    [1.0, 1.3) to spread retries out and avoid thundering herds when
+    many clients reconnect after a server hiccup.
+
+    DESIGN.md §6.2 specifies base=2.0, cap=60.0, jitter=0.3.
+    """
+
+    base: float = 2.0
+    cap: float = 60.0
+    jitter: float = 0.3
+    initial: float = 1.0
+    _next: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Seed the next-delay state from ``initial``."""
+        self._next = self.initial
+
+    def reset(self) -> None:
+        """Restart the schedule at ``initial`` — call after a clean run."""
+        self._next = self.initial
+
+    def peek(self) -> float:
+        """Return the delay :meth:`next` would yield, without advancing."""
+        return self._apply_jitter(self._next)
+
+    def next(self) -> float:
+        """Return the next delay seconds and advance the schedule."""
+        delay = self._apply_jitter(self._next)
+        self._next = min(self._next * self.base, self.cap)
+        return delay
+
+    def _apply_jitter(self, value: float) -> float:
+        if self.jitter <= 0:
+            return value
+        return value * (1.0 + random.uniform(0.0, self.jitter))
 
 
 @dataclass(slots=True)
@@ -168,6 +212,8 @@ class SmartPlaceClient:
     state: SessionState
     handlers: list[FrameHandler]
     capture_path: Path | None
+    on_reauth: ReauthCallback | None = None
+    backoff: ExponentialBackoff = field(default_factory=ExponentialBackoff)
     _capture_handle: object | None = None
     _ws: aiohttp.ClientWebSocketResponse | None = None
     _live: _LiveSources | None = None
@@ -186,6 +232,8 @@ class SmartPlaceClient:
         capture: Path | str | None = None,
         heartbeat: float = 30.0,
         handlers: list[FrameHandler] | None = None,
+        on_reauth: ReauthCallback | None = None,
+        backoff: ExponentialBackoff | None = None,
     ) -> Self:
         """Build a live client that connects to the real smartplace.ch.
 
@@ -197,6 +245,11 @@ class SmartPlaceClient:
                 as ndjson — tokens are redacted on the way in.
             heartbeat: aiohttp WS ping interval, in seconds.
             handlers: optional initial frame handlers.
+            on_reauth: coroutine invoked once if the token is rejected;
+                HA wires this to its reauth flow. After it returns,
+                :meth:`run` exits (no further reconnect attempts).
+            backoff: optional reconnect schedule override (mainly for
+                tests).
         """
         install_token_redaction_filter()
         live = _LiveSources(
@@ -209,6 +262,8 @@ class SmartPlaceClient:
             state=SessionState(),
             handlers=list(handlers or []),
             capture_path=Path(capture) if capture else None,
+            on_reauth=on_reauth,
+            backoff=backoff or ExponentialBackoff(),
             _live=live,
         )
 
@@ -247,15 +302,18 @@ class SmartPlaceClient:
         self.handlers.append(handler)
 
     async def run(self) -> None:
-        """Run one connection lifetime.
+        """Run until the client is closed or an unrecoverable error.
 
-        Phase 1.2: live mode runs exactly one lifetime then returns;
-        replay mode reads the fixture to completion. Phase 1.5 will
-        wrap live-mode in a reconnect-with-backoff loop.
+        - Replay mode runs the fixture to completion exactly once.
+        - Live mode wraps the per-connection lifetime in a reconnect
+          loop with exponential backoff + jitter (DESIGN §6.2). The
+          loop exits on ``SmartPlaceAuthError`` (after invoking
+          ``on_reauth``), on ``CancelledError`` (re-raised), or when
+          :meth:`aclose` flips ``_closing``.
         """
         try:
             if self._live is not None:
-                await self._run_live_once()
+                await self._run_live_with_reconnect()
             elif self._replay is not None:
                 await self._run_replay()
             else:
@@ -264,6 +322,29 @@ class SmartPlaceClient:
             if self.capture_path is not None and self._capture_handle is not None:
                 self._capture_handle.close()  # type: ignore[attr-defined]
                 self._capture_handle = None
+
+    async def _run_live_with_reconnect(self) -> None:
+        """Live-mode outer loop: reconnect on errors, stop on auth/cancel."""
+        while not self._closing:
+            try:
+                await self._run_live_once()
+                self.backoff.reset()
+            except asyncio.CancelledError:
+                raise
+            except SmartPlaceAuthError as err:
+                _LOGGER.error("auth error, stopping reconnect: %s", err)
+                if self.on_reauth is not None:
+                    try:
+                        await self.on_reauth()
+                    except Exception:
+                        _LOGGER.exception("on_reauth callback raised")
+                return
+            except Exception as err:  # noqa: BLE001
+                delay = self.backoff.next()
+                _LOGGER.warning("WS dropped: %s; retrying in %.1fs", err, delay)
+                if self._closing:
+                    return
+                await asyncio.sleep(delay)
 
     async def send(self, text: str) -> None:
         """Send a text frame to the server (live) or log it (replay).

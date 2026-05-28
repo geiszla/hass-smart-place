@@ -205,3 +205,45 @@ manual run not by replay).
   test "live() doesn't touch the network until run()" only makes sense
   if construction itself works outside the loop.
 
+## Phase 1.5 — reconnect with exponential backoff
+
+**Status:** done.
+
+Added `ExponentialBackoff` (frozen kwargs `base=2.0`, `cap=60.0`,
+`jitter=0.3`, `initial=1.0`) per DESIGN §6.2 — sequence `1, 2, 4, 8,
+16, 32, 60, 60, …` (without jitter), with per-call multiplicative
+jitter in `[1.0, 1+jitter)`. Exposed as `SmartPlaceClient.backoff` so
+callers can substitute a tighter schedule (e.g. tests use
+`jitter=0.0`).
+
+Rewrote `SmartPlaceClient.run()` to delegate to:
+
+- `_run_live_with_reconnect()` for live mode: outer loop wraps
+  `_run_live_once()`. On clean return, `backoff.reset()`. On
+  `SmartPlaceAuthError`, log + invoke `on_reauth` if set, then return
+  (no reconnect). On any other `Exception`, sleep `backoff.next()`
+  and try again. `CancelledError` propagates so HA can cancel cleanly.
+- `_run_replay()` unchanged — replay runs to completion once.
+
+Added optional `on_reauth: ReauthCallback` constructor parameter on
+`SmartPlaceClient.live` so the HA integration in Phase 2 can wire
+the token-rejected case to HA's `async_create_reauth_flow`.
+
+Tests added (8 new, 55 total):
+
+- `ExponentialBackoff` progression, reset, peek, jitter-bounds.
+- Reconnect after a transient error using monkeypatched
+  `asyncio.sleep` and `_run_live_once`. Verifies the actual sleep
+  sequence (`[1.0, 2.0]` for two failures with `jitter=0`).
+- `SmartPlaceAuthError` invokes `on_reauth` exactly once and stops
+  reconnecting.
+- `SmartPlaceAuthError` without `on_reauth` returns quietly.
+- `CancelledError` propagates from inside the reconnect loop.
+- `_closing` flag mid-failure short-circuits the next sleep.
+
+### Phase 1.5 divergence
+
+- Monkeypatching `_run_live_once` on a slots-dataclass instance is
+  blocked; tests patch on the class instead. Functionally equivalent;
+  worth flagging because slots dataclasses subtly limit mocking.
+
