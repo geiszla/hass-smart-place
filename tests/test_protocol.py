@@ -17,8 +17,6 @@ from smart_place_client.protocol import (
     DISCOVERY_HOST,
     DISCOVERY_PORT,
     DISCOVERY_WS_PATH,
-    GLOBAL_CONFIG_REQUEST,
-    STATUS_LISTE_REQUEST,
     GlobalConfig,
     GoToLinkSSL,
     MessageDefinition,
@@ -32,8 +30,7 @@ from smart_place_client.protocol import (
     _parse_fields_after_prefix,
     discovery_ws_url,
     encode_frame,
-    encode_global_config_request,
-    encode_status_liste_request,
+    parse_chart_references,
 )
 
 # ---------------------------- parse_frame ----------------------------
@@ -277,11 +274,6 @@ def test_go_to_link_ssl_app_ws_url_and_origin() -> None:
 # ----------------------------- encoders ------------------------------
 
 
-def test_encoders_round_trip_to_known_strings() -> None:
-    assert encode_global_config_request() == GLOBAL_CONFIG_REQUEST
-    assert encode_status_liste_request() == STATUS_LISTE_REQUEST
-
-
 def test_encode_frame_rejects_newlines() -> None:
     with pytest.raises(ProtocolError):
         encode_frame("bad\nframe")
@@ -365,6 +357,25 @@ def test_known_messages_entries_have_descriptions_and_examples() -> None:
         assert defn.example, f"{defn.name} missing example"
         assert callable(defn.parse), f"{defn.name} parse not callable"
         assert defn.pattern.match(defn.example), f"{defn.name} example {defn.example!r} does not match its own pattern"
+
+
+def test_parse_chart_references_extracts_id_series_and_unit() -> None:
+    """Real-world InfoboardEntry value yields one ``(chart_id, series, unit)`` tuple."""
+    raw = "SPtext397>CHART49STAND1~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff"
+    assert list(parse_chart_references(raw)) == [(49, 1, "KWh")]
+
+
+def test_parse_chart_references_handles_multiple_units() -> None:
+    """Water (``unit-l``) and electricity (``unit-KWh``) both extract."""
+    raw = "SPtext>CHART337STAND1~SPDB-CHARTSSTANDS>unit-l~>LinkOff<SPtext>CHART49STAND2~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff"
+    refs = list(parse_chart_references(raw))
+    assert refs == [(337, 1, "l"), (49, 2, "KWh")]
+
+
+def test_parse_chart_references_returns_empty_when_no_chart() -> None:
+    """A non-chart row (TEMPOUT label) yields nothing."""
+    raw = "SPtext390>TEMPOUT~SPDB-REM>unit-C~>LinkOff"
+    assert list(parse_chart_references(raw)) == []
 
 
 def test_known_messages_examples_round_trip_through_parse_frame() -> None:

@@ -704,11 +704,37 @@ are committed to fixtures; the registry parses them so the dispatch
 layer recognises them, but their `value` payloads should not be
 logged or persisted without redaction.
 
-### Minimum command sequence for "main stats" (verified live 2026-05-28)
+### Command registry
 
-The four headline stats — indoor temperature, electricity/water
-consumption, info-board entries, and package-box state — reach the
-client via this minimum sequence:
+All outgoing commands are declared in
+``smart_place_client/commands.py`` as ``CommandDefinition`` entries
+under the ``Commands`` namespace — mirroring ``KNOWN_MESSAGES`` for
+the inbound direction. Each entry pairs:
+
+- a CamelCase ``name``,
+- a description of when it's sent and what response it triggers,
+- an ``encode`` callable (no-arg for static payloads, parameterized
+  for shapes like ``ChartStands`` that embed an id),
+- a concrete ``example`` wire string.
+
+Call sites go through the namespace: ``Commands.Mainmenu.encode()``
+for static reads, ``Commands.ChartStands.encode(cid)`` for the
+chart fetch, ``Commands.OpenFrontDoor.encode()`` for door openers.
+Command names mirror the related message names where applicable
+(e.g. ``Commands.InfoboardWidgets`` is the request that yields the
+``InfoboardWidgets`` reply; the wire payload ``GiveStatusListe``
+stays inside the encoder).
+``KNOWN_COMMANDS`` enumerates the full set for introspection / tests
+/ docs.
+
+Per the ``smart-place-observe-only`` memory, declaring a write
+command (``Open*``) in the registry doesn't auto-issue it — the
+library only sends when an explicit caller invokes ``client.send``.
+
+### Bootstrap command sequence (verified live 2026-05-29)
+
+To get the main stats + chart labels + climate-zone room names the
+HA integration needs, the bootstrap is now:
 
 ```
                               # → TEMPIST<N> arrives spontaneously
@@ -721,21 +747,193 @@ client via this minimum sequence:
                               #   each binding a label to a push frame
                               #   (TEMPOUT, REGEN, CHART<id>STAND<n>, …)
                               # ← StatusInhaltFinishedListe (terminator)
+→ GiveMeMainmenu              # ← Big config + state dump:
+                              #     ChartDefinition (labels/categories
+                              #     /units, including non-infoboard
+                              #     charts), ClimateConfig (room names),
+                              #     LightConfig/BlindConfig/SceneConfig,
+                              #     plus initial state: ChartStand
+                              #     STAND1 readings, LightsCentral,
+                              #     Volume, SceneState.
+                              # ← GiveMeMainMenuFinished (terminator)
+→ SocketConnected:1           # Triggers the full broadcast burst:
+                              # ← PACKETBOX<N>:<state>, REGEN, HAGEL,
+                              #   JALWARTUNG, TEMPOUT, WINDGESCHWINDIGKEIT,
+                              #   WINDALARM<N>, LEUCHTENZENTRAL<N>,
+                              #   INFOBOARD<N> / INFOBOARD<N>INHALT,
+                              #   Vol<N>, PERSINFO, MUTE, KLIMASINFO<N>,
+                              #   SPRECHEN / CALLINFO, SceneState etc.
+                              # ← SocketConnectedFinished>...
 
-For each unique CHART<id>STAND reference found in the rows above:
+For each unique CHART<id> discovered via either InfoboardEntry refs
+or ChartDefinition frames:
 → GiveMeChartStandsManuell<id>  # ← CHART<id>STAND<n>:<value> per series
 ```
 
-So **two static commands** (`GiveStatusListe`, `StatusInhaltListe`)
-plus **one command per discovered consumption chart**. The SPA
-prefixes this with `GiveMeGlobalConfig` but **the server doesn't
-require it** — verified by probe. The `_chase_chart_ids` helper in
-`client.py` collects chart ids from `InfoboardEntry` frames and
-issues the chart fetches on the `InfoboardContentFinished` marker.
+So **four static commands** plus **one command per discovered
+chart**. The SPA prefixes this with `GiveMeGlobalConfig` but **the
+server doesn't require it** — verified by probe.
+
+`SocketConnected:1` is the gate for the full broadcast burst —
+without it the server stays quiet on PACKETBOX / REGEN / HAGEL /
+WINDALARM / TEMPOUT / WINDGESCHWINDIGKEIT / LEUCHTENZENTRAL /
+PERSINFO / Vol / etc. TEMPIST sensors do still push spontaneously
+on change without it. Verified 2026-05-29 via HAR audit (the
+trigger turned out to be SocketConnected:1, not "auto-push" as
+earlier notes incorrectly claimed) + a live probe confirming the
+broadcast burst arrives ~70ms after the send.
+
+`_chase_chart_ids` in `client.py` collects chart ids from both
+`InfoboardEntry` and `ChartDefinition` frames and issues the chart
+fetches on either the `InfoboardContentFinished` or
+`MainMenuFinished` marker.
 
 ### Write commands (not auto-issued)
 
-The `OPEN_GROUND_FLOOR_ENTRANCE` (`OEFFNER1`) and `OPEN_FRONT_DOOR`
-(`OEFFNER4`) constants are exposed so a caller can opt in
-explicitly. Per the `smart-place-observe-only` memory, the library
-never sends them on its own.
+The four door-opener commands — ``Commands.OpenGroundFloorEntrance``
+(``OEFFNER1``), ``Commands.OpenMailbox`` (``OEFFNER2``),
+``Commands.OpenGarageEntrance`` (``OEFFNER3``) and
+``Commands.OpenFrontDoor`` (``OEFFNER4``) — are declared in the
+command registry so callers can opt in explicitly. Per the
+``smart-place-observe-only`` memory, the library never sends them
+on its own. The HA integration surfaces them as ``button`` entities
+so the user can press one to send the matching command.
+
+---
+
+## 11. HA entity mapping (2026-05-28)
+
+Translates the WS dispatch into the canonical HA entity types. One
+device per config entry; all entities share `identifiers={(DOMAIN,
+entry_id)}`. Discovery is observation-based: `async_setup_entry`
+waits for `wait_for_bootstrap` plus a brief window so the initial
+broadcasts and chart-stand replies land before platforms enumerate.
+New IDs that arrive after platforms have been forwarded require an
+HA reload to surface.
+
+### sensor
+
+| Source frame | Entity | device_class | unit | state_class |
+| ------------ | ------ | ------------ | ---- | ----------- |
+| `TEMPOUT:<v>` (singleton) | `SmartPlaceOutdoorTemperatureSensor` | `TEMPERATURE` | °C | `MEASUREMENT` |
+| `WINDGESCHWINDIGKEIT:<v>` (singleton) | `SmartPlaceWindSpeedSensor` | `WIND_SPEED` | km/h | `MEASUREMENT` |
+| `TEMPIST<N>:<v>` + matching `Klimas<N>` zone | `SmartPlaceIndoorTemperatureSensor` (per N) | `TEMPERATURE` | °C | `MEASUREMENT` |
+| `StandsSingelChartUpdate<id>:STAND1:<v>` | `SmartPlaceChartSensor` (per non-SUMME chart) | `ENERGY` / `WATER` | kWh / L | `TOTAL_INCREASING` |
+| `PACKETBOX<N>:<state>` | `SmartPlacePackageBoxSensor` (per box) | — | — | (text state) |
+
+Chart device-class and native unit are derived from the
+`ChartDefinition` frames that arrive during `GiveMeMainmenu` (the
+authoritative source) with fallback to the `unit-KWh` / `unit-l`
+tokens embedded in `InfoboardEntry` references.
+
+Chart **state** is the daily `STAND1` reading (today's consumption
+so far). It resets to 0 at midnight; HA treats that as a period
+boundary under `TOTAL_INCREASING` and the Energy / Water dashboards
+accumulate deltas correctly. The other STAND series (week / month /
+year) surface as `stand<N>` attributes.
+
+Chart **names** come from `ChartDefinition.label` — the first
+`;`-field of the SingelDiagramm payload, with German tokens
+translated (`Elektro` → `Electricity`, `Wärme` → `Heating`,
+`Kaltwasser I` → `Cold water I`, etc.) and the trailing site code
+(`HH77-14-01`) stripped. SUMME charts (`category == "Summe"`) are
+filtered out — we surface the per-meter sub-charts instead, since
+the SUMME is just their sum.
+
+**Indoor temperature** sensors are surfaced only when the
+matching `Klimas<N>` zone name exists in `state.climate_zones` (the
+SPA pairs `TEMPIST<N>` with `Klimas<N>` 1:1). The display name is
+the zone's room name with the trailing ``heating`` / ``Heizung``
+tag stripped — e.g. `Bedroom temperature`,
+`Living room/dining room/kitchen temperature`. Sensors without a
+matching zone are dropped (we can't surface a meaningful name).
+
+Package boxes are sensors (not binary) because the SPA's
+`PACKETBOX<N>` payload is the unlock code while a package is
+waiting (the same code the user sees on the SPA's main panel).
+``Frei`` (German "free") maps to ``None`` so HA leaves the state
+"unknown" until a package actually arrives. ``PACKETBOX<N>`` is a
+broadcast — no read command, so the entity only updates when the
+server pushes a fresh value.
+
+**Aggregated rollups** — HA's `group` integration is for
+user-defined helpers (UI/YAML); custom integrations can't
+programmatically register Group entities, but the idiomatic
+alternative is just a normal sensor that reads the same shared
+snapshot. Two rollups land in this platform:
+
+- `Active package box code` — first non-``Frei`` code across all
+  ``PACKETBOX<N>`` boxes (None when all free). Box id surfaces as
+  the `box` attribute.
+- `Weather alarm` — comma-joined active alarms across `Rain`,
+  `Hail`, and per-zone `WindAlarm<N>` (e.g. "Hail, Wind alarm zone
+  1"). Per-source booleans + the active wind-alarm zone list land
+  in attributes.
+
+Indoor-temperature sensors (`TEMPIST<N>`) are intentionally not
+exposed — without a per-sensor room label they're not meaningful on
+their own. Re-add once the bootstrap response can give us labels.
+
+### binary_sensor
+
+| Source frame | Entity | device_class | Notes |
+| ------------ | ------ | ------------ | ----- |
+| (WS phase) | `SmartPlaceConnectionSensor` | `CONNECTIVITY` | Diagnostic, always present. |
+| `REGEN:<code>` | `SmartPlaceRainSensor` | `MOISTURE` | `00` = off, else on. |
+| `HAGEL:<code>` | `SmartPlaceHailSensor` | `PROBLEM` | `00` = off, else on. |
+| `JALWARTUNG:<code>` | `SmartPlaceBlindsMaintenanceSensor` | `PROBLEM` (diagnostic) | `00` = off, else on. |
+| `WINDALARM<N>:<code>` | `SmartPlaceWindAlarmSensor` (per zone) | `PROBLEM` | `00` = off, else on. |
+| `SZENEN<N>:<code>` + `SceneConfig` name | `SmartPlaceSceneSensor` (per scene) | — | `01` = active. Skipped when no name known. |
+| `LEUCHTENZENTRAL<N>:<code>` | `SmartPlaceAnyLightOnSensor` (per group) | — | `00` = none on, else at least one. |
+| `JALZENTRAL<N>:<code>` | `SmartPlaceAnyBlindClosedSensor` (per group) | — | Best-effort: empty / `00` = none, else some. |
+
+### button
+
+The four `OEFFNER<n>` write commands surface as `Button` entities so
+the user can press one from the HA UI to open the corresponding
+door. `async_press` calls `client.send(OPEN_<...>)`. If the WS isn't
+open yet, the press is logged and skipped — there's no command
+queue.
+
+### Polling
+
+Consumption-chart values don't push: the server only emits
+`CHART<id>STAND<n>:<v>` in response to an explicit
+`GiveMeChartStandsManuell<id>` fetch. `SmartPlaceClient._poll_charts`
+re-issues a fetch for every id in `SessionState.chart_ids` every
+`CHART_POLL_INTERVAL` (default 60 s). The poll task is started by
+`_run_live_once` after the bootstrap reads and cancelled when the
+connection ends, so it dies cleanly on reconnect.
+
+### Chart identification — what each `StandsSingelChartUpdate<id>` represents
+
+Probed live 2026-05-28 with read-only
+`GiveMeChartSummeWasGenau><id>` (returns a category string per
+chart):
+
+| Chart id | Unit | Category | Inferred kind |
+| -------- | ---- | -------- | ------------- |
+| 49 | KWh | (empty) | Electricity |
+| 144 | KWh | (empty) | Electricity |
+| 337 | l | `Wasser` | Water |
+| 595 | l | `Wasser` | Water |
+
+`GiveMeChartSummeWasGenau` only labels water charts explicitly;
+electricity charts return an empty category and the kind is
+implied by the `unit-KWh` token. We don't yet have a more
+specific label (e.g. cold vs hot water, house vs PV electricity);
+that would require either probing `GiveMeSingelDiagramm<id>`
+(untested guess) or reading the SPA's chart-detail page. The
+sensor entity names are kept generic — "Electricity chart 49",
+"Water chart 337" — until labels are confirmed.
+
+### Notably **not** mapped (yet)
+
+- `ChartTarget` / `ChartDefinition` / `ChartStand` — would surface
+  per-chart goals/series metadata; not needed for v1.
+- `LightState` / `BlindState` / `ClimateInfo` / `SceneState` — the
+  client parses them but the integration doesn't expose them as HA
+  entities because we have no write coverage yet and the user wants
+  observe-first.
+- `BasicInfos` / `GsaConfig` — contain PII / LAN info and aren't
+  user-facing state.

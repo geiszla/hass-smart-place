@@ -193,7 +193,9 @@ async def test_live_chases_chart_ids_after_infoboard_content_finished(
     Mimics the SPA flow: InfoboardEntry rows embed CHART<id>STAND<series>
     references; once the InfoboardContentFinished marker arrives, one
     GiveMeChartStandsManuell<id> per unique chart-id is issued so the
-    server emits CHART<id>STAND<n>:<value> push frames.
+    server emits CHART<id>STAND<n>:<value> push frames. The chase also
+    populates ``state.chart_units`` from the embedded ``unit-...`` tag
+    so the HA layer knows which sensor device class to use.
     """
 
     async def _iter(items: list[str]):
@@ -236,6 +238,49 @@ async def test_live_chases_chart_ids_after_infoboard_content_finished(
     # Two unique chart ids (49, 337), sent in sorted order; STAND2 in the
     # third row is the same chart 337 — deduped via the set.
     assert sent == ["GiveMeChartStandsManuell49", "GiveMeChartStandsManuell337"]
+    # The chase also captures unit hints for the HA sensor mapping.
+    assert client.state.chart_ids == {49, 337}
+    assert client.state.chart_units == {49: "KWh", 337: "l"}
+
+
+async def test_poll_charts_refires_known_chart_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_poll_charts`` periodically re-sends ``GiveMeChartStandsManuell<id>``."""
+
+    sent: list[str] = []
+
+    class _FakeWS:
+        closed = False
+
+        async def send_str(self, text: str) -> None:
+            sent.append(text)
+
+    client = SmartPlaceClient.live(token="dummy", chart_poll_interval=1.0)
+    client._ws = _FakeWS()  # type: ignore[assignment]
+    client.state.chart_ids = {49, 337}
+
+    sleep_count = 0
+
+    async def fake_sleep(_: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count >= 2:
+            # Stop the loop after two ticks so the test terminates.
+            client._closing = True
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    await client._poll_charts()
+
+    # First tick fires both charts; second tick sets _closing before sending.
+    assert sent == ["GiveMeChartStandsManuell49", "GiveMeChartStandsManuell337"]
+
+
+async def test_poll_charts_disabled_when_interval_non_positive() -> None:
+    """An interval of 0 disables polling — the coroutine returns immediately."""
+    client = SmartPlaceClient.live(token="dummy", chart_poll_interval=0.0)
+    # Should return without ever awaiting sleep — runs to completion in one tick.
+    await client._poll_charts()
 
 
 async def test_live_unknown_log_disabled_by_none(

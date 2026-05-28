@@ -1,0 +1,257 @@
+"""Decoded snapshot of Smart Place state across observed frames.
+
+One :class:`SmartPlaceState` per consumer (HA config entry, CLI session,
+notebook). Feed every parsed :class:`ServerFrame` through
+:meth:`SmartPlaceState.apply` and the snapshot tracks the latest indoor
+temperatures, weather, alarms, package-box occupancy, and per-chart
+STAND series.
+
+Pure value-object: no I/O, no HA imports. Lives in the client library
+rather than ``custom_components/`` so it's importable from notebooks
+and pytest without bringing in ``homeassistant``.
+
+Per the smart-place-observe-only memory: this module never sends
+commands. It only translates inbound frames into typed fields.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import re
+from typing import TYPE_CHECKING
+
+from smart_place_client.protocol import NamedFields, NamedValue, Temperature
+
+if TYPE_CHECKING:
+    from smart_place_client.protocol import ServerFrame
+
+
+# Strip the trailing site code the SPA appends to chart titles, e.g.
+# "Elektro HH77-14-01" -> "Elektro". Pattern is a hyphenated alnum tail
+# (typical: "HH77-14-01", "HHnn-nn-nn"); trimmed defensively, never raises.
+_CHART_SITE_SUFFIX_RE = re.compile(r"\s+[A-Z]{2,}\d+-\d+-\d+(?:\s+.*)?$")
+
+# Light German -> English mapping for the chart labels we see. Only
+# tokens we've actually observed live; unknown labels pass through
+# unchanged so we don't silently mistranslate.
+_CHART_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
+    "Elektro": "Electricity",
+    "Wärme": "Heating",
+    "Kaltwasser": "Cold water",
+    "Warmwasser": "Hot water",
+    "PV Anteil Elektro": "PV electricity",
+    "SUMME Kaltwasser": "Cold water total",
+    "SUMME Warmwasser": "Hot water total",
+}
+
+# ClimateConfig values look like "Bedroom heating" — for sensor naming
+# we want just the room ("Bedroom"). The vendor SPA names climate
+# zones with this trailing "heating" / "Heizung" tag.
+_CLIMATE_ROOM_TAIL_RE = re.compile(r"\s+(?:heating|Heizung)\s*$", re.IGNORECASE)
+
+
+def _clean_chart_label(raw: str) -> str:
+    """Return an HA-friendly chart label.
+
+    Strips the site-code suffix and translates known German tokens
+    (``Elektro`` -> ``Electricity`` etc.). Roman numeral suffixes
+    (``I``, ``II``) are kept; the SPA uses them to distinguish two
+    meters of the same kind.
+    """
+    cleaned = _CHART_SITE_SUFFIX_RE.sub("", raw).strip()
+    for german, english in _CHART_LABEL_GERMAN_TO_ENGLISH.items():
+        if cleaned.startswith(german):
+            return (english + cleaned[len(german) :]).strip()
+    return cleaned
+
+
+def _climate_zone_room(raw: str) -> str:
+    """Drop the trailing ``heating`` tag so the name reads as a room."""
+    return _CLIMATE_ROOM_TAIL_RE.sub("", raw).strip()
+
+
+def _alarm_on(raw: str) -> bool:
+    """Smart Place encodes ``00`` as off; anything else (``01``, ...) means on."""
+    return raw not in ("", "00")
+
+
+@dataclass(slots=True)
+class ChartReading:
+    """Latest values for one consumption chart.
+
+    ``unit`` is the raw token from the ``InfoboardEntry`` reference
+    (``KWh``, ``l``, ...); the sensor platform maps it to a proper HA
+    unit/device-class. ``stands`` maps the STAND series id to its
+    latest reading (e.g. ``99`` for the cumulative total, lower series
+    for time-bucket aggregates).
+
+    ``label`` and ``category`` come from the ``ChartDefinition`` frame
+    that the server emits during ``GiveMeMainmenu``: ``label`` is the
+    cleaned English title (``"Cold water 1"``), ``category`` is the
+    raw SPA category (``"Wasser"`` / ``"Energie"`` / ``"Elektro"`` /
+    ``"Summe"`` — the last one marks an aggregated SUMME chart).
+    Both are ``""`` until ``ChartDefinition`` arrives.
+    """
+
+    unit: str
+    stands: dict[int, str] = field(default_factory=dict)
+    label: str = ""
+    category: str = ""
+
+
+@dataclass(slots=True)
+class SmartPlaceState:
+    """Per-entry snapshot of everything we've seen on the WS.
+
+    Each field is ``None`` / empty until the first matching frame
+    arrives. Discovery is observation-based: a PACKETBOX<2> push
+    registers box 2 in ``package_boxes``. The integration sets up
+    entities after ``wait_for_bootstrap`` plus a brief observation
+    window (see ``__init__.py``); IDs that arrive after platforms have
+    been forwarded won't materialise as entities until HA reloads the
+    entry.
+
+    Indoor temperatures (``TEMPIST<N>``) are only surfaced when a
+    matching ``ClimateConfig`` zone exists in ``climate_zones`` — the
+    SPA uses a 1:1 convention between ``Klimas<N>`` zones and
+    ``TEMPIST<N>`` sensors, so we use the zone's room name for the
+    sensor entity label. Sensors with no matching zone are kept in
+    the snapshot but the HA layer skips them.
+    """
+
+    outdoor_temperature: float | None = None
+    wind_speed: float | None = None
+    rain_alarm: bool | None = None
+    hail_alarm: bool | None = None
+    blinds_maintenance: bool | None = None
+    wind_alarms: dict[int, bool] = field(default_factory=dict)
+    # Per ``PACKETBOX<N>:<state>`` broadcasts: value is ``"Frei"`` while the
+    # box is empty, otherwise it is the package's unlock code (the same
+    # string the SPA shows the user on the main panel).
+    package_boxes: dict[int, str] = field(default_factory=dict)
+    charts: dict[int, ChartReading] = field(default_factory=dict)
+    # ``TEMPIST<N>`` indoor temperature in °C, by sensor id.
+    indoor_temperatures: dict[int, float] = field(default_factory=dict)
+    # ``Klimas<N>`` zone room name (English) from ``ClimateConfig``
+    # frames received during ``GiveMeMainmenu``. Used as the HA name
+    # for the matching ``TEMPIST<N>`` sensor.
+    climate_zones: dict[int, str] = field(default_factory=dict)
+    # Scene display name (e.g. ``"Evening"``) from ``SceneConfig``
+    # — the first ``,``-field of ``INHALTSZENEN<N>``.
+    scenes: dict[int, str] = field(default_factory=dict)
+    # Whether scene N is currently active, from ``SZENEN<N>``
+    # broadcasts (``"01"`` = active).
+    scene_states: dict[int, bool] = field(default_factory=dict)
+    # Aggregate ``any light on`` flag per ``LEUCHTENZENTRAL<N>``
+    # group. ``"00"`` = none on; anything else = at least one on.
+    lights_central: dict[int, bool] = field(default_factory=dict)
+    # Aggregate ``any blind closed`` flag per ``JALZENTRAL<N>``
+    # group. Best-effort: empty / ``"00"`` = none closed, anything
+    # else = at least one closed. The SPA's semantics here aren't
+    # fully documented; revisit if the user reports false positives.
+    blinds_central: dict[int, bool] = field(default_factory=dict)
+
+    def apply(self, frame: ServerFrame) -> None:
+        """Fold one frame into the snapshot — best-effort, never raises."""
+        if isinstance(frame, Temperature):
+            self.indoor_temperatures[frame.sensor] = frame.value
+            return
+        if isinstance(frame, NamedValue):
+            self._apply_named_value(frame)
+            return
+        if isinstance(frame, NamedFields):
+            self._apply_named_fields(frame)
+            return
+
+    def _apply_named_value(self, frame: NamedValue) -> None:
+        name = frame.name
+        if name == "OutdoorTemperature":
+            self.outdoor_temperature = _safe_float(frame.value)
+        elif name == "WindSpeed":
+            self.wind_speed = _safe_float(frame.value)
+        elif name == "Rain":
+            self.rain_alarm = _alarm_on(frame.value)
+        elif name == "Hail":
+            self.hail_alarm = _alarm_on(frame.value)
+        elif name == "BlindsMaintenance":
+            self.blinds_maintenance = _alarm_on(frame.value)
+        elif name == "WindAlarm" and frame.index is not None:
+            self.wind_alarms[frame.index] = _alarm_on(frame.value)
+        elif name == "PackageBox" and frame.index is not None:
+            self.package_boxes[frame.index] = frame.value
+        elif name == "ChartPointUpdate" and frame.index is not None:
+            self._apply_chart_point(frame.index, frame.value)
+        elif name == "ChartStand":
+            self._apply_chart_stand(frame.value)
+        elif name == "ChartDefinition" and frame.index is not None:
+            self._apply_chart_definition(frame.index, frame.value)
+        elif name == "SceneState" and frame.index is not None:
+            self.scene_states[frame.index] = _alarm_on(frame.value)
+        elif name == "LightsCentral" and frame.index is not None:
+            self.lights_central[frame.index] = _alarm_on(frame.value)
+        elif name == "BlindsCentral" and frame.index is not None:
+            self.blinds_central[frame.index] = _alarm_on(frame.value)
+
+    def _apply_named_fields(self, frame: NamedFields) -> None:
+        if frame.name == "ClimateConfig" and frame.index is not None and frame.fields:
+            self.climate_zones[frame.index] = _climate_zone_room(frame.fields[0])
+        elif frame.name == "SceneConfig" and frame.index is not None and frame.fields:
+            self.scenes[frame.index] = frame.fields[0]
+
+    def _apply_chart_point(self, chart_id: int, payload: str) -> None:
+        """Fold a ``StandsSingelChartUpdate<id>:STAND<series>:<reading>`` payload."""
+        series_raw, _, reading = payload.partition(":")
+        series = _parse_stand_series(series_raw)
+        if series is None:
+            return
+        self.charts.setdefault(chart_id, ChartReading(unit="")).stands[series] = reading
+
+    def _apply_chart_stand(self, payload: str) -> None:
+        """Fold a ``CHART<id>STAND<series>:<reading>`` STAND1 snapshot from GiveMeMainmenu."""
+        chart_raw, _, rest = payload.partition("STAND")
+        if not chart_raw or not rest:
+            return
+        try:
+            chart_id = int(chart_raw)
+        except ValueError:
+            return
+        series_raw, _, reading = rest.partition(":")
+        try:
+            series = int(series_raw)
+        except ValueError:
+            return
+        self.charts.setdefault(chart_id, ChartReading(unit="")).stands[series] = reading
+
+    def _apply_chart_definition(self, chart_id: int, payload: str) -> None:
+        """Fold ``SingelDiagramm<id>:<title>;<...>;<category>;<unit>;...``.
+
+        Sets ``label`` (cleaned English) and ``category`` (raw SPA tag)
+        on the chart. The 14th and 15th ``;``-fields hold category and
+        unit when present; we tolerate shorter payloads silently
+        because the server occasionally truncates these.
+        """
+        fields = payload.split(";")
+        if not fields or not fields[0]:
+            return
+        chart = self.charts.setdefault(chart_id, ChartReading(unit=""))
+        chart.label = _clean_chart_label(fields[0])
+        if len(fields) > 13:
+            chart.category = fields[13]
+        if len(fields) > 14 and fields[14] and not chart.unit:
+            chart.unit = fields[14]
+
+
+def _parse_stand_series(series_raw: str) -> int | None:
+    if not series_raw.startswith("STAND"):
+        return None
+    try:
+        return int(series_raw.removeprefix("STAND"))
+    except ValueError:
+        return None
+
+
+def _safe_float(raw: str) -> float | None:
+    try:
+        return float(raw)
+    except ValueError:
+        return None

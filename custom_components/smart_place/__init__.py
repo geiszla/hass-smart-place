@@ -9,15 +9,17 @@ cancels the task on the next iteration.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from smart_place_client import ServerFrame, SmartPlaceClient, install_token_redaction_filter
+from smart_place_client import ServerFrame, SmartPlaceClient, SmartPlaceState, install_token_redaction_filter
 
-from .const import CONF_TOKEN, DOMAIN
+from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,7 +27,11 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+]
 
 
 @dataclass(slots=True)
@@ -33,6 +39,7 @@ class SmartPlaceData:
     """Per-config-entry runtime data stored on hass.data[DOMAIN][entry_id]."""
 
     client: SmartPlaceClient
+    state: SmartPlaceState
     listeners: list[Callable[[], None]] = field(default_factory=list)
 
 
@@ -49,23 +56,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = SmartPlaceClient.live(
         token=token,
         session=session,
+        chart_poll_interval=CHART_POLL_INTERVAL,
         on_reauth=trigger_reauth,
     )
 
-    data = SmartPlaceData(client=client)
+    data = SmartPlaceData(client=client, state=SmartPlaceState())
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
-    async def _notify_listeners(_frame: ServerFrame) -> None:
+    async def _on_frame(frame: ServerFrame) -> None:
+        data.state.apply(frame)
         for listener in list(data.listeners):
             listener()
 
-    client.subscribe(_notify_listeners)
+    client.subscribe(_on_frame)
 
     entry.async_create_background_task(
         hass=hass,
         target=client.run(),
         name=f"smart_place_ws_{entry.entry_id}",
     )
+
+    # Wait for the bootstrap + a brief observation window so the initial
+    # broadcast pushes (TEMPIST<N>, PACKETBOX<N>, REGEN, ...) and the
+    # chart-stand replies have a chance to land before platforms
+    # enumerate entities. Failing to bootstrap doesn't abort setup —
+    # the connection background task keeps retrying, and the
+    # connectivity binary_sensor will report the WS as down.
+    with contextlib.suppress(TimeoutError):
+        async with asyncio.timeout(SETUP_OBSERVATION_WINDOW + 10):
+            await client.wait_for_bootstrap()
+            await asyncio.sleep(SETUP_OBSERVATION_WINDOW)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
