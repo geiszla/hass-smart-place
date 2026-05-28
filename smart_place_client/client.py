@@ -1,0 +1,644 @@
+"""Smart Place I/O client.
+
+Owns all I/O for the Smart Place protocol — both the live WebSocket path
+and the offline replay path. Pure parsing / state lives in
+:mod:`smart_place_client.protocol`.
+
+Both ``SmartPlaceClient.live(...)`` and ``SmartPlaceClient.replay(...)``
+return the same class and use the same dispatch loop. The only thing
+that differs is where incoming frames come from. Per the
+``test-fixture-divergence-smell`` memory: if the live/replay branches
+ever start growing extra parsing or state logic, that's a warning sign
+that the replay path is no longer exercising production code, and the
+fix is to move the difference back to the I/O boundary, not to add more
+branches.
+
+DESIGN.md §2, §5, §6 are the design references.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import sys
+from types import TracebackType
+from typing import Any, Literal, Self
+
+import aiohttp
+
+from smart_place_client.protocol import (
+    APP_WS_PATH,
+    DISCOVERY_ORIGIN,
+    GLOBAL_CONFIG_REQUEST,
+    STATUS_LISTE_REQUEST,
+    GlobalConfig,
+    GoToLinkOldSystem,
+    GoToLinkSSL,
+    HostNotOnline,
+    ProtocolError,
+    ServerFrame,
+    SessionPhase,
+    SessionState,
+    SmartPlaceAuthError,
+    StatusListe,
+    discovery_ws_url,
+    encode_frame,
+    parse_frame,
+)
+
+_LOGGER = logging.getLogger("smart_place_client")
+
+# Browser-like UA so the server treats us the same as the SPA.
+# Source: matches what a current desktop browser would send to the SPA.
+USER_AGENT: str = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+)
+
+# Token-shaped strings the redacting filter scrubs.
+# Smart Place tokens are typically opaque ~100-char URL-safe strings;
+# we redact anything that follows ``TOKEN=`` or ``?<long-string>`` in URLs.
+_TOKEN_QUERY = re.compile(r"(TOKEN=)[^&\s\"']+", re.IGNORECASE)
+_URL_TOKEN_TRAILING = re.compile(r"(/Start[0-9]\?)[^\s\"']+")
+
+
+def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
+    """Install a log filter that scrubs URL tokens from emitted records.
+
+    Safe to call multiple times; subsequent calls are no-ops.
+    """
+    for existing in logger.filters:
+        if isinstance(existing, _TokenRedactionFilter):
+            return
+    logger.addFilter(_TokenRedactionFilter())
+
+
+class _TokenRedactionFilter(logging.Filter):
+    """Log filter that replaces token query strings with ``<REDACTED>``."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return True
+        scrubbed = _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", msg))
+        if scrubbed != msg:
+            record.msg = scrubbed
+            record.args = None
+        return True
+
+
+@dataclass(slots=True)
+class CapturedFrame:
+    """One ndjson line in a capture / replay fixture.
+
+    Captures both directions so a developer can later inspect what was
+    sent during a live session as well as what was received. The
+    ``ts`` field is wall-clock UTC; replay uses it to optionally
+    re-pace frames.
+    """
+
+    direction: Literal["server", "client"]
+    ts: float
+    text: str
+
+    def to_json(self) -> str:
+        """Return a single ndjson line (no trailing newline)."""
+        return json.dumps(
+            {"direction": self.direction, "ts": self.ts, "text": self.text},
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, line: str) -> CapturedFrame:
+        """Parse one ndjson line into a CapturedFrame."""
+        payload = json.loads(line)
+        direction = payload["direction"]
+        if direction not in ("server", "client"):
+            raise ValueError(f"capture line has bad direction {direction!r}")
+        return cls(direction=direction, ts=float(payload["ts"]), text=str(payload["text"]))
+
+
+FrameHandler = Callable[[ServerFrame], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class _LiveSources:
+    """Resources held only by a live-mode client."""
+
+    token: str
+    session: aiohttp.ClientSession
+    own_session: bool
+    heartbeat: float
+
+
+@dataclass(slots=True)
+class _ReplaySources:
+    """Resources held only by a replay-mode client."""
+
+    path: Path
+    realtime: bool
+    sent_log: list[CapturedFrame] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SmartPlaceClient:
+    """Smart Place WebSocket client (live or replay).
+
+    Instantiate via the classmethod constructors :meth:`live` or
+    :meth:`replay`. Both return the same class; the dispatch loop is
+    identical. Behavioural differences (where frames come from, where
+    sends go) live entirely behind the ``_live`` / ``_replay``
+    attributes.
+
+    DESIGN.md §2 architecture and §6.2 connection lifecycle.
+    """
+
+    state: SessionState
+    handlers: list[FrameHandler]
+    capture_path: Path | None
+    _capture_handle: object | None = None
+    _ws: aiohttp.ClientWebSocketResponse | None = None
+    _live: _LiveSources | None = None
+    _replay: _ReplaySources | None = None
+    _closing: bool = False
+    _bootstrap_done: asyncio.Event = field(default_factory=asyncio.Event)
+
+    # ------------------------- constructors -------------------------
+
+    @classmethod
+    def live(
+        cls,
+        token: str,
+        *,
+        session: aiohttp.ClientSession | None = None,
+        capture: Path | str | None = None,
+        heartbeat: float = 30.0,
+        handlers: list[FrameHandler] | None = None,
+    ) -> Self:
+        """Build a live client that connects to the real smartplace.ch.
+
+        Args:
+            token: opaque URL token (the only secret). Never logged.
+            session: optional pre-existing aiohttp session (HA passes
+                its own pooled session; the CLI lets us create one).
+            capture: optional path to tee every frame (both directions)
+                as ndjson — tokens are redacted on the way in.
+            heartbeat: aiohttp WS ping interval, in seconds.
+            handlers: optional initial frame handlers.
+        """
+        install_token_redaction_filter()
+        own = session is None
+        live = _LiveSources(
+            token=token,
+            session=session or aiohttp.ClientSession(),
+            own_session=own,
+            heartbeat=heartbeat,
+        )
+        return cls(
+            state=SessionState(),
+            handlers=list(handlers or []),
+            capture_path=Path(capture) if capture else None,
+            _live=live,
+        )
+
+    @classmethod
+    def replay(
+        cls,
+        path: Path | str,
+        *,
+        capture: Path | str | None = None,
+        realtime: bool = False,
+        handlers: list[FrameHandler] | None = None,
+    ) -> Self:
+        """Build a replay client that iterates an ndjson capture.
+
+        Args:
+            path: path to a capture fixture (``CapturedFrame`` per line).
+            capture: optional path to re-tee the replayed stream into a
+                new file (useful when transforming fixtures).
+            realtime: if True, sleep between server frames so wall-clock
+                gaps from the original capture are preserved. Default
+                False — tests run as fast as possible.
+            handlers: optional initial frame handlers.
+        """
+        install_token_redaction_filter()
+        return cls(
+            state=SessionState(),
+            handlers=list(handlers or []),
+            capture_path=Path(capture) if capture else None,
+            _replay=_ReplaySources(path=Path(path), realtime=realtime),
+        )
+
+    # --------------------------- public API --------------------------
+
+    def subscribe(self, handler: FrameHandler) -> None:
+        """Register a coroutine handler invoked on every server frame."""
+        self.handlers.append(handler)
+
+    async def run(self) -> None:
+        """Run one connection lifetime.
+
+        Phase 1.2: live mode runs exactly one lifetime then returns;
+        replay mode reads the fixture to completion. Phase 1.5 will
+        wrap live-mode in a reconnect-with-backoff loop.
+        """
+        try:
+            if self._live is not None:
+                await self._run_live_once()
+            elif self._replay is not None:
+                await self._run_replay()
+            else:
+                raise RuntimeError("SmartPlaceClient missing both live and replay sources")
+        finally:
+            if self.capture_path is not None and self._capture_handle is not None:
+                self._capture_handle.close()  # type: ignore[attr-defined]
+                self._capture_handle = None
+
+    async def send(self, text: str) -> None:
+        """Send a text frame to the server (live) or log it (replay).
+
+        Per the ``smart-place-observe-only`` memory: live mode has no
+        software gate. If you don't want to issue commands, don't call
+        ``send()``. Replay mode appends to an in-memory log instead of
+        contacting the network.
+        """
+        frame = encode_frame(text)
+        captured = CapturedFrame(
+            direction="client",
+            ts=_now_ts(),
+            text=frame,
+        )
+        self._write_capture(captured)
+        if self._live is not None:
+            if self._ws is None or self._ws.closed:
+                raise RuntimeError("send() called before the app WS is open")
+            await self._ws.send_str(frame)
+            _LOGGER.debug("sent: %s", frame)
+        elif self._replay is not None:
+            self._replay.sent_log.append(captured)
+            _LOGGER.debug("replay: send recorded (not transmitted): %s", frame)
+        else:
+            raise RuntimeError("SmartPlaceClient has no I/O source")
+
+    async def aclose(self) -> None:
+        """Close the WS and any owned aiohttp session. Idempotent."""
+        self._closing = True
+        if self._ws is not None and not self._ws.closed:
+            await self._ws.close()
+        if self._live is not None and self._live.own_session:
+            await self._live.session.close()
+        self.state.close()
+
+    async def __aenter__(self) -> Self:
+        """Enter the async context — returns self for `async with` syntax."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Exit the async context — always calls :meth:`aclose`."""
+        await self.aclose()
+
+    @property
+    def sent_log(self) -> list[CapturedFrame]:
+        """In-memory log of sends — populated only in replay mode."""
+        return self._replay.sent_log if self._replay else []
+
+    async def wait_for_bootstrap(self) -> None:
+        """Wait until both bootstrap reads have completed.
+
+        Wrap with ``async with asyncio.timeout(seconds): ...`` at the
+        caller if you want a deadline.
+        """
+        await self._bootstrap_done.wait()
+
+    # ----------------------- live-mode internals ----------------------
+
+    async def _run_live_once(self) -> None:
+        assert self._live is not None
+        session = self._live.session
+
+        ws_url = discovery_ws_url(self._live.token)
+        _LOGGER.info("opening discovery WS: %s", ws_url)
+        discovery_headers = {"User-Agent": USER_AGENT, "Origin": DISCOVERY_ORIGIN}
+
+        async with session.ws_connect(
+            ws_url,
+            headers=discovery_headers,
+            heartbeat=self._live.heartbeat,
+        ) as discovery_ws:
+            self._ws = discovery_ws
+            first_msg = await discovery_ws.receive()
+            if first_msg.type is not aiohttp.WSMsgType.TEXT:
+                raise ProtocolError(
+                    f"discovery WS first frame had unexpected type {first_msg.type!r}",
+                )
+            text = str(first_msg.data)
+            self._write_capture(CapturedFrame("server", _now_ts(), text))
+            frame = parse_frame(text)
+
+            self.state.on_discovery_frame(frame)
+            if isinstance(frame, HostNotOnline):
+                _LOGGER.warning("installation is offline (HostNotOnline)")
+                raise SmartPlaceAuthError("installation is offline")
+            if isinstance(frame, GoToLinkOldSystem):
+                # Legacy server flow is unsupported in v1 POC.
+                # DESIGN.md §9 Q1.
+                raise ProtocolError("legacy GoToLinkOLDSYSTEM route not implemented")
+            if not isinstance(frame, GoToLinkSSL):
+                raise ProtocolError(f"discovery returned non-routing frame {type(frame).__name__}")
+
+            route = frame
+
+        self._ws = None
+        _LOGGER.info("discovery routed to %s:%s%s", route.host, route.port, route.path or "")
+
+        # Step 3: fetch routed page as the browser iframe would.
+        routed_url = route.routed_https_url
+        async with session.get(
+            routed_url,
+            headers={"User-Agent": USER_AGENT, "Referer": DISCOVERY_ORIGIN},
+        ) as resp:
+            if resp.status != 200:
+                raise ProtocolError(
+                    f"routed page GET returned {resp.status} for {routed_url}",
+                )
+            await resp.read()  # drain; we don't parse the page body in v1
+            _LOGGER.debug("routed page %s -> %d", routed_url, resp.status)
+
+        # Step 4: open the app WS at /UpdatenLS.
+        app_ws_url = route.app_ws_url
+        app_headers = {"User-Agent": USER_AGENT, "Origin": route.app_ws_origin}
+        async with session.ws_connect(
+            app_ws_url,
+            headers=app_headers,
+            heartbeat=self._live.heartbeat,
+        ) as app_ws:
+            self._ws = app_ws
+            self.state.on_app_open()
+            _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
+
+            # Steps 5 + 6: send bootstrap reads.
+            await self.send(GLOBAL_CONFIG_REQUEST)
+            await self.send(STATUS_LISTE_REQUEST)
+
+            # Step 7: dispatch loop.
+            await self._dispatch_loop(_aiter_ws_text(app_ws))
+
+        self._ws = None
+
+    # ---------------------- replay-mode internals ---------------------
+
+    async def _run_replay(self) -> None:
+        assert self._replay is not None
+        _LOGGER.info("replaying %s", self._replay.path)
+        # Synthesise the discovery → routed → app-open phase from the
+        # fixture: the first server frame is parsed as discovery, then
+        # any embedded "GoToLinkSSL" route becomes the in-memory state.
+        # This is the SAME dispatch the live path uses, just with a
+        # frame iterator instead of an aiohttp WS.
+        await self._dispatch_loop(_aiter_capture(self._replay))
+
+    # ------------------------ shared dispatch -------------------------
+
+    async def _dispatch_loop(self, source: AsyncIterator[str]) -> None:
+        async for text in source:
+            self._write_capture(CapturedFrame("server", _now_ts(), text))
+            try:
+                frame = parse_frame(text)
+            except ProtocolError as err:
+                _LOGGER.warning("parse error %s on frame %r — skipping", err, text)
+                continue
+
+            current_phase = self.state.phase
+            if current_phase in (SessionPhase.DISCOVERY_OPEN, SessionPhase.ROUTED):
+                # In replay we may walk through the discovery frame here.
+                if isinstance(frame, GoToLinkSSL | GoToLinkOldSystem | HostNotOnline):
+                    self.state.on_discovery_frame(frame)
+                else:
+                    # Tolerate an out-of-order app frame in replay fixtures.
+                    self.state.phase = SessionPhase.APP_OPEN
+                    self.state.on_app_frame(frame)
+            else:
+                self.state.on_app_frame(frame)
+
+            if (
+                not self._bootstrap_done.is_set()
+                and isinstance(frame, GlobalConfig | StatusListe)
+                and self.state.global_config is not None
+                and self.state.status_liste is not None
+            ):
+                self._bootstrap_done.set()
+
+            for handler in self.handlers:
+                try:
+                    await handler(frame)
+                except Exception:
+                    _LOGGER.exception("frame handler raised")
+
+            if self._closing:
+                break
+
+    # --------------------------- capture I/O --------------------------
+
+    def _write_capture(self, frame: CapturedFrame) -> None:
+        if self.capture_path is None:
+            return
+        if self._capture_handle is None:
+            self._capture_handle = self.capture_path.open("a", encoding="utf-8")
+        scrubbed_text = _scrub_token(frame.text)
+        sanitized = CapturedFrame(
+            direction=frame.direction,
+            ts=frame.ts,
+            text=scrubbed_text,
+        )
+        self._capture_handle.write(sanitized.to_json() + "\n")  # type: ignore[attr-defined]
+        self._capture_handle.flush()  # type: ignore[attr-defined]
+
+
+# -------------------------- module helpers ---------------------------
+
+
+def _now_ts() -> float:
+    """UTC wall-clock seconds since epoch — capture timestamps."""
+    return datetime.now(tz=UTC).timestamp()
+
+
+def _scrub_token(text: str) -> str:
+    """Apply the same redaction the log filter does, for capture lines."""
+    return _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", text))
+
+
+async def _aiter_ws_text(ws: aiohttp.ClientWebSocketResponse) -> AsyncIterator[str]:
+    async for msg in ws:
+        if msg.type is aiohttp.WSMsgType.TEXT:
+            yield str(msg.data)
+        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
+            return
+        elif msg.type is aiohttp.WSMsgType.ERROR:
+            raise ProtocolError(f"WS error: {ws.exception()!r}")
+
+
+async def _aiter_capture(replay: _ReplaySources) -> AsyncIterator[str]:
+    """Iterate server-direction text frames from a capture fixture.
+
+    Skips client-direction frames so replay never re-issues commands
+    against any server. If ``realtime`` is set, sleeps between frames to
+    preserve the original wall-clock pacing.
+    """
+    last_ts: float | None = None
+    with replay.path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cap = CapturedFrame.from_json(line)
+            except (ValueError, KeyError, json.JSONDecodeError) as err:
+                _LOGGER.warning("skipping malformed capture line: %s", err)
+                continue
+            if cap.direction != "server":
+                continue
+            if replay.realtime and last_ts is not None:
+                gap = max(0.0, cap.ts - last_ts)
+                if gap > 0:
+                    await asyncio.sleep(gap)
+            last_ts = cap.ts
+            yield cap.text
+
+
+# ---------------------- CLI (importable but lazy) --------------------
+
+
+def _cli_entry() -> None:
+    """Console-script entry point for ``sp-cli`` — imports Click lazily.
+
+    The HA integration never imports this function, so Click stays out
+    of HA's import graph.
+    """
+    import click  # noqa: PLC0415 — intentional lazy import
+
+    _build_cli(click)(standalone_mode=True)
+
+
+def _build_cli(click: Any) -> Callable[..., None]:
+    """Build the Click command. Kept out of module top level so HA never imports Click."""
+
+    @click.command(name="sp-cli")
+    @click.option(
+        "--live",
+        "live_mode",
+        is_flag=True,
+        default=False,
+        help="Connect to the real smartplace.ch server (uses $SMART_PLACE_TOKEN).",
+    )
+    @click.option(
+        "--replay",
+        "replay_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        default=None,
+        help="Replay an ndjson capture fixture; the live server is not contacted.",
+    )
+    @click.option(
+        "--capture",
+        "capture_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        default=None,
+        help="Tee every frame (both directions, token-redacted) to this file.",
+    )
+    @click.option(
+        "--log-level",
+        default="INFO",
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
+        help="Logging verbosity for the client library.",
+    )
+    def cli(
+        live_mode: bool,
+        replay_path: Path | None,
+        capture_path: Path | None,
+        log_level: str,
+    ) -> None:
+        """Smart Place CLI — observe and (carefully) interact with the live system.
+
+        Exactly one of --live and --replay <file> is required. Either
+        mode is bidirectional: server frames print to stdout, lines
+        typed on stdin are sent. There is no software gate against
+        accidental sends — see DESIGN.md §5.3.
+        """
+        if live_mode == (replay_path is not None):
+            raise click.UsageError("exactly one of --live and --replay <file> is required")
+        logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        install_token_redaction_filter()
+
+        asyncio.run(_run_cli(live_mode, replay_path, capture_path))
+
+    return cli
+
+
+async def _run_cli(
+    live_mode: bool,
+    replay_path: Path | None,
+    capture_path: Path | None,
+) -> None:
+    """Async body of the CLI: print server frames, send stdin lines."""
+
+    async def printer(frame: ServerFrame) -> None:
+        sys.stdout.write(f"<- {frame!r}\n")
+        sys.stdout.flush()
+
+    if live_mode:
+        token = os.environ.get("SMART_PLACE_TOKEN")
+        if not token:
+            raise SystemExit("SMART_PLACE_TOKEN env var is required for --live")
+        client = SmartPlaceClient.live(token=token, capture=capture_path, handlers=[printer])
+    else:
+        assert replay_path is not None
+        client = SmartPlaceClient.replay(path=replay_path, capture=capture_path, handlers=[printer])
+
+    async with client:
+        runner = asyncio.create_task(client.run(), name="sp-cli-run")
+        sender = asyncio.create_task(_stdin_pump(client), name="sp-cli-stdin")
+        done, pending = await asyncio.wait(
+            {runner, sender},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            exc = task.exception()
+            if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                raise exc
+
+
+async def _stdin_pump(client: SmartPlaceClient) -> None:
+    """Read lines from stdin and feed them to ``client.send``.
+
+    Each line is a single text frame. Empty lines are ignored. Closing
+    stdin (Ctrl-D) ends the pump and causes the CLI to exit.
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if line == "":
+            return
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        try:
+            await client.send(line)
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"send failed: {err}\n")
+
+
+if __name__ == "__main__":
+    _cli_entry()
