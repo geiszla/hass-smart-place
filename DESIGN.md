@@ -703,3 +703,39 @@ creation date. `GsaConfig` contains LAN IP and SIP gateway info.
 are committed to fixtures; the registry parses them so the dispatch
 layer recognises them, but their `value` payloads should not be
 logged or persisted without redaction.
+
+### Minimum command sequence for "main stats" (verified live 2026-05-28)
+
+The four headline stats — indoor temperature, electricity/water
+consumption, info-board entries, and package-box state — reach the
+client via this minimum sequence:
+
+```
+                              # → TEMPIST<N> arrives spontaneously
+                              #   (broadcast on connect, no command).
+                              # → PACKETBOX<N> arrives later via the
+                              #   server's broadcast fan-out.
+
+→ GiveStatusListe             # ← StatusListe>… (info-board columns)
+→ StatusInhaltListe           # ← StatusInhaltListe_<lvl>_<row>_… rows,
+                              #   each binding a label to a push frame
+                              #   (TEMPOUT, REGEN, CHART<id>STAND<n>, …)
+                              # ← StatusInhaltFinishedListe (terminator)
+
+For each unique CHART<id>STAND reference found in the rows above:
+→ GiveMeChartStandsManuell<id>  # ← CHART<id>STAND<n>:<value> per series
+```
+
+So **two static commands** (`GiveStatusListe`, `StatusInhaltListe`)
+plus **one command per discovered consumption chart**. The SPA
+prefixes this with `GiveMeGlobalConfig` but **the server doesn't
+require it** — verified by probe. The `_chase_chart_ids` helper in
+`client.py` collects chart ids from `InfoboardEntry` frames and
+issues the chart fetches on the `InfoboardContentFinished` marker.
+
+### Write commands (not auto-issued)
+
+The `OPEN_GROUND_FLOOR_ENTRANCE` (`OEFFNER1`) and `OPEN_FRONT_DOOR`
+(`OEFFNER4`) constants are exposed so a caller can opt in
+explicitly. Per the `smart-place-observe-only` memory, the library
+never sends them on its own.

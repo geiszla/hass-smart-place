@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
+from smart_place_client.messages import KNOWN_MESSAGES, parse_frame
 from smart_place_client.protocol import (
     APP_WS_PATH,
     DISCOVERY_HOST,
     DISCOVERY_PORT,
     DISCOVERY_WS_PATH,
     GLOBAL_CONFIG_REQUEST,
-    KNOWN_MESSAGES,
     STATUS_LISTE_REQUEST,
     GlobalConfig,
     GoToLinkSSL,
@@ -34,7 +34,6 @@ from smart_place_client.protocol import (
     encode_frame,
     encode_global_config_request,
     encode_status_liste_request,
-    parse_frame,
 )
 
 # ---------------------------- parse_frame ----------------------------
