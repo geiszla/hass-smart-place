@@ -44,12 +44,12 @@ from smart_place_client.protocol import (
     GoToLinkOldSystem,
     GoToLinkSSL,
     HostNotOnline,
+    NamedFields,
     ProtocolError,
     ServerFrame,
     SessionPhase,
     SessionState,
     SmartPlaceAuthError,
-    StatusListe,
     UnknownFrame,
     discovery_ws_url,
     encode_frame,
@@ -545,11 +545,14 @@ class SmartPlaceClient:
             else:
                 self.state.on_app_frame(frame)
 
+            is_bootstrap_frame = isinstance(frame, GlobalConfig) or (
+                isinstance(frame, NamedFields) and frame.name == "InfoboardWidgets"
+            )
             if (
                 not self._bootstrap_done.is_set()
-                and isinstance(frame, GlobalConfig | StatusListe)
+                and is_bootstrap_frame
                 and self.state.global_config is not None
-                and self.state.status_liste is not None
+                and self.state.infoboard_widgets is not None
             ):
                 self._bootstrap_done.set()
 

@@ -18,11 +18,11 @@ from smart_place_client import (
     CapturedFrame,
     GlobalConfig,
     GoToLinkSSL,
+    NamedFields,
     ServerFrame,
     SessionPhase,
     SmartPlaceAuthError,
     SmartPlaceClient,
-    StatusListe,
     UnknownFrame,
     install_token_redaction_filter,
 )
@@ -49,13 +49,10 @@ async def test_replay_walks_dispatch_to_ready_state() -> None:
         await client.run()
 
     # Server-direction frames only — client direction lines are skipped
-    # so commands are never re-issued during replay.
-    assert [type(f).__name__ for f in collected] == [
-        "GoToLinkSSL",
-        "GlobalConfig",
-        "StatusListe",
-        "UnknownFrame",
-    ]
+    # so commands are never re-issued during replay. Typed classes use
+    # their dataclass name; NamedFields/Marker use the registry .name.
+    seen_labels = [f.name if isinstance(f, NamedFields) else type(f).__name__ for f in collected]
+    assert seen_labels == ["GoToLinkSSL", "GlobalConfig", "InfoboardWidgets", "UnknownFrame"]
 
     # State machine walked through the happy path.
     assert isinstance(collected[0], GoToLinkSSL)
@@ -68,7 +65,10 @@ async def test_replay_walks_dispatch_to_ready_state() -> None:
         screensaver_start="23:00",
         screensaver_duration="30",
     )
-    assert client.state.status_liste == StatusListe(fields=("1", "2", "3"))
+    assert client.state.infoboard_widgets == NamedFields(
+        name="InfoboardWidgets",
+        fields=("1", "2", "3"),
+    )
     # The bootstrap event fires once both reads have arrived.
     assert client._bootstrap_done.is_set()
 
@@ -225,7 +225,7 @@ async def test_phase3_capture_replays_to_bootstrapped_state() -> None:
 
     Validates the parser against actually-observed wire data: dynamic
     routed port (38435), float brightness (0.8), 'undefined' literal,
-    and the empty-third-field StatusListe.
+    and the empty-third-field InfoboardWidgets payload.
     """
     client = SmartPlaceClient.replay(path=FIXTURES / "phase3-smoke.ndjson")
     async with client:
@@ -236,8 +236,8 @@ async def test_phase3_capture_replays_to_bootstrapped_state() -> None:
     assert client.state.global_config is not None
     assert client.state.global_config.brightness == "0.8"
     assert client.state.global_config.screensaver_duration == "undefined"
-    assert client.state.status_liste is not None
-    assert client.state.status_liste.fields == ("Wetter", "Tagesverbrauch", "")
+    assert client.state.infoboard_widgets is not None
+    assert client.state.infoboard_widgets.fields == ("Wetter", "Tagesverbrauch", "")
 
 
 async def test_replay_skips_malformed_lines(tmp_path: Path) -> None:

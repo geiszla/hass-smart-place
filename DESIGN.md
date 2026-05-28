@@ -597,3 +597,46 @@ a digit-capturing regex.
 - A `HostNotOnline` capture from an offline installation — to confirm
   the discovery frame matches the literal in the Start5 JavaScript.
 - A `GoToLinkOLDSYSTEM` capture from a legacy installation.
+
+### Static frontend command inventory, 2026-05-28
+
+Source: fetched routed `settings.js` and `javallg.js` while a normal
+`uv run sp-cli --live` session kept `/UpdatenLS` open. No extra live
+commands were sent for this inventory; it is static analysis of
+`spsocket2.send(...)` call sites.
+
+`javallg.js` contains 160 `spsocket2.send(...)` call sites: 58 literal
+strings and 102 dynamically built strings. Many are real control commands,
+so treat this list as candidate protocol notes, not as a safe send list.
+
+Likely read/enumeration commands:
+
+| Area | Candidate command(s) | Hinted response / purpose |
+| ---- | -------------------- | ------------------------- |
+| Bootstrap | `GiveMeGlobalConfig`, `GiveStatusListe` | Already verified: `EINSTELLUNGENGLOBAL>...`, `StatusListe>...`. |
+| Status contents / current states | `StatusInhaltListe`, `GiveMeAllStatesNew`, `GiveMeMainmenu` | `StatusInhaltListe...`, `StatusLinkInhaltFinishedListe`, `StatusInhaltFinishedListe`; `GiveMeAllStatesNew` is sent after status-link content finishes and looks like the best next candidate for broad state hydration. |
+| Admin / device inventory | `GiveMeAdminMainmenu`, `GiveMeSzenenIcons`, `GiveMeScreenSaverPics` | Hinted responses include `GiveMeAdminMainmenuFinished`, `CheckLeuchtenValuesFinished`, `CheckJalousienValuesFinished`, `CheckKlimasValuesFinished`, `CheckLautsprecherValuesFinished`, `ReloadSensorFinished`, `SzenenReloadFinished`. May require admin mode / PIN context. |
+| Per-device admin detail | `GiveMeAdminSettingsINHALTLeuchten:<id>`, `...S ZENEN:<id>`, `...Jalousien:<id>`, `...Klimas:<id>`, `...MediaPanel:<id>`, `...Mediacenter:<id>`, `...Lautsprecher:<id>`, `...Sensor:<id>` | Looks like detailed configuration fetch for one device/category item. Requires IDs discovered elsewhere. |
+| Integrations / APIs | `GiveMeGlobalGsa`, `GiveMeAnbindungen`, `GiveMeMoeglicheAnbindungen`, `GiveMeAPIFuer><id>`, `SPMGiveMeAPIAnbindungsInfos><id>` | Hinted responses include `GlobalAnbindungenBack`, `GlobalAnbindungenBackFinish`, `GiveMeAPIFuerBack`, `GiveMeAPIAnbindungsInfosBack`. May expose integration tokens; do not commit captures blindly. |
+| Media / multiroom | `GiveMeGlobalMulti`, `GiveMeMultiInfos><id>`, `GiveMeMultiAllPlayedInfos>`, `GiveMeMultiPlayListRightNowInfos><id>` | Hinted responses include `MediacenterUpdateInfos...` and multiroom/media status. |
+| Charts / history | `GiveMeChartSummeWasGenau><diagram_id>`, `GiveMeChartStandsManuell<diagram_id>`, `GiveMeChartValuesFor:<chart_id>:...`, `GiveMeRecordingsHour><ts>`, `GiveMeRecordingsDay><ts>` | Reads chart/history/recording data; parameters come from UI state. |
+| Scan/file area | `GiveMeScansAllFirstLevel`, `GiveMeScansOrdner><id>`, `ScanGiveMeFile><id>`, `ScanGiveMeOrdnerEditFile>` | Reads document/file structures. Likely private; avoid fixture commits. |
+| Misc system/account | `GiveMeBasicInfos`, `GiveMeRechnungenAbschliessenCount`, `GiveMeToken` | `GiveMeToken` likely returns or refreshes a secret/token; avoid during captures unless needed and redaction is proven. |
+
+Server prefix hints in the JS show likely entity families:
+
+- Lights / outputs: `leuchte<ID>:...`, `DIMleuchte<ID>:...`, `RGBSLIDER<ID>:...`,
+  `RGBABLAUF<ID>`.
+- Covers/blinds: `JALUP<ID>`, `JALDOW<ID>`, `JALLUE<ID>`, `JALICO...`.
+- Climate / sensors: `TEMPIST<ID>`, `TEMPSOLL<ID>`, `FEUCHTEIST<ID>`,
+  `KLIMASINFO...`, `FanCoilMode...`.
+- Scenes/settings/alarms/audio: `SZENE<ID>`, `SETTINGS...EINAUS`,
+  `SETTINGS...SLIDER`, `Alarme...`, `Lautsprecher...`, `Vol<ID>:...`.
+- Door/intercom/media controls: `SPRECHEN...`, `MUTE...`, `OEFFNER...`,
+  `CALLS...`, media playback/select commands.
+
+Write-looking commands include `leuchte<ID>`, `DIMleuchte<ID>:<value>`,
+`JALUP/JALDOW/JALLUE<ID>`, `TEMPSOLL<ID>:<value>`, `SETTINGS...EINAUS`,
+`SETTINGS...SLIDER`, `SZENE<ID>`, `OEFFNER<ID>`, media play/select commands,
+Smart Garden runtime/threshold setters, and sauna temperature/humidity
+setpoints. Do not send these during discovery/state-capture work.

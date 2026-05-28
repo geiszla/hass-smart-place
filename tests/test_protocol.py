@@ -25,15 +25,16 @@ from smart_place_client.protocol import (
     GoToLinkOldSystem,
     GoToLinkSSL,
     HostNotOnline,
+    Marker,
     MessageDefinition,
-    OutdoorTemperature,
+    NamedFields,
+    NamedValue,
     ProtocolError,
     SessionPhase,
     SessionState,
-    StatusListe,
     Temperature,
     UnknownFrame,
-    WindSpeed,
+    _parse_fields_after_prefix,
     discovery_ws_url,
     encode_frame,
     encode_global_config_request,
@@ -112,10 +113,10 @@ def test_parse_global_config_phase3_observed_shape() -> None:
     )
 
 
-def test_parse_status_liste_phase3_observed_shape() -> None:
-    """Phase 3 live capture 2026-05-28: info-board tab labels with trailing empty field."""
+def test_parse_infoboard_widgets_phase3_observed_shape() -> None:
+    """Phase 3 live capture: info-board widget labels (StatusListe wire prefix)."""
     frame = parse_frame("StatusListe>Wetter>Tagesverbrauch>")
-    assert frame == StatusListe(fields=("Wetter", "Tagesverbrauch", ""))
+    assert frame == NamedFields(name="InfoboardWidgets", fields=("Wetter", "Tagesverbrauch", ""))
 
 
 def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
@@ -147,9 +148,9 @@ def test_parse_temperature_missing_value_raises() -> None:
 
 
 def test_parse_outdoor_temperature() -> None:
-    """TEMPOUT:<value> (live capture 2026-05-28)."""
+    """TEMPOUT:<value> parses as NamedValue(name='OutdoorTemperature', value=...)."""
     frame = parse_frame("TEMPOUT:26.6")
-    assert frame == OutdoorTemperature(value="26.6")
+    assert frame == NamedValue(name="OutdoorTemperature", value="26.6")
 
 
 def test_parse_outdoor_temperature_missing_value_raises() -> None:
@@ -158,9 +159,9 @@ def test_parse_outdoor_temperature_missing_value_raises() -> None:
 
 
 def test_parse_wind_speed() -> None:
-    """WINDGESCHWINDIGKEIT:<value> (live capture 2026-05-28)."""
+    """WINDGESCHWINDIGKEIT:<value> parses as NamedValue(name='WindSpeed', value=...)."""
     frame = parse_frame("WINDGESCHWINDIGKEIT:7.9")
-    assert frame == WindSpeed(value="7.9")
+    assert frame == NamedValue(name="WindSpeed", value="7.9")
 
 
 def test_parse_wind_speed_missing_value_raises() -> None:
@@ -181,16 +182,66 @@ def test_parse_global_config_wrong_field_count(bad: str) -> None:
         parse_frame(bad)
 
 
-def test_parse_status_liste() -> None:
-    """Live-observed 2026-05-28 3-field frame; kept as a tuple."""
+def test_parse_infoboard_widgets() -> None:
+    """`StatusListe>1>2>3` wire frame parses as InfoboardWidgets NamedFields."""
     frame = parse_frame("StatusListe>1>2>3")
-    assert frame == StatusListe(fields=("1", "2", "3"))
+    assert frame == NamedFields(name="InfoboardWidgets", fields=("1", "2", "3"))
+
+
+def test_parse_infoboard_widgets_trailing_empty_field_preserved() -> None:
+    """A trailing `>` produces a trailing empty field (matches Phase 3 capture)."""
+    frame = parse_frame("StatusListe>Wetter>Tagesverbrauch>")
+    assert frame == NamedFields(name="InfoboardWidgets", fields=("Wetter", "Tagesverbrauch", ""))
+
+
+def test_parse_infoboard_widgets_bare_prefix_has_no_fields() -> None:
+    """`StatusListe` alone (no `>`) decodes as an empty tuple of fields."""
+    frame = parse_frame("StatusListe")
+    assert frame == NamedFields(name="InfoboardWidgets", fields=())
+
+
+def test_parse_infoboard_content_uses_helper() -> None:
+    """`StatusInhaltListe` (renamed to InfoboardContent) shares the same parsing."""
+    assert parse_frame("StatusInhaltListe>a>b") == NamedFields(
+        name="InfoboardContent",
+        fields=("a", "b"),
+    )
+    assert parse_frame("StatusInhaltListe") == NamedFields(
+        name="InfoboardContent",
+        fields=(),
+    )
 
 
 def test_parse_unknown_frame() -> None:
     """Unknown shapes don't crash — they propagate as UnknownFrame."""
     frame = parse_frame("leuchte12:75")
     assert frame == UnknownFrame(raw="leuchte12:75")
+
+
+# ----------------- _parse_fields_after_prefix helper -----------------
+
+
+def test_parse_fields_after_prefix_bare_prefix() -> None:
+    assert _parse_fields_after_prefix("FOO", "FOO") == ()
+
+
+def test_parse_fields_after_prefix_single_separator() -> None:
+    assert _parse_fields_after_prefix("FOO>", "FOO") == ("",)
+
+
+def test_parse_fields_after_prefix_fields_and_trailing_empty() -> None:
+    assert _parse_fields_after_prefix("FOO>a>b", "FOO") == ("a", "b")
+    assert _parse_fields_after_prefix("FOO>a>b>", "FOO") == ("a", "b", "")
+
+
+def test_parse_fields_after_prefix_missing_prefix_raises() -> None:
+    with pytest.raises(ProtocolError):
+        _parse_fields_after_prefix("BAR>a", "FOO")
+
+
+def test_parse_fields_after_prefix_non_separator_after_prefix_raises() -> None:
+    with pytest.raises(ProtocolError):
+        _parse_fields_after_prefix("FOOX>a", "FOO")
 
 
 # --------------------------- routed URLs ----------------------------
@@ -249,7 +300,7 @@ def test_session_state_starts_in_discovery_open() -> None:
     assert state.phase is SessionPhase.DISCOVERY_OPEN
     assert state.route is None
     assert state.global_config is None
-    assert state.status_liste is None
+    assert state.infoboard_widgets is None
 
 
 def test_session_state_routing_transitions_to_routed() -> None:
@@ -285,7 +336,7 @@ def test_session_state_full_happy_path() -> None:
     state.on_app_frame(GlobalConfig("de", "0", "0", "0", "0", "0"))
     # Still APP_OPEN: need both bootstrap reads.
     assert state.phase is SessionPhase.APP_OPEN
-    state.on_app_frame(StatusListe(fields=("a", "b", "c")))
+    state.on_app_frame(NamedFields(name="InfoboardWidgets", fields=("a", "b", "c")))
     assert state.phase is SessionPhase.BOOTSTRAPPED
 
 
@@ -308,13 +359,28 @@ def test_session_state_app_open_without_route_raises() -> None:
 def test_known_messages_registry_covers_all_known_dataclasses() -> None:
     """Every name in KNOWN_MESSAGES corresponds to a real frame dataclass."""
     expected = {
-        "HostNotOnline",
-        "GoToLinkSSL",
-        "GoToLinkOldSystem",
+        "AdminMainmenuFinished",
+        "CheckJalousienValuesFinished",
+        "CheckKlimasValuesFinished",
+        "CheckLautsprecherValuesFinished",
+        "CheckLeuchtenValuesFinished",
+        "GiveMeAPIAnbindungsInfosBack",
+        "GiveMeAPIFuerBack",
+        "GlobalAnbindungenBack",
+        "GlobalAnbindungenBackFinish",
         "GlobalConfig",
-        "StatusListe",
-        "Temperature",
+        "GoToLinkOldSystem",
+        "GoToLinkSSL",
+        "HostNotOnline",
+        "MediacenterUpdateInfos",
+        "InfoboardContent",
+        "InfoboardWidgets",
         "OutdoorTemperature",
+        "ReloadSensorFinished",
+        "StatusInhaltFinishedListe",
+        "StatusLinkInhaltFinishedListe",
+        "SzenenReloadFinished",
+        "Temperature",
         "WindSpeed",
     }
     assert {defn.name for defn in KNOWN_MESSAGES} == expected
@@ -332,9 +398,17 @@ def test_known_messages_entries_have_descriptions_and_examples() -> None:
 
 
 def test_known_messages_examples_round_trip_through_parse_frame() -> None:
-    """parse_frame(defn.example) returns the dataclass declared by the entry."""
+    """parse_frame(defn.example) yields the named shape declared by the entry.
+
+    Typed classes are identified by their dataclass name; Marker /
+    NamedFields / NamedValue / Marker entries are identified by the
+    parsed frame's ``name`` attribute (the dataclass itself is shared
+    across many registry rows).
+    """
     for defn in KNOWN_MESSAGES:
         frame = parse_frame(defn.example)
-        assert type(frame).__name__ == defn.name, (
-            f"{defn.name} example {defn.example!r} parsed as {type(frame).__name__}"
-        )
+        if isinstance(frame, Marker | NamedFields | NamedValue):
+            actual = frame.name
+        else:
+            actual = type(frame).__name__
+        assert actual == defn.name, f"{defn.name} example {defn.example!r} parsed as {actual!r}"
