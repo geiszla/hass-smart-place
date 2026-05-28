@@ -160,3 +160,48 @@ Verified end-to-end:
 None functionally; the `--mode` vs `--live/--replay` flag choice
 matches the user's later correction during the design phase.
 
+## Phase 1.4 — tests
+
+**Status:** done.
+
+`tests/test_protocol.py` (32 tests): parse-frame happy and malformed
+inputs (parametrised for both `GoToLinkSSL` and `EINSTELLUNGENGLOBAL`),
+the legacy / offline branches, encoder pass-through and newline
+rejection, the routed-URL property logic, and every meaningful
+`SessionState` transition including the "bootstrap reads land
+out of order" case.
+
+`tests/test_client.py` (15 tests): end-to-end replay through the
+production dispatch loop:
+
+- `test_replay_walks_dispatch_to_ready_state` — one bootstrap fixture
+  populates `state.global_config`, `state.status_liste`, and fires
+  `_bootstrap_done`.
+- `test_replay_send_is_logged_not_transmitted` — replay `send()` calls
+  land in `sent_log` only; nothing leaves memory.
+- `test_replay_capture_round_trips` — capture during a replay produces
+  an ndjson that is itself replayable.
+- `test_handler_exception_does_not_crash_dispatch` — one bad handler
+  doesn't stop the loop; others still see frames; the error is logged.
+- `test_replay_skips_malformed_lines` — bad ndjson lines logged and
+  skipped.
+- `test_replay_realtime_paces_between_server_frames` — `realtime=True`
+  respects the original wall-clock gap.
+- Token-redaction filter and `_scrub_token` helper covered.
+- `CapturedFrame.from_json` round-trips and rejects bad directions.
+- `test_live_constructor_does_not_open_network` — `live(...)` is safe
+  to call outside an event loop (after the lazy-session refactor).
+
+Total: **47 tests, ~0.65s** — well within the < 2s budget DESIGN §5.1
+asks for. Coverage: 100% on `protocol.py`, 61% on `client.py` (the
+remainder is the live-mode I/O loop and the Click CLI, exercised by
+manual run not by replay).
+
+### Phase 1.4 divergence
+
+- `live(...)` originally created the `aiohttp.ClientSession` eagerly.
+  Refactored to lazy creation inside `_run_live_once`, because aiohttp
+  3.10+ requires a running event loop to construct the session and the
+  test "live() doesn't touch the network until run()" only makes sense
+  if construction itself works outside the loop.
+

@@ -130,10 +130,15 @@ FrameHandler = Callable[[ServerFrame], Awaitable[None]]
 
 @dataclass(slots=True)
 class _LiveSources:
-    """Resources held only by a live-mode client."""
+    """Resources held only by a live-mode client.
+
+    ``session`` is None until the first call to :meth:`SmartPlaceClient.run`
+    so callers can construct a live client outside of any event loop —
+    aiohttp >=3.10 requires a running loop to construct a ClientSession.
+    """
 
     token: str
-    session: aiohttp.ClientSession
+    session: aiohttp.ClientSession | None
     own_session: bool
     heartbeat: float
 
@@ -194,11 +199,10 @@ class SmartPlaceClient:
             handlers: optional initial frame handlers.
         """
         install_token_redaction_filter()
-        own = session is None
         live = _LiveSources(
             token=token,
-            session=session or aiohttp.ClientSession(),
-            own_session=own,
+            session=session,
+            own_session=session is None,
             heartbeat=heartbeat,
         )
         return cls(
@@ -292,7 +296,7 @@ class SmartPlaceClient:
         self._closing = True
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
-        if self._live is not None and self._live.own_session:
+        if self._live is not None and self._live.own_session and self._live.session is not None:
             await self._live.session.close()
         self.state.close()
 
@@ -326,7 +330,9 @@ class SmartPlaceClient:
 
     async def _run_live_once(self) -> None:
         assert self._live is not None
-        session = self._live.session
+        if self._live.session is None:
+            self._live.session = aiohttp.ClientSession()
+        session: aiohttp.ClientSession = self._live.session
 
         ws_url = discovery_ws_url(self._live.token)
         _LOGGER.info("opening discovery WS: %s", ws_url)
