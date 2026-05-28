@@ -41,9 +41,7 @@ from smart_place_client.protocol import (
     GLOBAL_CONFIG_REQUEST,
     STATUS_LISTE_REQUEST,
     GlobalConfig,
-    GoToLinkOldSystem,
     GoToLinkSSL,
-    HostNotOnline,
     NamedFields,
     ProtocolError,
     ServerFrame,
@@ -458,13 +456,6 @@ class SmartPlaceClient:
             frame = parse_frame(text)
 
             self.state.on_discovery_frame(frame)
-            if isinstance(frame, HostNotOnline):
-                _LOGGER.warning("installation is offline (HostNotOnline)")
-                raise SmartPlaceAuthError("installation is offline")
-            if isinstance(frame, GoToLinkOldSystem):
-                # Legacy server flow is unsupported in v1 POC.
-                # DESIGN.md §9 Q1.
-                raise ProtocolError("legacy GoToLinkOLDSYSTEM route not implemented")
             if not isinstance(frame, GoToLinkSSL):
                 raise ProtocolError(f"discovery returned non-routing frame {type(frame).__name__}")
 
@@ -536,7 +527,7 @@ class SmartPlaceClient:
             current_phase = self.state.phase
             if current_phase in (SessionPhase.DISCOVERY_OPEN, SessionPhase.ROUTED):
                 # In replay we may walk through the discovery frame here.
-                if isinstance(frame, GoToLinkSSL | GoToLinkOldSystem | HostNotOnline):
+                if isinstance(frame, GoToLinkSSL):
                     self.state.on_discovery_frame(frame)
                 else:
                     # Tolerate an out-of-order app frame in replay fixtures.

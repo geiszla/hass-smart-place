@@ -29,9 +29,6 @@ DISCOVERY_ORIGIN: Final = f"https://{DISCOVERY_HOST}:{DISCOVERY_PORT}"
 
 APP_WS_PATH: Final = "/UpdatenLS"
 
-LEGACY_HOST: Final = "spr0.smartplace.ch"
-LEGACY_PORT: Final = 8770
-
 GLOBAL_CONFIG_REQUEST: Final = "GiveMeGlobalConfig"
 STATUS_LISTE_REQUEST: Final = "GiveStatusListe"
 
@@ -76,23 +73,6 @@ class GoToLinkSSL:
 
 
 @dataclass(frozen=True, slots=True)
-class GoToLinkOldSystem:
-    """Discovery routing frame redirecting to the legacy server."""
-
-    token2: str
-
-    @property
-    def legacy_url(self) -> str:
-        """HTTPS URL the browser would load on the legacy server."""
-        return f"https://{LEGACY_HOST}:{LEGACY_PORT}/Start2?{self.token2}"
-
-
-@dataclass(frozen=True, slots=True)
-class HostNotOnline:
-    """Discovery-WS error: the user's installation is offline."""
-
-
-@dataclass(frozen=True, slots=True)
 class GlobalConfig:
     """Bootstrap-read response: SPA display config (language, dimming, screensaver, ...)."""
 
@@ -116,12 +96,10 @@ class Temperature:
 class NamedValue:
     """Generic single-string-value server frame, identified by ``name``.
 
-    Covers three shapes — the registry's :class:`MessageDefinition`
+    Covers two shapes — the registry's :class:`MessageDefinition`
     description tells you which one applies, and ``name`` is the
     dispatch key:
 
-    - **Markers** (HostNotOnline, ``*Finished``): no payload; ``value``
-      is the empty string.
     - **Single-value pushes** (OutdoorTemperature, WindSpeed): wire
       format is ``prefix:value``; ``value`` is the substring after the
       colon.
@@ -130,7 +108,7 @@ class NamedValue:
     """
 
     name: str
-    value: str = ""
+    value: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,16 +138,7 @@ class UnknownFrame:
     raw: str
 
 
-ServerFrame = (
-    GoToLinkSSL
-    | GoToLinkOldSystem
-    | HostNotOnline
-    | GlobalConfig
-    | Temperature
-    | NamedValue
-    | NamedFields
-    | UnknownFrame
-)
+ServerFrame = GoToLinkSSL | GlobalConfig | Temperature | NamedValue | NamedFields | UnknownFrame
 """Any frame the server may emit, post-parsing."""
 
 
@@ -195,14 +164,6 @@ def _parse_fields_after_prefix(text: str, prefix: str) -> tuple[str, ...]:
             f"frame {prefix!r}: expected '>' after prefix, got {rest[:1]!r}",
         )
     return tuple(rest[1:].split(">"))
-
-
-def _parse_go_to_link_old_system(text: str) -> GoToLinkOldSystem:
-    """Parse ``GoToLinkOLDSYSTEM:<token2>``."""
-    _, _, token2 = text.partition(":")
-    if not token2:
-        raise ProtocolError("GoToLinkOLDSYSTEM frame missing token2")
-    return GoToLinkOldSystem(token2=token2)
 
 
 def _parse_go_to_link_ssl(text: str) -> GoToLinkSSL:
@@ -265,11 +226,6 @@ def _parse_temperature(text: str) -> Temperature:
     return Temperature(sensor=int(m.group(1)), value=value)
 
 
-def _parse_host_not_online(_text: str) -> HostNotOnline:
-    """Return the offline marker; the regex match already verified the wire shape."""
-    return HostNotOnline()
-
-
 @dataclass(frozen=True, slots=True)
 class MessageDefinition:
     r"""Declarative entry in :data:`KNOWN_MESSAGES`.
@@ -304,11 +260,6 @@ class MessageDefinition:
     example: str
 
 
-def _marker_parser(name: str) -> Callable[[str], NamedValue]:
-    """Build a parser for a no-payload marker — returns ``NamedValue(name, "")``."""
-    return lambda _text: NamedValue(name=name)
-
-
 def _named_value_parser(name: str, prefix: str) -> Callable[[str], NamedValue]:
     """Build a parser for ``prefix:<value>`` frames returning ``NamedValue(name, value)``."""
 
@@ -323,29 +274,12 @@ def _named_value_parser(name: str, prefix: str) -> Callable[[str], NamedValue]:
     return parse
 
 
-def _named_raw_parser(name: str) -> Callable[[str], NamedValue]:
-    """Build a parser that stores the full frame text as value (no prefix stripping)."""
-    return lambda text: NamedValue(name=name, value=text)
-
-
 def _named_fields_parser(name: str, prefix: str) -> Callable[[str], NamedFields]:
     """Build a parser for ``prefix[>f1>f2>...]`` frames returning ``NamedFields(name, fields)``."""
     return lambda text: NamedFields(name=name, fields=_parse_fields_after_prefix(text, prefix))
 
 
 KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
-    MessageDefinition(
-        name="HostNotOnline",
-        description=(
-            "Discovery-WS error: the user's installation is offline (spr1 cannot "
-            "reach their home server). Surfaces as SmartPlaceAuthError so the HA "
-            "integration can mark entities unavailable. Seen in the Start5 page "
-            "JavaScript; not yet observed as a live frame."
-        ),
-        pattern=re.compile(r"^HostNotOnline$"),
-        parse=_parse_host_not_online,
-        example="HostNotOnline",
-    ),
     MessageDefinition(
         name="GoToLinkSSL",
         description=(
@@ -357,17 +291,6 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         pattern=re.compile(r"^GoToLinkSSL:"),
         parse=_parse_go_to_link_ssl,
         example="GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer",
-    ),
-    MessageDefinition(
-        name="GoToLinkOldSystem",
-        description=(
-            "Legacy server routing. Format: GoToLinkOLDSYSTEM:<token2>. Redirects "
-            "to spr0.smartplace.ch:8770/Start2?<token2>. Seen in javallg.js "
-            "but not yet observed as a live frame."
-        ),
-        pattern=re.compile(r"^GoToLinkOLDSYSTEM:"),
-        parse=_parse_go_to_link_old_system,
-        example="GoToLinkOLDSYSTEM:legacy-token-xyz",
     ),
     MessageDefinition(
         name="GlobalConfig",
@@ -397,131 +320,6 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         pattern=re.compile(r"^StatusListe(?:>|$)"),
         parse=_named_fields_parser("InfoboardWidgets", "StatusListe"),
         example="StatusListe>Wetter>Tagesverbrauch>",
-    ),
-    MessageDefinition(
-        name="InfoboardContent",
-        description=(
-            "Content rows for one info-board widget (wire prefix: StatusInhaltListe). "
-            "Format: StatusInhaltListe[>f1>f2>...]. Per-field semantics "
-            "unconfirmed. Not yet live-captured."
-        ),
-        pattern=re.compile(r"^StatusInhaltListe(?:>|$)"),
-        parse=_named_fields_parser("InfoboardContent", "StatusInhaltListe"),
-        example="StatusInhaltListe>1>2",
-    ),
-    MessageDefinition(
-        name="StatusInhaltFinishedListe",
-        description=("Marker: full status dashboard content list has been sent. Not yet live-captured."),
-        pattern=re.compile(r"^StatusInhaltFinishedListe$"),
-        parse=_marker_parser("StatusInhaltFinishedListe"),
-        example="StatusInhaltFinishedListe",
-    ),
-    MessageDefinition(
-        name="StatusLinkInhaltFinishedListe",
-        description=("Marker: full status-link/detail content for one tile has been sent. Not yet live-captured."),
-        pattern=re.compile(r"^StatusLinkInhaltFinishedListe$"),
-        parse=_marker_parser("StatusLinkInhaltFinishedListe"),
-        example="StatusLinkInhaltFinishedListe",
-    ),
-    MessageDefinition(
-        name="AdminMainmenuFinished",
-        description=("Marker: admin main-menu / device inventory has finished loading. Not yet live-captured."),
-        pattern=re.compile(r"^GiveMeAdminMainmenuFinished$"),
-        parse=_marker_parser("AdminMainmenuFinished"),
-        example="GiveMeAdminMainmenuFinished",
-    ),
-    MessageDefinition(
-        name="CheckLeuchtenValuesFinished",
-        description=("Marker: light/output state check batch has finished. Not yet live-captured."),
-        pattern=re.compile(r"^CheckLeuchtenValuesFinished$"),
-        parse=_marker_parser("CheckLeuchtenValuesFinished"),
-        example="CheckLeuchtenValuesFinished",
-    ),
-    MessageDefinition(
-        name="CheckJalousienValuesFinished",
-        description=("Marker: cover/blind state check batch has finished. Not yet live-captured."),
-        pattern=re.compile(r"^CheckJalousienValuesFinished$"),
-        parse=_marker_parser("CheckJalousienValuesFinished"),
-        example="CheckJalousienValuesFinished",
-    ),
-    MessageDefinition(
-        name="CheckKlimasValuesFinished",
-        description=("Marker: climate state check batch has finished. Not yet live-captured."),
-        pattern=re.compile(r"^CheckKlimasValuesFinished$"),
-        parse=_marker_parser("CheckKlimasValuesFinished"),
-        example="CheckKlimasValuesFinished",
-    ),
-    MessageDefinition(
-        name="CheckLautsprecherValuesFinished",
-        description=("Marker: speaker/audio state check batch has finished. Not yet live-captured."),
-        pattern=re.compile(r"^CheckLautsprecherValuesFinished$"),
-        parse=_marker_parser("CheckLautsprecherValuesFinished"),
-        example="CheckLautsprecherValuesFinished",
-    ),
-    MessageDefinition(
-        name="ReloadSensorFinished",
-        description=("Marker: sensor metadata/state reload has finished. Not yet live-captured."),
-        pattern=re.compile(r"^ReloadSensorFinished$"),
-        parse=_marker_parser("ReloadSensorFinished"),
-        example="ReloadSensorFinished",
-    ),
-    MessageDefinition(
-        name="SzenenReloadFinished",
-        description=("Marker: scene metadata/state reload has finished. Not yet live-captured."),
-        pattern=re.compile(r"^SzenenReloadFinished$"),
-        parse=_marker_parser("SzenenReloadFinished"),
-        example="SzenenReloadFinished",
-    ),
-    MessageDefinition(
-        name="GlobalAnbindungenBack",
-        description=(
-            "Configured integration/connection payload with opaque >-delimited fields. "
-            "Payload may contain private integration details — kept opaque. Not yet live-captured."
-        ),
-        pattern=re.compile(r"^GlobalAnbindungenBack(?:>|$)"),
-        parse=_named_fields_parser("GlobalAnbindungenBack", "GlobalAnbindungenBack"),
-        example="GlobalAnbindungenBack>1>name",
-    ),
-    MessageDefinition(
-        name="GlobalAnbindungenBackFinish",
-        description=("Marker: configured integration/connection list has finished loading. Not yet live-captured."),
-        pattern=re.compile(r"^GlobalAnbindungenBackFinish$"),
-        parse=_marker_parser("GlobalAnbindungenBackFinish"),
-        example="GlobalAnbindungenBackFinish",
-    ),
-    MessageDefinition(
-        name="GiveMeAPIFuerBack",
-        description=(
-            "API-detail payload for one configured integration. "
-            "Payload may contain private integration details — kept opaque. Not yet live-captured."
-        ),
-        pattern=re.compile(r"^GiveMeAPIFuerBack(?:>|$)"),
-        parse=_named_fields_parser("GiveMeAPIFuerBack", "GiveMeAPIFuerBack"),
-        example="GiveMeAPIFuerBack>1>value",
-    ),
-    MessageDefinition(
-        name="GiveMeAPIAnbindungsInfosBack",
-        description=(
-            "API binding-info payload for one Smart Place Manager integration. "
-            "Payload may contain private integration details — kept opaque. Not yet live-captured."
-        ),
-        pattern=re.compile(r"^GiveMeAPIAnbindungsInfosBack(?:>|$)"),
-        parse=_named_fields_parser(
-            "GiveMeAPIAnbindungsInfosBack",
-            "GiveMeAPIAnbindungsInfosBack",
-        ),
-        example="GiveMeAPIAnbindungsInfosBack>1>value",
-    ),
-    MessageDefinition(
-        name="MediacenterUpdateInfos",
-        description=(
-            "Media/multiroom playback or service-state update. Wire-frame "
-            "delimiter and per-field semantics unconfirmed — kept as raw text "
-            "in NamedValue.value. Not yet live-captured."
-        ),
-        pattern=re.compile(r"^MediacenterUpdateInfos"),
-        parse=_named_raw_parser("MediacenterUpdateInfos"),
-        example="MediacenterUpdateInfos>1>playing",
     ),
     MessageDefinition(
         name="Temperature",
@@ -618,8 +416,7 @@ class SessionPhase(Enum):
 
     The state machine is linear in the happy path:
     ``DISCOVERY_OPEN`` → ``ROUTED`` → ``APP_OPEN`` → ``BOOTSTRAPPED`` →
-    ``READY``. ``OFFLINE`` and ``LEGACY`` are terminal-for-this-attempt
-    branches that the connection loop handles separately.
+    ``READY``. ``CLOSED`` is the terminal phase set by :meth:`SessionState.close`.
     """
 
     DISCOVERY_OPEN = "discovery_open"
@@ -627,8 +424,6 @@ class SessionPhase(Enum):
     APP_OPEN = "app_open"
     BOOTSTRAPPED = "bootstrapped"
     READY = "ready"
-    OFFLINE = "offline"
-    LEGACY = "legacy"
     CLOSED = "closed"
 
 
@@ -656,17 +451,11 @@ class SessionState:
         """Apply a frame received on the discovery WS.
 
         Returns the new phase. Raises :class:`ProtocolError` if the frame
-        is not one of the expected discovery responses.
+        is not the expected routing response.
         """
         if isinstance(frame, GoToLinkSSL):
             self.route = frame
             self.phase = SessionPhase.ROUTED
-            return self.phase
-        if isinstance(frame, GoToLinkOldSystem):
-            self.phase = SessionPhase.LEGACY
-            return self.phase
-        if isinstance(frame, HostNotOnline):
-            self.phase = SessionPhase.OFFLINE
             return self.phase
         raise ProtocolError(
             f"Unexpected discovery frame: {type(frame).__name__}",

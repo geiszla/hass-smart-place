@@ -18,13 +18,9 @@ from smart_place_client.protocol import (
     DISCOVERY_WS_PATH,
     GLOBAL_CONFIG_REQUEST,
     KNOWN_MESSAGES,
-    LEGACY_HOST,
-    LEGACY_PORT,
     STATUS_LISTE_REQUEST,
     GlobalConfig,
-    GoToLinkOldSystem,
     GoToLinkSSL,
-    HostNotOnline,
     MessageDefinition,
     NamedFields,
     NamedValue,
@@ -42,10 +38,6 @@ from smart_place_client.protocol import (
 )
 
 # ---------------------------- parse_frame ----------------------------
-
-
-def test_parse_host_not_online() -> None:
-    assert parse_frame("HostNotOnline") == HostNotOnline()
 
 
 def test_parse_go_to_link_ssl_with_path() -> None:
@@ -74,16 +66,6 @@ def test_parse_go_to_link_ssl_bare_port() -> None:
 def test_parse_go_to_link_ssl_malformed_raises(bad: str) -> None:
     with pytest.raises(ProtocolError):
         parse_frame(bad)
-
-
-def test_parse_go_to_link_old_system() -> None:
-    frame = parse_frame("GoToLinkOLDSYSTEM:legacy-token-xyz")
-    assert frame == GoToLinkOldSystem(token2="legacy-token-xyz")
-
-
-def test_parse_go_to_link_old_system_empty_token() -> None:
-    with pytest.raises(ProtocolError):
-        parse_frame("GoToLinkOLDSYSTEM:")
 
 
 def test_parse_global_config() -> None:
@@ -205,18 +187,6 @@ def test_parse_infoboard_widgets_bare_prefix_has_no_fields() -> None:
     assert frame == NamedFields(name="InfoboardWidgets", fields=())
 
 
-def test_parse_infoboard_content_uses_helper() -> None:
-    """`StatusInhaltListe` (renamed to InfoboardContent) shares the same parsing."""
-    assert parse_frame("StatusInhaltListe>a>b") == NamedFields(
-        name="InfoboardContent",
-        fields=("a", "b"),
-    )
-    assert parse_frame("StatusInhaltListe") == NamedFields(
-        name="InfoboardContent",
-        fields=(),
-    )
-
-
 def test_parse_unknown_frame() -> None:
     """Unknown shapes don't crash — they propagate as UnknownFrame."""
     frame = parse_frame("leuchte12:75")
@@ -268,11 +238,6 @@ def test_go_to_link_ssl_app_ws_url_and_origin() -> None:
     assert frame.app_ws_origin == "https://example:8770"
 
 
-def test_legacy_url() -> None:
-    frame = GoToLinkOldSystem(token2="legacytok")
-    assert frame.legacy_url == f"https://{LEGACY_HOST}:{LEGACY_PORT}/Start2?legacytok"
-
-
 # ----------------------------- encoders ------------------------------
 
 
@@ -315,18 +280,6 @@ def test_session_state_routing_transitions_to_routed() -> None:
     assert state.route is not None
 
 
-def test_session_state_host_not_online_branch() -> None:
-    state = SessionState()
-    state.on_discovery_frame(HostNotOnline())
-    assert state.phase is SessionPhase.OFFLINE
-
-
-def test_session_state_legacy_branch() -> None:
-    state = SessionState()
-    state.on_discovery_frame(GoToLinkOldSystem(token2="x"))
-    assert state.phase is SessionPhase.LEGACY
-
-
 def test_session_state_unexpected_discovery_frame_raises() -> None:
     state = SessionState()
     with pytest.raises(ProtocolError):
@@ -364,27 +317,10 @@ def test_session_state_app_open_without_route_raises() -> None:
 def test_known_messages_registry_covers_all_known_dataclasses() -> None:
     """Every name in KNOWN_MESSAGES corresponds to a real frame dataclass."""
     expected = {
-        "AdminMainmenuFinished",
-        "CheckJalousienValuesFinished",
-        "CheckKlimasValuesFinished",
-        "CheckLautsprecherValuesFinished",
-        "CheckLeuchtenValuesFinished",
-        "GiveMeAPIAnbindungsInfosBack",
-        "GiveMeAPIFuerBack",
-        "GlobalAnbindungenBack",
-        "GlobalAnbindungenBackFinish",
         "GlobalConfig",
-        "GoToLinkOldSystem",
         "GoToLinkSSL",
-        "HostNotOnline",
-        "MediacenterUpdateInfos",
-        "InfoboardContent",
         "InfoboardWidgets",
         "OutdoorTemperature",
-        "ReloadSensorFinished",
-        "StatusInhaltFinishedListe",
-        "StatusLinkInhaltFinishedListe",
-        "SzenenReloadFinished",
         "Temperature",
         "WindSpeed",
     }
@@ -405,13 +341,14 @@ def test_known_messages_entries_have_descriptions_and_examples() -> None:
 def test_known_messages_examples_round_trip_through_parse_frame() -> None:
     """parse_frame(defn.example) yields the named shape declared by the entry.
 
-    Typed classes are identified by their dataclass name; NamedFields /
-    NamedValue entries are identified by the parsed frame's ``name``
-    attribute (the dataclass itself is shared across many registry rows).
+    Typed classes are identified by their dataclass name;
+    NamedValue / NamedFields entries are identified by the parsed
+    frame's ``name`` attribute (the dataclass itself is shared across
+    many registry rows).
     """
     for defn in KNOWN_MESSAGES:
         frame = parse_frame(defn.example)
-        if isinstance(frame, NamedFields | NamedValue):
+        if isinstance(frame, NamedValue | NamedFields):
             actual = frame.name
         else:
             actual = type(frame).__name__

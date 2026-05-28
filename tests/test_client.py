@@ -247,7 +247,7 @@ async def test_replay_skips_malformed_lines(tmp_path: Path) -> None:
         "\n".join(
             [
                 "not-json-at-all",
-                json.dumps({"direction": "server", "ts": 1.0, "text": "HostNotOnline"}),
+                json.dumps({"direction": "server", "ts": 1.0, "text": "EINSTELLUNGENGLOBAL>de>0>80>1>23:00>30"}),
                 "",
             ],
         )
@@ -263,7 +263,7 @@ async def test_replay_skips_malformed_lines(tmp_path: Path) -> None:
     async with client:
         await client.run()
 
-    assert [type(f).__name__ for f in seen] == ["HostNotOnline"]
+    assert [type(f).__name__ for f in seen] == ["GlobalConfig"]
 
 
 async def test_replay_realtime_paces_between_server_frames(tmp_path: Path) -> None:
