@@ -26,11 +26,14 @@ from smart_place_client.protocol import (
     GoToLinkSSL,
     HostNotOnline,
     MessageDefinition,
+    OutdoorTemperature,
     ProtocolError,
     SessionPhase,
     SessionState,
     StatusListe,
+    Temperature,
     UnknownFrame,
+    WindSpeed,
     discovery_ws_url,
     encode_frame,
     encode_global_config_request,
@@ -119,6 +122,50 @@ def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
     """Phase 3 capture confirmed routed port is dynamic, not always 8770."""
     frame = parse_frame("GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer")
     assert frame == GoToLinkSSL(host="spr1.smartplace.ch", port=38435, path="/Start1", token2="Leer")
+
+
+@pytest.mark.parametrize(
+    ("text", "sensor", "value"),
+    [
+        ("TEMPIST1:26.6", 1, "26.6"),
+        ("TEMPIST3:27.2", 3, "27.2"),
+        ("TEMPIST6:25.8", 6, "25.8"),
+        ("TEMPIST12:21.0", 12, "21.0"),
+    ],
+)
+def test_parse_temperature_generalises_across_sensors(text: str, sensor: int, value: str) -> None:
+    """One Temperature entry handles TEMPIST<N> for any N (live captures 2026-05-28)."""
+    frame = parse_frame(text)
+    assert frame == Temperature(sensor=sensor, value=value)
+
+
+def test_parse_temperature_missing_value_raises() -> None:
+    # Matches the registry prefix (TEMPIST3:) so it's routed to the parser,
+    # but the parser's stricter regex requires at least one character after `:`.
+    with pytest.raises(ProtocolError):
+        parse_frame("TEMPIST3:")
+
+
+def test_parse_outdoor_temperature() -> None:
+    """TEMPOUT:<value> (live capture 2026-05-28)."""
+    frame = parse_frame("TEMPOUT:26.6")
+    assert frame == OutdoorTemperature(value="26.6")
+
+
+def test_parse_outdoor_temperature_missing_value_raises() -> None:
+    with pytest.raises(ProtocolError):
+        parse_frame("TEMPOUT:")
+
+
+def test_parse_wind_speed() -> None:
+    """WINDGESCHWINDIGKEIT:<value> (live capture 2026-05-28)."""
+    frame = parse_frame("WINDGESCHWINDIGKEIT:7.9")
+    assert frame == WindSpeed(value="7.9")
+
+
+def test_parse_wind_speed_missing_value_raises() -> None:
+    with pytest.raises(ProtocolError):
+        parse_frame("WINDGESCHWINDIGKEIT:")
 
 
 @pytest.mark.parametrize(
@@ -260,28 +307,34 @@ def test_session_state_app_open_without_route_raises() -> None:
 
 def test_known_messages_registry_covers_all_known_dataclasses() -> None:
     """Every name in KNOWN_MESSAGES corresponds to a real frame dataclass."""
-    expected = {"HostNotOnline", "GoToLinkSSL", "GoToLinkOldSystem", "GlobalConfig", "StatusListe"}
+    expected = {
+        "HostNotOnline",
+        "GoToLinkSSL",
+        "GoToLinkOldSystem",
+        "GlobalConfig",
+        "StatusListe",
+        "Temperature",
+        "OutdoorTemperature",
+        "WindSpeed",
+    }
     assert {defn.name for defn in KNOWN_MESSAGES} == expected
 
 
-def test_known_messages_entries_have_descriptions_and_parsers() -> None:
+def test_known_messages_entries_have_descriptions_and_examples() -> None:
     for defn in KNOWN_MESSAGES:
         assert isinstance(defn, MessageDefinition)
         assert defn.name
         assert defn.description, f"{defn.name} missing description"
-        assert defn.prefix, f"{defn.name} missing prefix"
+        assert defn.pattern, f"{defn.name} missing pattern"
+        assert defn.example, f"{defn.name} missing example"
         assert callable(defn.parse), f"{defn.name} parse not callable"
+        assert defn.pattern.match(defn.example), f"{defn.name} example {defn.example!r} does not match its own pattern"
 
 
-def test_known_messages_drive_parse_frame() -> None:
-    """parse_frame returns the dataclass declared by the matching entry."""
+def test_known_messages_examples_round_trip_through_parse_frame() -> None:
+    """parse_frame(defn.example) returns the dataclass declared by the entry."""
     for defn in KNOWN_MESSAGES:
-        sample = defn.prefix if defn.exact else defn.prefix + "0"
-        try:
-            frame = parse_frame(sample)
-        except ProtocolError:
-            # Synthetic samples can be malformed for some shapes; the
-            # important thing is parse_frame routed through the registry
-            # (an UnknownFrame here would mean the registry is bypassed).
-            continue
-        assert type(frame).__name__ == defn.name
+        frame = parse_frame(defn.example)
+        assert type(frame).__name__ == defn.name, (
+            f"{defn.name} example {defn.example!r} parsed as {type(frame).__name__}"
+        )

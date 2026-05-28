@@ -567,6 +567,28 @@ appears in any frame, and the port / config values / German labels are
 not privacy-sensitive. Future captures should be reviewed similarly
 before commit.
 
+### 2026-05-28 (Phase 3 second capture — push frames)
+
+A longer capture surfaced three new server-push shapes — all simple
+``KEY:<numeric-value>``. They were unknown until promoted to the
+``KNOWN_MESSAGES`` registry in ``protocol.py``:
+
+| Wire shape | Parsed as | Meaning (inferred) |
+| ---------- | --------- | ------------------ |
+| ``TEMPIST<N>:<value>`` | ``Temperature(sensor=N, value=...)`` | "TEMPeratur IST" — current temperature reading from indoor sensor N. One registry entry generalises across sensors (regex ``^TEMPIST\d+:``). Observed sensors so far: 1, 3, 6. |
+| ``TEMPOUT:<value>`` | ``OutdoorTemperature(value=...)`` | Current outdoor temperature. |
+| ``WINDGESCHWINDIGKEIT:<value>`` | ``WindSpeed(value=...)`` | "Windgeschwindigkeit" — wind speed (unit presumed m/s; not confirmed). |
+
+These are push frames — the server emits them when the value changes,
+rather than in response to a read. Same WS, same connection, no extra
+request needed. ``cloud_push`` in ``manifest.json`` is justified for
+weather entities at minimum.
+
+The generalisation pattern (one registry entry covering all
+``TEMPIST<N>`` sensors) is the convention going forward: any indexed
+family (``leuchte<id>``, ``blind<id>``, etc.) should be one entry with
+a digit-capturing regex.
+
 ### Pending captures (post-v1)
 
 - A session that includes a state-change push (e.g. someone toggles a

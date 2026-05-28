@@ -151,9 +151,9 @@ async def test_live_logs_unknown_frame_to_file(
             _iter(
                 [
                     "GoToLinkSSL:h:8770/Start1:Leer",
-                    "WINDGESCHWINDIGKEIT:2.9",
-                    "TEMPIST2:26.3",
-                    "WINDGESCHWINDIGKEIT:3.1",
+                    "ZZZ_UNKNOWN_PUSH:hello",
+                    "MOLNICA:1.7",
+                    "ZZZ_UNKNOWN_PUSH:world",
                 ],
             ),
         )
@@ -168,9 +168,9 @@ async def test_live_logs_unknown_frame_to_file(
 
     lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line]
     assert [entry["raw"] for entry in lines] == [
-        "WINDGESCHWINDIGKEIT:2.9",
-        "TEMPIST2:26.3",
-        "WINDGESCHWINDIGKEIT:3.1",
+        "ZZZ_UNKNOWN_PUSH:hello",
+        "MOLNICA:1.7",
+        "ZZZ_UNKNOWN_PUSH:world",
     ]
     # Every entry has both a numeric and an ISO timestamp.
     for entry in lines:
@@ -192,7 +192,7 @@ async def test_live_unknown_log_disabled_by_none(
     client = SmartPlaceClient.live(token="dummy", unknown_log=None)
 
     async def fake_once(self_: SmartPlaceClient) -> None:
-        await self_._dispatch_loop(_iter(["WINDGESCHWINDIGKEIT:2.9"]))
+        await self_._dispatch_loop(_iter(["ZZZ_UNKNOWN_PUSH:hello"]))
         self_._closing = True
 
     async def fake_sleep(_: float) -> None:

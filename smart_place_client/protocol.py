@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Final
 
 DISCOVERY_HOST: Final = "spr1.smartplace.ch"
@@ -145,6 +146,43 @@ class StatusListe:
 
 
 @dataclass(frozen=True, slots=True)
+class Temperature:
+    """Current temperature reading from an indoor sensor.
+
+    Source: live capture 2026-05-28, ``TEMPIST<sensor>:<degrees-celsius>``.
+    Names map: ``TEMPIST`` = "TEMPeratur IST" (current/actual temperature
+    in German). ``sensor`` is the trailing integer (1-indexed); ``value``
+    is the wire string (typically a float like ``26.3``) kept untyped per
+    our existing GlobalConfig/StatusListe convention.
+    """
+
+    sensor: int
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class OutdoorTemperature:
+    """Current outdoor temperature reading.
+
+    Source: live capture 2026-05-28, ``TEMPOUT:<degrees-celsius>``.
+    """
+
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class WindSpeed:
+    """Current wind-speed reading.
+
+    Source: live capture 2026-05-28, ``WINDGESCHWINDIGKEIT:<value>``
+    ("Windgeschwindigkeit" = wind speed in German). Unit is presumed
+    m/s (typical for European weather stations) but not confirmed.
+    """
+
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class UnknownFrame:
     """Catch-all for text frames whose shape we don't yet recognise.
 
@@ -156,7 +194,17 @@ class UnknownFrame:
     raw: str
 
 
-ServerFrame = GoToLinkSSL | GoToLinkOldSystem | HostNotOnline | GlobalConfig | StatusListe | UnknownFrame
+ServerFrame = (
+    GoToLinkSSL
+    | GoToLinkOldSystem
+    | HostNotOnline
+    | GlobalConfig
+    | StatusListe
+    | Temperature
+    | OutdoorTemperature
+    | WindSpeed
+    | UnknownFrame
+)
 """Any frame the server may emit, post-parsing."""
 
 
@@ -234,33 +282,70 @@ def _parse_status_liste(text: str) -> StatusListe:
     return StatusListe(fields=tuple(payload.split(">")))
 
 
+_TEMPIST_RE = re.compile(r"^TEMPIST(\d+):(.+)$")
+
+
+def _parse_temperature(text: str) -> Temperature:
+    """Parse ``TEMPIST<sensor>:<value>``.
+
+    Generalises across all sensor indices (TEMPIST1, TEMPIST2, ... seen
+    in live captures 2026-05-28) so adding a new sensor doesn't require
+    a new registry entry.
+    """
+    m = _TEMPIST_RE.match(text)
+    if m is None:
+        raise ProtocolError(f"TEMPIST frame malformed: {text!r}")
+    return Temperature(sensor=int(m.group(1)), value=m.group(2))
+
+
+def _parse_outdoor_temperature(text: str) -> OutdoorTemperature:
+    """Parse ``TEMPOUT:<value>``."""
+    _, _, value = text.partition(":")
+    if not value:
+        raise ProtocolError(f"TEMPOUT frame missing value: {text!r}")
+    return OutdoorTemperature(value=value)
+
+
+def _parse_wind_speed(text: str) -> WindSpeed:
+    """Parse ``WINDGESCHWINDIGKEIT:<value>``."""
+    _, _, value = text.partition(":")
+    if not value:
+        raise ProtocolError(f"WINDGESCHWINDIGKEIT frame missing value: {text!r}")
+    return WindSpeed(value=value)
+
+
 @dataclass(frozen=True, slots=True)
 class MessageDefinition:
-    """Declarative entry in :data:`KNOWN_MESSAGES`.
+    r"""Declarative entry in :data:`KNOWN_MESSAGES`.
 
     One per known wire-frame shape. ``parse_frame()`` walks
-    :data:`KNOWN_MESSAGES` in order; the first definition whose prefix
-    matches takes the frame. Adding a new known frame: write a parser,
-    append a ``MessageDefinition`` here, add a unit test.
+    :data:`KNOWN_MESSAGES` in order; the first definition whose
+    ``pattern`` matches takes the frame. Adding a new known frame:
+    write a parser, append a ``MessageDefinition`` (with a wire
+    ``example``), add a unit test.
 
     Attributes:
         name: CamelCase identifier; matches the dataclass name returned
             by :attr:`parse`.
         description: Plain-English meaning + when the frame appears.
             Read by future-us when debugging.
-        prefix: Wire prefix used for identification.
-        exact: If ``True``, ``prefix`` must equal the full frame text
-            (no payload); otherwise ``text.startswith(prefix)`` matches.
+        pattern: Compiled regex used for identification. Use ``^...$``
+            for exact matches; use ``\d+`` etc. to generalise across
+            indexed variants like ``TEMPIST<N>`` so we don't need one
+            entry per sensor.
         parse: Callable that takes the full frame text and returns the
             parsed dataclass. Must raise :class:`ProtocolError` on
             malformed frames.
+        example: Concrete wire string used by the smoke test in
+            :func:`test_known_messages_drive_parse_frame` and as
+            documentation of the shape.
     """
 
     name: str
     description: str
-    prefix: str
-    exact: bool
+    pattern: re.Pattern[str]
     parse: Callable[[str], ServerFrame]
+    example: str
 
 
 KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
@@ -271,9 +356,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "home server is unreachable from spr1. Surfaces as a typed error so the "
             "integration can mark entities unavailable."
         ),
-        prefix="HostNotOnline",
-        exact=True,
+        pattern=re.compile(r"^HostNotOnline$"),
         parse=_parse_host_not_online,
+        example="HostNotOnline",
     ),
     MessageDefinition(
         name="GoToLinkSSL",
@@ -282,9 +367,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "The middle field is a bare port or port-with-path; the routed port is dynamic "
             "per session (DESIGN §10)."
         ),
-        prefix="GoToLinkSSL:",
-        exact=False,
+        pattern=re.compile(r"^GoToLinkSSL:"),
         parse=_parse_go_to_link_ssl,
+        example="GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer",
     ),
     MessageDefinition(
         name="GoToLinkOldSystem",
@@ -293,9 +378,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "to spr0.smartplace.ch:8770/Start2?<token2>. Seen only in javallg.js, "
             "not yet as a live frame."
         ),
-        prefix="GoToLinkOLDSYSTEM:",
-        exact=False,
+        pattern=re.compile(r"^GoToLinkOLDSYSTEM:"),
         parse=_parse_go_to_link_old_system,
+        example="GoToLinkOLDSYSTEM:legacy-token-xyz",
     ),
     MessageDefinition(
         name="GlobalConfig",
@@ -304,9 +389,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "standby>brightness>screensaver_mode>screensaver_start>screensaver_duration. "
             "Values are wire-typed strings (brightness is 0..1 float-as-string)."
         ),
-        prefix="EINSTELLUNGENGLOBAL>",
-        exact=False,
+        pattern=re.compile(r"^EINSTELLUNGENGLOBAL>"),
         parse=_parse_global_config,
+        example="EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined",
     ),
     MessageDefinition(
         name="StatusListe",
@@ -315,24 +400,45 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "fields look like info-board tab labels (Wetter, Tagesverbrauch), NOT "
             "per-device state (DESIGN §9 Q2)."
         ),
-        prefix="StatusListe>",
-        exact=False,
+        pattern=re.compile(r"^StatusListe>"),
         parse=_parse_status_liste,
+        example="StatusListe>Wetter>Tagesverbrauch>",
+    ),
+    MessageDefinition(
+        name="Temperature",
+        description=(
+            "Push: current temperature reading from indoor sensor N. "
+            "Format: TEMPIST<sensor>:<degrees-celsius>. The regex generalises "
+            "across all sensors observed (TEMPIST1, TEMPIST2, TEMPIST3, TEMPIST6, ...) "
+            "without a per-sensor registry entry."
+        ),
+        pattern=re.compile(r"^TEMPIST\d+:"),
+        parse=_parse_temperature,
+        example="TEMPIST3:27.2",
+    ),
+    MessageDefinition(
+        name="OutdoorTemperature",
+        description=("Push: current outdoor temperature reading. Format: TEMPOUT:<degrees-celsius>."),
+        pattern=re.compile(r"^TEMPOUT:"),
+        parse=_parse_outdoor_temperature,
+        example="TEMPOUT:26.6",
+    ),
+    MessageDefinition(
+        name="WindSpeed",
+        description=("Push: current wind-speed reading (likely m/s). Format: WINDGESCHWINDIGKEIT:<value>."),
+        pattern=re.compile(r"^WINDGESCHWINDIGKEIT:"),
+        parse=_parse_wind_speed,
+        example="WINDGESCHWINDIGKEIT:7.9",
     ),
 ]
 """All known server frame shapes, in identification order.
 
-Two reasons for keeping this declarative rather than a chain of
-``startswith`` checks:
-
-- Single source of truth for the protocol surface. ``len(KNOWN_MESSAGES)``
-  is how many shapes we know. Future maintainers can add a frame in one
-  place without grepping for an ``if text.startswith(...)`` chain.
-- Tooling can introspect it — e.g. a CLI ``--list-known`` flag (not
-  built yet) could dump the table for documentation.
-
-Per the ``smart-place-prior-art`` memory: every ``MessageDefinition``
-should cite its source in the surrounding parser's docstring.
+Each entry uses a regex pattern, which lets one entry cover all
+trailing-index variants of an otherwise-uniform shape (e.g. one
+``Temperature`` entry handles every ``TEMPIST<N>`` sensor without a
+per-sensor row). Per the ``smart-place-prior-art`` memory: every
+``MessageDefinition`` should cite its source in the surrounding
+parser's docstring.
 """
 
 
@@ -345,10 +451,7 @@ def parse_frame(text: str) -> ServerFrame:
     rather than crashing.
     """
     for defn in KNOWN_MESSAGES:
-        if defn.exact:
-            if text == defn.prefix:
-                return defn.parse(text)
-        elif text.startswith(defn.prefix):
+        if defn.pattern.match(text):
             return defn.parse(text)
     return UnknownFrame(raw=text)
 
