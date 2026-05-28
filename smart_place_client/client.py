@@ -684,10 +684,21 @@ async def _run_cli(
         sys.stdout.write(f"<- {frame!r}\n")
         sys.stdout.flush()
 
+    # Auto-load .env so users don't have to export SMART_PLACE_TOKEN in
+    # every terminal. python-dotenv walks up from cwd; existing env vars
+    # win. Lazy import keeps it out of HA's import graph (HA never enters
+    # the CLI).
+    from dotenv import load_dotenv  # noqa: PLC0415
+
+    load_dotenv()
+
     if live_mode:
         token = os.environ.get("SMART_PLACE_TOKEN")
         if not token:
-            raise SystemExit("SMART_PLACE_TOKEN env var is required for --live")
+            raise SystemExit(
+                "SMART_PLACE_TOKEN is required for --live. Put it in .env "
+                "(SMART_PLACE_TOKEN=...) or export it in your shell."
+            )
         client = SmartPlaceClient.live(token=token, capture=capture_path, handlers=[printer])
     else:
         assert replay_path is not None

@@ -432,3 +432,24 @@ Every numbered requirement in DESIGN.md is satisfied:
 - Localisation beyond English.
 - HA-level integration tests (`pytest-homeassistant-custom-component`).
 - Scripted devcontainer harness.
+
+## Post-implementation: `.env` auto-load in the CLI
+
+After the final verification, added `python-dotenv` (lazy-imported inside
+the CLI entry path so it stays out of the HA import graph) so a user
+with `SMART_PLACE_TOKEN=…` in the project root's `.env` can run
+`uv run sp-cli --live` from any new terminal without an explicit
+`export`. Exported env vars still win (so
+`SMART_PLACE_TOKEN=… uv run sp-cli --live` overrides the file).
+
+First attempt was a 30-line hand-rolled parser, replaced with
+`python-dotenv` after review feedback. The library is the de-facto
+standard, well-tested, and handles edge cases (quoting, escapes,
+variable expansion) that the hand-rolled version skipped. `uv run`
+also has a built-in `--env-file` flag and `UV_ENV_FILE` env var for
+the zero-deps path — documented in DESIGN.md / README as the
+alternative.
+
+Verified end-to-end: `unset SMART_PLACE_TOKEN; uv run sp-cli --live`
+opens discovery WS, routes, opens app WS, and parses both bootstrap
+responses (token never appears in logs).

@@ -33,11 +33,16 @@ Install dependencies (uv-based):
 Run the standalone CLI against the live Smart Place server:
 
 ```bash
-export SMART_PLACE_TOKEN=...    # See DESIGN.md §4 for token storage
-sp-cli --live                   # observe stdout, type to stdin to send (use with care)
-sp-cli --live --capture tests/fixtures/session.ndjson  # tee a fixture
-sp-cli --replay tests/fixtures/session.ndjson          # offline replay, no network
+# Put SMART_PLACE_TOKEN=<token> into .env (gitignored) once.
+# The CLI auto-loads .env on start, so no per-terminal export is needed.
+uv run sp-cli --live                                       # observe stdout, type to stdin to send (use with care)
+uv run sp-cli --live --capture tests/fixtures/session.ndjson  # tee a fixture
+uv run sp-cli --replay tests/fixtures/session.ndjson       # offline replay, no network
 ```
+
+You can still override the token per-invocation: `SMART_PLACE_TOKEN=... uv run sp-cli --live`.
+An exported / explicit env var always wins over `.env`. See DESIGN.md §4
+for the full secret-storage rationale.
 
 Run lint and tests:
 
