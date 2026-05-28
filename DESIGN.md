@@ -640,3 +640,66 @@ Write-looking commands include `leuchte<ID>`, `DIMleuchte<ID>:<value>`,
 `SETTINGS...SLIDER`, `SZENE<ID>`, `OEFFNER<ID>`, media play/select commands,
 Smart Garden runtime/threshold setters, and sauna temperature/humidity
 setpoints. Do not send these during discovery/state-capture work.
+
+### 2026-05-28 (HAR-derived registry expansion)
+
+A pair of HAR captures from the SPA in a normal browser session
+(`spr1.smartplace.ch{,2}.har`, since deleted) surfaced ~58 distinct
+server-message stems. They were folded into `KNOWN_MESSAGES` as one
+entry per stem; per-id pushes share a single entry via a `\d+` regex
+(e.g. one `LightState` entry handles every `leuchte<id>`).
+
+**Parallel app WebSockets.** The browser holds two simultaneous
+`wss://<host>:<port>/UpdatenLS` connections during a normal session,
+both opened by the SPA's `spsocket2` variable (one per page context):
+
+| Connection | Sends | Role |
+| ---------- | ----- | ---- |
+| Main (`/Start1`) | `GiveMeGlobalConfig`, `GiveMeBasicInfos`, `GiveStatusListe`, `StatusInhaltListe`, `GiveMeMainmenu`, `GiveMeChartStandsManuell<id>`, `GiveMeGlobalGsa`, `Ping` (heartbeat) | Bootstrap + control plane — receives the full topology (`INHALT*`, `UnterMenu*`, `AllItems*`, chart definitions) plus the broadcast sensor stream. |
+| Mediacenter iframe (`/Mediacenter?99`) | `SocketConnected:1`, `GiveMeGlobalConfig`, `GiveMeSPMediacenter`, `GiveMeSpotifyToken>99` | Media subsystem — receives only its bootstrap (`SPOTIFYTOKEN`) plus the shared sensor broadcast. |
+
+Per-device pushes (TEMPIST, leuchte, SZENEN, ...) fan out to **both**
+sockets; bootstrap responses go only to the requester. The HA
+integration only needs the Main connection — there is no reason to
+mimic the media iframe. The two HARs are otherwise structurally
+identical (different page-open snapshots of the same session shape).
+
+**New shape families recognised** (one registry entry each unless
+noted; per-id families collapse with a `\d+` regex):
+
+- *Singletons*: `BasicInfos` (installation/PII info), `LanguageOptions`
+  (wire `GlobalConfig` — name conflict with our existing
+  `EINSTELLUNGENGLOBAL` dataclass, so registry name differs from wire),
+  `GsaConfig` (LAN/SIP gateway info), `AllItems` (bootstrap device
+  dump), `Rain`, `Hail`, `BlindsMaintenance`, `PersonInfo`,
+  `ApiToken`, `SpotifyToken`, `MediacenterUpdate`,
+  `InvoicesPendingCount`, `OffersCount`, `InvoicesCount`,
+  `InfoboardEntry` (`StatusInhaltListe_<lvl>_<row>_SPtext<id>>...`).
+- *Markers* (no payload): `PongOK`, `SocketConnectedFinished`,
+  `MainMenuFinished`, `InfoboardContentFinished`. Stored as
+  `NamedFields(name=..., fields=())`.
+- *Per-id values* (`prefix<N>:value`): `TemperatureSetpoint`,
+  `Humidity`, `ClimateInfo`, `SceneState`, `LightState`, `BlindState`,
+  `Volume`, `InfoboardSlot`, `PackageBox`, `ChartTarget`, `WindAlarm`,
+  `LightsCentral`, `BlindsCentral`, `SpeakersCentral`, `Mute`,
+  `DoorIntercom`, `CallInfo`.
+- *Per-id comma configs* (`prefix<N>:f1,f2,...`): `LightConfig`,
+  `BlindConfig`, `ClimateConfig`, `SceneConfig`, `MediacenterConfig`,
+  `MediaPanelConfig`, `VolumeConfig`, `LightSubMenu`, `BlindSubMenu`,
+  `SpeakerSubMenu`, `QuickStartTile`, `Floorplan`.
+- *Charts*: `ChartPointUpdate`, `ChartDefinition`, `ChartStand`,
+  `ChartSumResponse`.
+- *Other*: `PlaySlot` (`PLAYSLOT-<n><...<...` — `<` delimiter).
+
+`NamedValue` and `NamedFields` gained an optional `index: int | None`
+field rather than introducing dedicated indexed dataclasses — keeps
+the type union short while letting per-id consumers read
+`frame.index` instead of re-parsing.
+
+**Sensitive content surfaced by this expansion:** `BasicInfos`
+contains the customer's SPID, creator email, installation tag, and
+creation date. `GsaConfig` contains LAN IP and SIP gateway info.
+`ApiToken` and `SpotifyToken` carry third-party tokens. None of these
+are committed to fixtures; the registry parses them so the dispatch
+layer recognises them, but their `value` payloads should not be
+logged or persisted without redaction.

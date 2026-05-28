@@ -189,8 +189,45 @@ def test_parse_infoboard_widgets_bare_prefix_has_no_fields() -> None:
 
 def test_parse_unknown_frame() -> None:
     """Unknown shapes don't crash — they propagate as UnknownFrame."""
-    frame = parse_frame("leuchte12:75")
-    assert frame == UnknownFrame(raw="leuchte12:75")
+    frame = parse_frame("UnregisteredPrefix:opaque")
+    assert frame == UnknownFrame(raw="UnregisteredPrefix:opaque")
+
+
+# ------------------ per-id pushes (indexed parsers) -------------------
+
+
+def test_parse_indexed_value_extracts_index_and_value() -> None:
+    """`prefix<N>:<value>` lands as NamedValue with `index` populated."""
+    frame = parse_frame("leuchte13:255")
+    assert frame == NamedValue(name="LightState", value="255", index=13)
+
+
+def test_parse_indexed_value_allows_empty_value() -> None:
+    """`prefix<N>:` with no payload still parses (e.g. JALZENTRAL1:)."""
+    frame = parse_frame("JALZENTRAL1:")
+    assert frame == NamedValue(name="BlindsCentral", value="", index=1)
+
+
+def test_parse_indexed_fields_splits_on_comma() -> None:
+    """Comma-delimited per-id configs land as NamedFields with index + fields."""
+    frame = parse_frame("UnterMenuLeuchten1:All,70px,10px,Leuchten,OnOn,LEUCHTENZENTRAL1,Uebersicht1")
+    assert frame == NamedFields(
+        name="LightSubMenu",
+        fields=("All", "70px", "10px", "Leuchten", "OnOn", "LEUCHTENZENTRAL1", "Uebersicht1"),
+        index=1,
+    )
+
+
+def test_parse_marker_frame_has_empty_fields() -> None:
+    """Marker frames (PongOK, GiveMeMainMenuFinished) decode as NamedFields with fields=()."""
+    frame = parse_frame("PongOK")
+    assert frame == NamedFields(name="PongOK", fields=())
+
+
+def test_named_value_singleton_has_no_index() -> None:
+    """Singleton NamedValue frames leave `index` as None."""
+    frame = parse_frame("TEMPOUT:24.5")
+    assert frame == NamedValue(name="OutdoorTemperature", value="24.5", index=None)
 
 
 # ----------------- _parse_fields_after_prefix helper -----------------
@@ -314,17 +351,10 @@ def test_session_state_app_open_without_route_raises() -> None:
 # --------------------------- KNOWN_MESSAGES --------------------------
 
 
-def test_known_messages_registry_covers_all_known_dataclasses() -> None:
-    """Every name in KNOWN_MESSAGES corresponds to a real frame dataclass."""
-    expected = {
-        "GlobalConfig",
-        "GoToLinkSSL",
-        "InfoboardWidgets",
-        "OutdoorTemperature",
-        "Temperature",
-        "WindSpeed",
-    }
-    assert {defn.name for defn in KNOWN_MESSAGES} == expected
+def test_known_messages_registry_names_are_unique() -> None:
+    """Each registry entry has a unique CamelCase name (the dispatch key)."""
+    names = [defn.name for defn in KNOWN_MESSAGES]
+    assert len(names) == len(set(names)), f"duplicate names: {names}"
 
 
 def test_known_messages_entries_have_descriptions_and_examples() -> None:

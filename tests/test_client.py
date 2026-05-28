@@ -19,6 +19,7 @@ from smart_place_client import (
     GlobalConfig,
     GoToLinkSSL,
     NamedFields,
+    NamedValue,
     ServerFrame,
     SessionPhase,
     SmartPlaceAuthError,
@@ -48,11 +49,17 @@ async def test_replay_walks_dispatch_to_ready_state() -> None:
     async with client:
         await client.run()
 
-    # Server-direction frames only — client direction lines are skipped
+    # Server-direction frames only — client-direction lines are skipped
     # so commands are never re-issued during replay. Typed classes use
     # their dataclass name; NamedFields/NamedValue use the registry .name.
-    seen_labels = [f.name if isinstance(f, NamedFields) else type(f).__name__ for f in collected]
-    assert seen_labels == ["GoToLinkSSL", "GlobalConfig", "InfoboardWidgets", "UnknownFrame"]
+    seen_labels = [f.name if isinstance(f, NamedFields | NamedValue) else type(f).__name__ for f in collected]
+    assert seen_labels == [
+        "GoToLinkSSL",
+        "GlobalConfig",
+        "InfoboardWidgets",
+        "LightState",
+        "UnknownFrame",
+    ]
 
     # State machine walked through the happy path.
     assert isinstance(collected[0], GoToLinkSSL)
@@ -129,7 +136,7 @@ async def test_handler_exception_does_not_crash_dispatch(caplog: pytest.LogCaptu
         async with client:
             await client.run()
 
-    assert len(seen) == 4
+    assert len(seen) == 5
     assert any("frame handler raised" in rec.message for rec in caplog.records)
 
 
@@ -210,7 +217,7 @@ async def test_replay_mode_does_not_write_unknown_log(tmp_path: Path) -> None:
     """Replay-mode unknowns are not logged — they're already in the fixture."""
     out = tmp_path / "unknown.ndjson"
     client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
-    # bootstrap.ndjson contains a `leuchte12:75` UnknownFrame; replay
+    # bootstrap.ndjson contains a `MysteryFrameXYZ:` UnknownFrame; replay
     # mode should still skip writing the unknown log because the user
     # already had this frame in the fixture and re-logging would just
     # duplicate work.
@@ -505,4 +512,4 @@ def test_unknown_frame_dispatched_without_state_advance() -> None:
 
     seen = asyncio.run(main())
     unknown = [f for f in seen if isinstance(f, UnknownFrame)]
-    assert unknown == [UnknownFrame(raw="leuchte12:75")]
+    assert unknown == [UnknownFrame(raw="MysteryFrameXYZ:opaque")]
