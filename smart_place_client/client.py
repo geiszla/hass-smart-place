@@ -35,12 +35,11 @@ from typing import Any, Literal, Self
 
 import aiohttp
 
+from smart_place_client.commands import Commands
 from smart_place_client.messages import parse_frame
 from smart_place_client.protocol import (
     APP_WS_PATH,
     DISCOVERY_ORIGIN,
-    STATUS_INHALT_LISTE_REQUEST,
-    STATUS_LISTE_REQUEST,
     GoToLinkSSL,
     NamedFields,
     NamedValue,
@@ -51,11 +50,9 @@ from smart_place_client.protocol import (
     SmartPlaceAuthError,
     UnknownFrame,
     discovery_ws_url,
-    encode_chart_stands_request,
     encode_frame,
+    parse_chart_references,
 )
-
-_CHART_REF_RE = re.compile(r"CHART(\d+)STAND")
 
 _LOGGER = logging.getLogger("smart_place_client")
 
@@ -198,6 +195,7 @@ class _LiveSources:
     session: aiohttp.ClientSession | None
     own_session: bool
     heartbeat: float
+    chart_poll_interval: float
 
 
 @dataclass(slots=True)
@@ -235,7 +233,7 @@ class SmartPlaceClient:
     _replay: _ReplaySources | None = None
     _closing: bool = False
     _bootstrap_done: asyncio.Event = field(default_factory=asyncio.Event)
-    _pending_chart_ids: set[int] = field(default_factory=set)
+    _chart_poll_task: asyncio.Task[None] | None = None
 
     # ------------------------- constructors -------------------------
 
@@ -248,6 +246,7 @@ class SmartPlaceClient:
         capture: Path | str | None = None,
         unknown_log: Path | str | None = None,
         heartbeat: float = 30.0,
+        chart_poll_interval: float = 60.0,
         handlers: list[FrameHandler] | None = None,
         on_reauth: ReauthCallback | None = None,
         backoff: ExponentialBackoff | None = None,
@@ -265,6 +264,10 @@ class SmartPlaceClient:
                 (not deduped) so we can compare instances of the same
                 shape later. Tokens redacted defensively.
             heartbeat: aiohttp WS ping interval, in seconds.
+            chart_poll_interval: how often (seconds) to refresh
+                consumption charts via ``GiveMeChartStandsManuell<id>``.
+                Chart values don't push; this loop keeps them current.
+                Set <=0 to disable polling.
             handlers: optional initial frame handlers.
             on_reauth: coroutine invoked once if the token is rejected;
                 HA wires this to its reauth flow. After it returns,
@@ -278,6 +281,7 @@ class SmartPlaceClient:
             session=session,
             own_session=session is None,
             heartbeat=heartbeat,
+            chart_poll_interval=chart_poll_interval,
         )
         return cls(
             state=SessionState(),
@@ -493,24 +497,53 @@ class SmartPlaceClient:
             self.state.on_app_open()
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
 
-            # Bootstrap reads (DESIGN §10 — minimum sequence to surface
-            # the four "main stats" — indoor temperature, consumption,
-            # info-board entries, and package-box state):
-            #   1. GiveStatusListe   -> StatusListe (info-board columns).
-            #   2. StatusInhaltListe -> InfoboardEntry rows + chart-id
-            #      hints, terminated by InfoboardContentFinished. The
-            #      chart-chase below then issues
-            #      GiveMeChartStandsManuell<id> per chart id referenced
-            #      in the rows.
-            # Indoor temperature (TEMPIST<N>) and package-box (PACKETBOX
-            # <N>) arrive as broadcast pushes without any command.
-            # The SPA also sends GiveMeGlobalConfig first, but the
+            # Bootstrap reads (DESIGN §10):
+            #   1. Commands.InfoboardWidgets -> InfoboardWidgets reply
+            #      (info-board column labels).
+            #   2. Commands.InfoboardContent -> InfoboardEntry rows +
+            #      chart-id hints, terminated by
+            #      InfoboardContentFinished. The chart-chase below
+            #      then issues Commands.ChartStands(<id>) per chart
+            #      id referenced in the rows.
+            #   3. Commands.Mainmenu -> Big config + state dump:
+            #      ChartDefinition (chart labels/categories/units),
+            #      ClimateConfig (room names — used to label TEMPIST
+            #      sensors), LightConfig/BlindConfig/etc., plus the
+            #      initial state snapshot (ChartStand STAND1 readings,
+            #      group switch states, volumes, scenes). Terminated
+            #      by MainMenuFinished.
+            #   4. Commands.SocketConnected -> Tells the server we're
+            #      ready for the broadcast stream. Server then pushes
+            #      the full state snapshot: PACKETBOX<N>, REGEN, HAGEL,
+            #      TEMPOUT, WINDGESCHWINDIGKEIT, WINDALARM<N>,
+            #      JALWARTUNG, LEUCHTENZENTRAL<N>, INFOBOARD<N> /
+            #      INFOBOARD<N>INHALT, Vol<N>, PERSINFO, MUTE,
+            #      KLIMASINFO<N>, SPRECHEN/CALLINFO, SceneState etc.
+            #      Without this command the server stays quiet on
+            #      those broadcast frames (verified 2026-05-29 via
+            #      HAR audit + live probe).
+            # TEMPIST<N> (indoor temps) does push spontaneously
+            # independent of SocketConnected.
+            # GiveMeGlobalConfig is sent first by the SPA but the
             # server doesn't require it — verified 2026-05-28.
-            await self.send(STATUS_LISTE_REQUEST)
-            await self.send(STATUS_INHALT_LISTE_REQUEST)
+            await self.send(Commands.InfoboardWidgets.encode())
+            await self.send(Commands.InfoboardContent.encode())
+            await self.send(Commands.Mainmenu.encode())
+            await self.send(Commands.SocketConnected.encode())
 
-            # Dispatch loop.
-            await self._dispatch_loop(_aiter_ws_text(app_ws))
+            self._chart_poll_task = asyncio.create_task(
+                self._poll_charts(),
+                name="smart_place_chart_poll",
+            )
+            try:
+                # Dispatch loop.
+                await self._dispatch_loop(_aiter_ws_text(app_ws))
+            finally:
+                if self._chart_poll_task is not None:
+                    self._chart_poll_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._chart_poll_task
+                    self._chart_poll_task = None
 
         self._ws = None
 
@@ -531,22 +564,64 @@ class SmartPlaceClient:
     async def _chase_chart_ids(self, frame: ServerFrame) -> None:
         """SPA-mirroring chart-fetch chase.
 
-        InfoboardEntry frames embed ``CHART<id>STAND<series>``
-        references pointing at consumption datasources. After the
-        InfoboardContentFinished marker arrives, one
-        ``GiveMeChartStandsManuell<id>`` is sent per referenced chart,
-        which yields ``CHART<id>STAND<n>:<value>`` push frames. Live
+        Two discovery paths:
+
+        - ``InfoboardEntry`` frames embed ``CHART<id>STAND<series>~
+          SPDB-CHARTSSTANDS>unit-<unit>`` references — collected from
+          the ``Commands.InfoboardContent`` reply.
+        - ``ChartDefinition`` frames (one per chart in the
+          installation) arrive during the ``Commands.Mainmenu``
+          response — these surface charts the infoboard doesn't
+          reference (e.g. per-meter sub-charts when only the SUMME is
+          on the panel) and carry the authoritative unit.
+
+        Both feed :attr:`SessionState.chart_ids` /
+        ``chart_units``; after either ``InfoboardContentFinished`` or
+        ``MainMenuFinished``, one ``GiveMeChartStandsManuell<id>`` is
+        sent per known chart so the full STAND fan-out arrives. Live
         mode only — replay has no live WS to send on.
         """
         if self._live is None or self._ws is None:
             return
         if isinstance(frame, NamedValue) and frame.name == "InfoboardEntry":
-            for m in _CHART_REF_RE.finditer(frame.value):
-                self._pending_chart_ids.add(int(m.group(1)))
-        elif isinstance(frame, NamedFields) and frame.name == "InfoboardContentFinished":
-            for cid in sorted(self._pending_chart_ids):
-                await self.send(encode_chart_stands_request(cid))
-            self._pending_chart_ids.clear()
+            for chart_id, _series, unit in parse_chart_references(frame.value):
+                self.state.chart_ids.add(chart_id)
+                self.state.chart_units[chart_id] = unit
+        elif isinstance(frame, NamedValue) and frame.name == "ChartDefinition" and frame.index is not None:
+            self.state.chart_ids.add(frame.index)
+            fields = frame.value.split(";")
+            if len(fields) > 14 and fields[14]:
+                self.state.chart_units[frame.index] = fields[14]
+        elif isinstance(frame, NamedFields) and frame.name in ("InfoboardContentFinished", "MainMenuFinished"):
+            for cid in sorted(self.state.chart_ids):
+                await self.send(Commands.ChartStands.encode(cid))
+
+    async def _poll_charts(self) -> None:
+        """Periodically re-issue ``GiveMeChartStandsManuell<id>`` for known charts.
+
+        Chart values don't push; without a poll we'd only see the
+        initial bootstrap reading. Cancelled when the connection is
+        torn down or :meth:`aclose` flips ``_closing``.
+        """
+        assert self._live is not None
+        interval = self._live.chart_poll_interval
+        if interval <= 0:
+            return
+        while not self._closing:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            if self._closing or self._ws is None or self._ws.closed:
+                return
+            for cid in sorted(self.state.chart_ids):
+                if self._closing or self._ws is None or self._ws.closed:
+                    return
+                try:
+                    await self.send(Commands.ChartStands.encode(cid))
+                except (RuntimeError, ConnectionError) as err:
+                    _LOGGER.debug("chart poll send failed (%s); stopping", err)
+                    return
 
     async def _dispatch_loop(self, source: AsyncIterator[str]) -> None:
         async for text in source:

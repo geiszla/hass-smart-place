@@ -180,7 +180,11 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="InfoboardContentFinished",
-        description="Marker: StatusInhaltListe stream complete. Triggers GiveMeMainmenu in the SPA.",
+        description=(
+            "Marker: end of the InfoboardEntry response stream "
+            "(reply to ``Commands.InfoboardContent``). Triggers "
+            "``GiveMeMainmenu`` in the SPA."
+        ),
         pattern=re.compile(r"^StatusInhaltFinishedListe$"),
         parse=_named_fields_parser("InfoboardContentFinished", "StatusInhaltFinishedListe"),
         example="StatusInhaltFinishedListe",

@@ -7,8 +7,8 @@ between the standalone client and the Home Assistant integration.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from enum import Enum
 import re
 from typing import Final
@@ -19,19 +19,6 @@ DISCOVERY_WS_PATH: Final = "/StartAppExt/"
 DISCOVERY_ORIGIN: Final = f"https://{DISCOVERY_HOST}:{DISCOVERY_PORT}"
 
 APP_WS_PATH: Final = "/UpdatenLS"
-
-GLOBAL_CONFIG_REQUEST: Final = "GiveMeGlobalConfig"
-STATUS_LISTE_REQUEST: Final = "GiveStatusListe"
-STATUS_INHALT_LISTE_REQUEST: Final = "StatusInhaltListe"
-CHART_STANDS_REQUEST_PREFIX: Final = "GiveMeChartStandsManuell"
-
-# Door-opener write commands ('Öffner' = opener). Each door has a fixed
-# numeric id; these constants name the two we know. Per the
-# smart-place-observe-only memory: never issued automatically. The
-# library exposes them so a caller can opt-in explicitly via
-# ``client.send(OPEN_GROUND_FLOOR_ENTRANCE)``.
-OPEN_GROUND_FLOOR_ENTRANCE: Final = "OEFFNER1"
-OPEN_FRONT_DOOR: Final = "OEFFNER4"
 
 
 class ProtocolError(Exception):
@@ -227,6 +214,25 @@ def _parse_temperature(text: str) -> Temperature:
     return Temperature(sensor=int(m.group(1)), value=value)
 
 
+_INFOBOARD_CHART_REF_RE = re.compile(
+    r"CHART(\d+)STAND(\d+)~SPDB-CHARTSSTANDS>unit-([^~]+)",
+)
+
+
+def parse_chart_references(infoboard_entry_value: str) -> Iterator[tuple[int, int, str]]:
+    """Yield ``(chart_id, series, unit)`` tuples from an InfoboardEntry value.
+
+    InfoboardEntry rows that bind a label to a consumption chart embed
+    one or more ``CHART<id>STAND<series>~SPDB-CHARTSSTANDS>unit-<unit>``
+    references (e.g. ``unit-l`` for water, ``unit-KWh`` for electricity).
+    Use this to populate :attr:`SessionState.chart_units` and feed the
+    HA layer the device-class/unit hints it needs to expose the chart
+    as a sensor.
+    """
+    for m in _INFOBOARD_CHART_REF_RE.finditer(infoboard_entry_value):
+        yield int(m.group(1)), int(m.group(2)), m.group(3)
+
+
 @dataclass(frozen=True, slots=True)
 class MessageDefinition:
     r"""Declarative entry in :data:`KNOWN_MESSAGES`.
@@ -337,37 +343,6 @@ def _indexed_fields_parser(name: str, prefix: str) -> Callable[[str], NamedField
     return parse
 
 
-def encode_global_config_request() -> str:
-    """Encode the ``GiveMeGlobalConfig`` bootstrap-read."""
-    return GLOBAL_CONFIG_REQUEST
-
-
-def encode_status_liste_request() -> str:
-    """Encode the ``GiveStatusListe`` bootstrap-read."""
-    return STATUS_LISTE_REQUEST
-
-
-def encode_status_inhalt_liste_request() -> str:
-    """Encode the ``StatusInhaltListe`` bootstrap-read.
-
-    Asks for the info-board content rows (one per visible widget).
-    Each row binds a localized label to a push-frame name
-    (TEMPOUT, REGEN, CHART<id>STAND<series>, ...). The server
-    closes the burst with a ``StatusInhaltFinishedListe`` marker.
-    """
-    return STATUS_INHALT_LISTE_REQUEST
-
-
-def encode_chart_stands_request(chart_id: int) -> str:
-    """Encode the ``GiveMeChartStandsManuell<id>`` chart-values fetch.
-
-    The server replies with ``CHART<id>STAND<series>:<value>`` frames
-    — one per series in the chart (typically series 1 is the current
-    reading). Chart IDs are discovered from ``InfoboardEntry`` rows.
-    """
-    return f"{CHART_STANDS_REQUEST_PREFIX}{chart_id}"
-
-
 def encode_frame(message: str) -> str:
     """Encode an arbitrary text message for the app WS.
 
@@ -415,11 +390,12 @@ class SessionState:
     callers can both drive control flow and assert on transitions.
     Invariants:
     - ``route`` is populated once we've parsed a ``GoToLinkSSL`` frame.
-    - ``infoboard_widgets`` is populated by the GiveStatusListe reply
-      and signals BOOTSTRAPPED.
+    - ``infoboard_widgets`` is populated by the
+      ``Commands.InfoboardWidgets`` reply (wire ``GiveStatusListe`` →
+      ``StatusListe>...``) and signals BOOTSTRAPPED.
     - ``global_config`` is populated opportunistically if the client
-      chose to send GiveMeGlobalConfig (the bootstrap doesn't require
-      it; see ``client.py`` notes).
+      chose to send ``GiveMeGlobalConfig`` (the bootstrap doesn't
+      require it; see ``client.py`` notes).
     - The state machine doesn't own the WebSocket; the I/O layer in
       ``client.py`` does. This object is plain data so it is trivial to
       test from ``test_protocol.py``.
@@ -429,6 +405,8 @@ class SessionState:
     route: GoToLinkSSL | None = None
     global_config: GlobalConfig | None = None
     infoboard_widgets: NamedFields | None = None  # name == "InfoboardWidgets"
+    chart_ids: set[int] = field(default_factory=set)
+    chart_units: dict[int, str] = field(default_factory=dict)
 
     def on_discovery_frame(self, frame: ServerFrame) -> SessionPhase:
         """Apply a frame received on the discovery WS.
