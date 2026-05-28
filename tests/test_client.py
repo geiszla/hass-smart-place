@@ -185,6 +185,59 @@ async def test_live_logs_unknown_frame_to_file(
         assert entry["iso_ts"].startswith("20")
 
 
+async def test_live_chases_chart_ids_after_infoboard_content_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the InfoboardEntry burst, fetch each referenced chart's stands.
+
+    Mimics the SPA flow: InfoboardEntry rows embed CHART<id>STAND<series>
+    references; once the InfoboardContentFinished marker arrives, one
+    GiveMeChartStandsManuell<id> per unique chart-id is issued so the
+    server emits CHART<id>STAND<n>:<value> push frames.
+    """
+
+    async def _iter(items: list[str]):
+        for item in items:
+            yield item
+
+    client = SmartPlaceClient.live(token="dummy", unknown_log=None)
+
+    sent: list[str] = []
+
+    class _FakeWS:
+        closed = False
+
+        async def send_str(self, text: str) -> None:
+            sent.append(text)
+
+    client._ws = _FakeWS()  # type: ignore[assignment]
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        await self_._dispatch_loop(
+            _iter(
+                [
+                    "GoToLinkSSL:h:8770/Start1:Leer",
+                    "StatusInhaltListe_2_1_SPtext>CHART337STAND1~SPDB-CHARTSSTANDS>unit-l~>LinkOff",
+                    "StatusInhaltListe_2_2_SPtext>CHART49STAND1~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff",
+                    "StatusInhaltListe_2_3_SPtext>CHART337STAND2~SPDB-CHARTSSTANDS>unit-l~>LinkOff",
+                    "StatusInhaltFinishedListe",
+                ],
+            ),
+        )
+        self_._closing = True
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+
+    # Two unique chart ids (49, 337), sent in sorted order; STAND2 in the
+    # third row is the same chart 337 — deduped via the set.
+    assert sent == ["GiveMeChartStandsManuell49", "GiveMeChartStandsManuell337"]
+
+
 async def test_live_unknown_log_disabled_by_none(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

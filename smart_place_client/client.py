@@ -35,14 +35,15 @@ from typing import Any, Literal, Self
 
 import aiohttp
 
+from smart_place_client.messages import parse_frame
 from smart_place_client.protocol import (
     APP_WS_PATH,
     DISCOVERY_ORIGIN,
-    GLOBAL_CONFIG_REQUEST,
+    STATUS_INHALT_LISTE_REQUEST,
     STATUS_LISTE_REQUEST,
-    GlobalConfig,
     GoToLinkSSL,
     NamedFields,
+    NamedValue,
     ProtocolError,
     ServerFrame,
     SessionPhase,
@@ -50,9 +51,11 @@ from smart_place_client.protocol import (
     SmartPlaceAuthError,
     UnknownFrame,
     discovery_ws_url,
+    encode_chart_stands_request,
     encode_frame,
-    parse_frame,
 )
+
+_CHART_REF_RE = re.compile(r"CHART(\d+)STAND")
 
 _LOGGER = logging.getLogger("smart_place_client")
 
@@ -232,6 +235,7 @@ class SmartPlaceClient:
     _replay: _ReplaySources | None = None
     _closing: bool = False
     _bootstrap_done: asyncio.Event = field(default_factory=asyncio.Event)
+    _pending_chart_ids: set[int] = field(default_factory=set)
 
     # ------------------------- constructors -------------------------
 
@@ -489,11 +493,23 @@ class SmartPlaceClient:
             self.state.on_app_open()
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
 
-            # Steps 5 + 6: send bootstrap reads.
-            await self.send(GLOBAL_CONFIG_REQUEST)
+            # Bootstrap reads (DESIGN §10 — minimum sequence to surface
+            # the four "main stats" — indoor temperature, consumption,
+            # info-board entries, and package-box state):
+            #   1. GiveStatusListe   -> StatusListe (info-board columns).
+            #   2. StatusInhaltListe -> InfoboardEntry rows + chart-id
+            #      hints, terminated by InfoboardContentFinished. The
+            #      chart-chase below then issues
+            #      GiveMeChartStandsManuell<id> per chart id referenced
+            #      in the rows.
+            # Indoor temperature (TEMPIST<N>) and package-box (PACKETBOX
+            # <N>) arrive as broadcast pushes without any command.
+            # The SPA also sends GiveMeGlobalConfig first, but the
+            # server doesn't require it — verified 2026-05-28.
             await self.send(STATUS_LISTE_REQUEST)
+            await self.send(STATUS_INHALT_LISTE_REQUEST)
 
-            # Step 7: dispatch loop.
+            # Dispatch loop.
             await self._dispatch_loop(_aiter_ws_text(app_ws))
 
         self._ws = None
@@ -511,6 +527,26 @@ class SmartPlaceClient:
         await self._dispatch_loop(_aiter_capture(self._replay))
 
     # ------------------------ shared dispatch -------------------------
+
+    async def _chase_chart_ids(self, frame: ServerFrame) -> None:
+        """SPA-mirroring chart-fetch chase.
+
+        InfoboardEntry frames embed ``CHART<id>STAND<series>``
+        references pointing at consumption datasources. After the
+        InfoboardContentFinished marker arrives, one
+        ``GiveMeChartStandsManuell<id>`` is sent per referenced chart,
+        which yields ``CHART<id>STAND<n>:<value>`` push frames. Live
+        mode only — replay has no live WS to send on.
+        """
+        if self._live is None or self._ws is None:
+            return
+        if isinstance(frame, NamedValue) and frame.name == "InfoboardEntry":
+            for m in _CHART_REF_RE.finditer(frame.value):
+                self._pending_chart_ids.add(int(m.group(1)))
+        elif isinstance(frame, NamedFields) and frame.name == "InfoboardContentFinished":
+            for cid in sorted(self._pending_chart_ids):
+                await self.send(encode_chart_stands_request(cid))
+            self._pending_chart_ids.clear()
 
     async def _dispatch_loop(self, source: AsyncIterator[str]) -> None:
         async for text in source:
@@ -536,16 +572,11 @@ class SmartPlaceClient:
             else:
                 self.state.on_app_frame(frame)
 
-            is_bootstrap_frame = isinstance(frame, GlobalConfig) or (
-                isinstance(frame, NamedFields) and frame.name == "InfoboardWidgets"
-            )
-            if (
-                not self._bootstrap_done.is_set()
-                and is_bootstrap_frame
-                and self.state.global_config is not None
-                and self.state.infoboard_widgets is not None
-            ):
+            is_infoboard_widgets = isinstance(frame, NamedFields) and frame.name == "InfoboardWidgets"
+            if not self._bootstrap_done.is_set() and is_infoboard_widgets and self.state.infoboard_widgets is not None:
                 self._bootstrap_done.set()
+
+            await self._chase_chart_ids(frame)
 
             for handler in self.handlers:
                 try:

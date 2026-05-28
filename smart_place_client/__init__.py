@@ -12,8 +12,10 @@ from smart_place_client.client import (
     SmartPlaceClient,
     install_token_redaction_filter,
 )
+from smart_place_client.messages import KNOWN_MESSAGES, parse_frame
 from smart_place_client.protocol import (
-    KNOWN_MESSAGES,
+    OPEN_FRONT_DOOR,
+    OPEN_GROUND_FLOOR_ENTRANCE,
     GlobalConfig,
     GoToLinkSSL,
     MessageDefinition,
@@ -26,14 +28,17 @@ from smart_place_client.protocol import (
     SmartPlaceAuthError,
     Temperature,
     UnknownFrame,
+    encode_chart_stands_request,
     encode_frame,
     encode_global_config_request,
+    encode_status_inhalt_liste_request,
     encode_status_liste_request,
-    parse_frame,
 )
 
 __all__ = [
     "KNOWN_MESSAGES",
+    "OPEN_FRONT_DOOR",
+    "OPEN_GROUND_FLOOR_ENTRANCE",
     "CapturedFrame",
     "ExponentialBackoff",
     "FrameHandler",
@@ -51,8 +56,10 @@ __all__ = [
     "SmartPlaceClient",
     "Temperature",
     "UnknownFrame",
+    "encode_chart_stands_request",
     "encode_frame",
     "encode_global_config_request",
+    "encode_status_inhalt_liste_request",
     "encode_status_liste_request",
     "install_token_redaction_filter",
     "parse_frame",
