@@ -133,6 +133,26 @@ async def test_handler_exception_does_not_crash_dispatch(caplog: pytest.LogCaptu
     assert any("frame handler raised" in rec.message for rec in caplog.records)
 
 
+async def test_phase3_capture_replays_to_bootstrapped_state() -> None:
+    """The committed Phase 3 fixture from a real session replays cleanly.
+
+    Validates the parser against actually-observed wire data: dynamic
+    routed port (38435), float brightness (0.8), 'undefined' literal,
+    and the empty-third-field StatusListe.
+    """
+    client = SmartPlaceClient.replay(path=FIXTURES / "phase3-smoke.ndjson")
+    async with client:
+        await client.run()
+    assert client.state.route is not None
+    assert client.state.route.port == 38435
+    assert client.state.route.path == "/Start1"
+    assert client.state.global_config is not None
+    assert client.state.global_config.brightness == "0.8"
+    assert client.state.global_config.screensaver_duration == "undefined"
+    assert client.state.status_liste is not None
+    assert client.state.status_liste.fields == ("Wetter", "Tagesverbrauch", "")
+
+
 async def test_replay_skips_malformed_lines(tmp_path: Path) -> None:
     """Malformed ndjson lines are skipped with a warning."""
     fixture = tmp_path / "bad.ndjson"

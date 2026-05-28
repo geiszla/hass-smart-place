@@ -1,0 +1,5 @@
+{"direction": "server", "ts": 1779985555.302376, "text": "GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer"}
+{"direction": "client", "ts": 1779985555.743308, "text": "GiveMeGlobalConfig"}
+{"direction": "client", "ts": 1779985555.743585, "text": "GiveStatusListe"}
+{"direction": "server", "ts": 1779985555.78301, "text": "EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined"}
+{"direction": "server", "ts": 1779985555.783314, "text": "StatusListe>Wetter>Tagesverbrauch>"}

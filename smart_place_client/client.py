@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
@@ -695,16 +696,19 @@ async def _run_cli(
     async with client:
         runner = asyncio.create_task(client.run(), name="sp-cli-run")
         sender = asyncio.create_task(_stdin_pump(client), name="sp-cli-stdin")
-        done, pending = await asyncio.wait(
-            {runner, sender},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-        for task in done:
-            exc = task.exception()
-            if exc is not None and not isinstance(exc, asyncio.CancelledError):
-                raise exc
+        try:
+            # The runner is the primary task. If stdin closes (EOF) the sender
+            # exits early and that's fine — the user explicitly wanted
+            # observe-only. The CLI should only stop when the runner finishes
+            # or the user interrupts.
+            await runner
+        finally:
+            sender.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await sender
+        exc = runner.exception()
+        if exc is not None and not isinstance(exc, asyncio.CancelledError):
+            raise exc
 
 
 async def _stdin_pump(client: SmartPlaceClient) -> None:

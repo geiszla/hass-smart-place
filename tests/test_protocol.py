@@ -82,7 +82,7 @@ def test_parse_go_to_link_old_system_empty_token() -> None:
 
 
 def test_parse_global_config() -> None:
-    """Live-observed 2026-05-28 6-field frame."""
+    """Synthetic 6-field frame (older shape used in unit tests)."""
     frame = parse_frame("EINSTELLUNGENGLOBAL>de>0>80>1>23:00>30")
     assert frame == GlobalConfig(
         language="de",
@@ -92,6 +92,31 @@ def test_parse_global_config() -> None:
         screensaver_start="23:00",
         screensaver_duration="30",
     )
+
+
+def test_parse_global_config_phase3_observed_shape() -> None:
+    """Phase 3 live capture 2026-05-28: numeric fields, brightness as 0..1, 'undefined' literal."""
+    frame = parse_frame("EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined")
+    assert frame == GlobalConfig(
+        language="2",
+        standby="300",
+        brightness="0.8",
+        screensaver_mode="1",
+        screensaver_start="300",
+        screensaver_duration="undefined",
+    )
+
+
+def test_parse_status_liste_phase3_observed_shape() -> None:
+    """Phase 3 live capture 2026-05-28: info-board tab labels with trailing empty field."""
+    frame = parse_frame("StatusListe>Wetter>Tagesverbrauch>")
+    assert frame == StatusListe(fields=("Wetter", "Tagesverbrauch", ""))
+
+
+def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
+    """Phase 3 capture confirmed routed port is dynamic, not always 8770."""
+    frame = parse_frame("GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer")
+    assert frame == GoToLinkSSL(host="spr1.smartplace.ch", port=38435, path="/Start1", token2="Leer")
 
 
 @pytest.mark.parametrize(

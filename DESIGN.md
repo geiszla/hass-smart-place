@@ -537,3 +537,41 @@ These don't block starting; they get resolved by doing.
 5. **Frame schema.** The JavaScript handlers expect text frames, mostly
    prefix-delimited messages such as `EINSTELLUNGENGLOBAL>...` and
    `leuchte<ID>:<value>`. To be catalogued during Phase 3 from captured frames.
+
+---
+
+## 10. Protocol notes — Phase 3 captures
+
+Recorded during `sp-cli --live --capture` against `spr1.smartplace.ch`.
+Each entry cites the capture file under `tests/fixtures/`.
+
+### 2026-05-28 (Phase 3 first capture, ~60 s observe-only)
+
+Capture: `tests/fixtures/phase3-smoke.ndjson` (5 frames).
+
+| Frame | Direction | Notes |
+| ----- | --------- | ----- |
+| `GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer` | S→C | Discovery routed. **Routed port is dynamic per session** (38435 observed; was 8770 in the design's first sketch). Path `/Start1`, `token2="Leer"` confirm the "Leer" branch documented in §6.2 step 3. |
+| `GiveMeGlobalConfig` | C→S | Bootstrap read sent by our client. |
+| `GiveStatusListe` | C→S | Bootstrap read sent by our client. |
+| `EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined` | S→C | 6-field global config: language=`2`, standby=`300`, brightness=`0.8`, screensaver_mode=`1`, screensaver_start=`300`, screensaver_duration=`undefined`. Note: brightness is a `0-1` float (not a `0-100` int as one might guess), `undefined` is a literal string (not a JSON null). |
+| `StatusListe>Wetter>Tagesverbrauch>` | S→C | 3-field status list: `Wetter` (weather), `Tagesverbrauch` (daily consumption), and an **empty third field**. These look like *info-board tab labels*, not per-device state — which matches DESIGN §9 Q2 ("the bootstrap reads do not produce separate per-device frames"). |
+
+**No spontaneous server pushes** during the observation window (~60 s)
+after the bootstrap reads. Consistent with the design's expectation
+that the integration cannot rely on idle pushes; we will need to
+identify per-device read messages later (DESIGN §9 Q2 / Q5).
+
+**Capture is committed** because it contains no secrets — token never
+appears in any frame, and the port / config values / German labels are
+not privacy-sensitive. Future captures should be reviewed similarly
+before commit.
+
+### Pending captures (post-v1)
+
+- A session that includes a state-change push (e.g. someone toggles a
+  light from the SPA while we capture) — to identify per-device frame
+  shapes (`leuchte<ID>:<value>`?).
+- A `HostNotOnline` capture from an offline installation — to confirm
+  the discovery frame matches the literal in the Start5 JavaScript.
+- A `GoToLinkOLDSYSTEM` capture from a legacy installation.

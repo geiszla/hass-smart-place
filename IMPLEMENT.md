@@ -294,3 +294,68 @@ Files:
   automated tests touch HA in v1; this matches DESIGN §7 "Out of
   scope for v1" (HA-level tests).
 
+## Phase 3 — POC validation
+
+**Status:** done for the parts I can do; manual HA-instance smoke
+test is the user's to run.
+
+### Phase 3 step 2: live capture (observe-only)
+
+Ran `SMART_PLACE_TOKEN=… sp-cli --live --capture
+/tmp/phase3-smoke.ndjson --log-level INFO < /dev/null` for 60 s.
+Stdin closed so the only client-direction frames are the two
+bootstrap reads our code sends — no risk of accidentally hitting
+write paths.
+
+Capture committed as `tests/fixtures/phase3-smoke.ndjson`. Five frames
+total; new findings added as DESIGN §10 "Protocol notes":
+
+- The routed port is **dynamic per session** — observed 38435 here vs
+  the 8770 sketched in early design notes. Our parser already handled
+  this (port-or-port/path field), so no code change needed.
+- `EINSTELLUNGENGLOBAL` fields are loosely typed strings on the wire:
+  brightness is `0.8` (float as string, not `0-100` int), and
+  `screensaver_duration` came back as the literal string `undefined`.
+  Our `GlobalConfig` keeps them as raw strings, so this matches.
+- `StatusListe` returned `Wetter>Tagesverbrauch>` (with a trailing
+  empty field). These are German for "Weather" / "Daily consumption" —
+  *info-board tab labels*, not per-device state, confirming DESIGN §9
+  Q2 that bootstrap reads alone do not enumerate devices.
+- No spontaneous pushes in the 60-second observation window; matches
+  the design's `cloud_push` provisional caveat. Real-time change
+  notification likely needs an additional read message we haven't
+  identified yet.
+
+### Phase 3 step 1+4: HA smoke test (deferred to user)
+
+DESIGN §7 Phase 3 step 1 says "live smoke test against the developer's
+own HA instance". I cannot drop `custom_components/smart_place/` into
+the user's HA from here. Procedure for the user:
+
+```text
+cp -r custom_components/smart_place/ <hass-config>/custom_components/
+# (or symlink during development)
+# Restart HA, add "Smart Place" via Settings → Devices & Services
+# → Add Integration → paste the token. Watch the "Smart Place
+# Connection" binary_sensor flip on.
+```
+
+### Tests added in Phase 3
+
+`tests/test_protocol.py`: three parser tests using actually-observed
+wire data (dynamic port, float brightness + 'undefined' literal,
+empty-field StatusListe).
+
+`tests/test_client.py`: `test_phase3_capture_replays_to_bootstrapped_state`
+runs the committed capture through the production dispatch loop and
+asserts on the parsed state. **Total: 59 tests, ~0.8 s.**
+
+### Decisions for Phase 4 (out of v1 scope)
+
+- The `StatusListe` payload does not contain device state. Phase 4
+  needs to identify the read messages that enumerate and hydrate
+  devices (lights, blinds, climate). DESIGN §9 Q2/Q5.
+- Future captures should ideally include at least one user-driven
+  state change so we can identify the push frame shape. DESIGN §10
+  "Pending captures (post-v1)".
+
