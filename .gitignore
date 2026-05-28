@@ -1,0 +1,59 @@
+# Secrets — never commit
+.env
+*.env
+access-url-secret*
+secrets.yaml
+
+# Home Assistant runtime state — would leak tokens
+config/
+.storage/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# IDE
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# VS Code: keep recommended extensions / settings, ignore user-local
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Captures from sp-cli that aren't checked-in fixtures
+*.ndjson
+!tests/fixtures/*.ndjson

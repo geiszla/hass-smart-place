@@ -1,0 +1,539 @@
+# Home Assistant Smart Place plugin — POC design
+
+This document captures the research, alternatives, and decisions for the v1 POC of a
+Home Assistant plugin that integrates the [Smart Place](https://www.smartplace.ch)
+residential automation system. It is the input to the implementation phase.
+
+> **Scope of v1 POC**
+> Stand up the project skeleton, prove out the connection to the Smart Place
+> back-end via WebSocket, and observe device/system state messages. Command
+> sending is implemented in the client library but is **not** the focus of v1
+> end-to-end behaviour.
+
+---
+
+## 1. Smart Place — what we know about the protocol
+
+This section records observed protocol facts and message shapes. The
+authoritative connection algorithm lives in §6.2 so the implementation has a
+single source of truth.
+
+| Item | Shape | Direction | Notes |
+| ---- | ----- | --------- | ----- |
+| Bootstrap page | `https://spr1.smartplace.ch:8770/Start5?<TOKEN>` | HTTPS GET | Serves an SPA (Mojolicious/Perl back-end). JS reads `window.location.search` to recover `<TOKEN>` and then opens the discovery WS. Useful for diagnostics, but not required by the client connection flow. |
+| Discovery WS endpoint | `wss://spr1.smartplace.ch:8770/StartAppExt/?TOKEN=<TOKEN>` | client → server | Opened by the Start5 page on load. Use browser-compatible `Origin` and `User-Agent` headers. |
+| SSL route | `GoToLinkSSL:<host>:<port-or-port/path>:<token2>` | server → client | Tells the client which installation-specific host/port/path/token to use. The observed route was `GoToLinkSSL:spr1.smartplace.ch:<port>/Start1:Leer`. |
+| Legacy route | `GoToLinkOLDSYSTEM:<token2>` | server → client | Redirects to legacy server `spr0.smartplace.ch:8770/Start2?<token2>`. Observed in Start5 JavaScript, not yet as a live frame. |
+| Offline marker | `HostNotOnline` | server → client | The user's installation is offline. Observed in Start5 JavaScript, not yet as a live frame. |
+| Routed page | `https://<host>:<port>/<path>` or `https://<host>:<port>/Infoboard1?<token2>` | HTTPS GET | Browser loads this in an iframe after discovery. The observed `Leer` route used `/Start1`. |
+| App WS endpoint | `wss://<host>:<port>/UpdatenLS` | client → server | Real app channel found in the routed page. Use the routed page origin as the WebSocket `Origin`. |
+| Global config read | `GiveMeGlobalConfig` → `EINSTELLUNGENGLOBAL>...` | bidirectional WS text | First frontend bootstrap message. The observed response was a `>`-delimited text frame with 6 fields: language, standby, brightness, screensaver mode, screensaver start, screensaver duration. |
+| Status-list read | `GiveStatusListe` → `StatusListe>...` | bidirectional WS text | Second frontend bootstrap/read message. The observed response was a `>`-delimited text frame with 3 fields. This did not emit separate per-device state frames during the capture window. |
+
+### 1.1 Live connection probe, 2026-05-28
+
+The local `access-url-secret.txt` URL resolves to `spr1.smartplace.ch:8770`
+(`62.138.185.23`). The first probe attempts timed out at TCP connect, before
+HTTP or WebSocket headers could matter. Later redacted probes from the same
+environment succeeded, so the service should be treated as intermittently slow
+to accept TCP connections rather than simply unreachable.
+
+The connection sequence in §6.2 was verified with code. A direct discovery WS
+connect using only the token, without fetching `Start5` first, returned the
+normal `GoToLinkSSL:.../Start1:Leer` route. A passive app WS listen for roughly
+two minutes produced no server text frames. In a follow-up probe, the
+frontend's initial read messages were sent:
+
+- `GiveMeGlobalConfig` returned one `EINSTELLUNGENGLOBAL>...` text frame.
+- `GiveStatusListe` returned one `StatusListe>...` text frame.
+
+No additional app frames arrived during roughly 100 seconds after those
+responses. The integration should therefore send these bootstrap read messages
+after `/UpdatenLS` connects; it should not expect the server to push initial
+state on a totally silent connection.
+
+**Auth model:** a single long-lived URL token. No OAuth, no login, no refresh
+flow observed. The token is the only secret needed.
+
+**Treat as secret:** the token (and the full URL that embeds it).
+It is **never** to be written to disk, committed to git, logged in plain text,
+or sent to third-party tools/services. It is held only in:
+
+- the HA config entry (encrypted by HA's storage layer, stored under
+  `~/.storage/core.config_entries`),
+- environment variables in the local shell (`.env` is gitignored), or
+- transient memory while the client runs.
+
+### 1.2 Prior art and integration-path survey, 2026-05-28
+
+Before designing the WS reverse-engineering path we searched the web for any
+existing implementation or public protocol description of smartplace.ch.
+Summary of what is — and isn't — out there:
+
+| Source searched | Result |
+| --------------- | ------ |
+| Home Assistant integrations index, HACS, PyPI, GitHub | **No existing smart PLACE integration.** No PyPI package, no HACS component, no GitHub project that targets smartplace.ch's WebSocket protocol. |
+| openHAB bindings, ioBroker adapters, Loxone, FHEM | None for smart PLACE. (Loxone has community bindings; smart PLACE doesn't.) |
+| `github.com/SmartPlace` org | Unrelated. A Paris email-infrastructure outfit; last activity 2014. Two repos (`LogReporting`, `posty_ansible`). Not the Swiss building-automation company. |
+| Other "Smart Place" / "SmartPlace" products | All unrelated: `smartplacetech.com`, `smartplaceusa.com`, `smartplace.am`, an Apple Store app, a Google Play app from a "Home Manager" developer. None document the smartplace.ch protocol. |
+| Protocol identifiers (`StartAppExt`, `GoToLinkSSL`, `UpdatenLS`, `GiveMeGlobalConfig`, `StatusListe`, `EINSTELLUNGENGLOBAL`) | No useful public matches found during the survey. Treat these as vendor-internal frontend/backend identifiers. |
+| smartplace.ch downloads page | Marketing material and video tutorials only. No API/protocol docs, no developer guides, no SDK, no third-party-integration documentation. |
+| smartplace.ch installation-partner page | 404 at the URL discovered via search. No public partner documentation. |
+| Vendor terms of service | Explicitly state smart PLACE AG "is not responsible for the configuration or installation of third-party systems" — third-party integration is officially the customer's responsibility. |
+
+**Significant finding — a paid, vendor-supported alternative exists:**
+HORNBACH sells a "[smart PLACE Lizenz API](https://www.hornbach.ch/de/p/smart-place-lizenz-api/12022089/)"
+for CHF 139. Per the listing, it enables controlling devices and functions
+via "WebRequests" (i.e. plain HTTP) — almost certainly a different surface
+from the WebSocket the frontend uses. The product page contains no protocol
+detail, endpoint list, auth model, rate-limit info, or documentation links;
+documentation presumably comes with the license and/or via the installer.
+
+**Decision to stick with the WS path for v1 POC:**
+
+| Aspect | WS reverse-engineering (this design) | Paid HTTP API license |
+| ------ | ------------------------------------ | --------------------- |
+| Cost | None | CHF 139 + presumed installer involvement |
+| Setup | Works with the user's existing app URL/token | Requires purchase + onboarding |
+| Documentation | None — discovered live | Presumed available with license |
+| Vendor support | None; officially unsupported third-party integration | Yes, presumed |
+| Update semantics | Persistent WebSocket; bootstrap reads verified; live change push still to be captured | Unknown — likely request/response if it is plain HTTP |
+| Risk of silent breakage on firmware update | High — internal protocol can change with no notice | Lower — paid customers are likelier to get notice |
+| Suitability for v1 POC | Good — zero-cost path to validating "can we extract state for HA from this at all?" | Premature commitment before we know whether the internal WS path is insufficient |
+
+We pick the WS path for v1 because it lets us prove end-to-end connectivity
+and state extraction with zero purchase and zero vendor contact. If the WS
+path proves too painful — frequent breakage, missing state, no write
+capability we can reverse-engineer safely — buying the
+licensed API and rewriting the transport layer is a discrete, well-scoped
+fallback. The protocol module (§2) is the natural seam: swap the I/O source
+and most parsing/dispatch code in `protocol.py` becomes irrelevant, but
+the entity-mapping layer in `custom_components/smart_place/` stays put.
+
+**Implication for the parser:** since no second source confirms our reading
+of the wire format, every message shape we add to `protocol.py` should cite
+the live capture or the JavaScript source that motivated it (a `# observed:`
+comment with the date and frame). When the protocol changes, we should be
+able to diff capture-to-capture and see exactly what moved.
+
+---
+
+## 2. Architecture
+
+The work is split into two cleanly separated Python packages so the WebSocket
+client can be exercised both inside Home Assistant and standalone from a CLI.
+
+```text
+repo-root/
+├── smart_place_client/             # Standalone async library (no HA dependency)
+│   ├── __init__.py
+│   ├── protocol.py                 # COMPONENT 1 — common code shared by HA and standalone.
+│   │                               # Pure parsing/state: feed bytes in, get parsed events out.
+│   │                               # No I/O, no aiohttp, no Click. Exports message dataclasses
+│   │                               # (GoToLinkSSL, GlobalConfig, StatusListe, …),
+│   │                               # parse_frame() / encode_frame(), and SessionState (the
+│   │                               # discovery → routed-page → app-WS state machine).
+│   │
+│   └── client.py                   # COMPONENT 2 — owns I/O. One SmartPlaceClient class with
+│                                   # two classmethod constructors:
+│                                   #
+│                                   # SmartPlaceClient.live(token, session=...):
+│                                   #   - discovery WS → parse routing frame → routed page GET
+│                                   #     → app WS → bootstrap reads → loop dispatching
+│                                   #     incoming frames through protocol.parse_frame().
+│                                   #   - Sends from stdin / HA action handlers go out the WS.
+│                                   #   - Reconnect with backoff + jitter (live-only branch).
+│                                   #
+│                                   # SmartPlaceClient.replay(path):
+│                                   #   - Reads ndjson fixture, iterates the server-direction
+│                                   #     frames, calls the SAME dispatch as live with optional
+│                                   #     per-frame asyncio.sleep based on captured timestamps.
+│                                   #   - Sends are accepted but appended to an in-memory log;
+│                                   #     fixtures are immutable and the real server is not contacted.
+│                                   #
+│                                   # Click CLI lives at the bottom of this file behind
+│                                   # `if __name__ == "__main__":` (HA never imports Click).
+│                                   # Surface:
+│                                   #   - `--live`            (mode flag, no value)
+│                                   #   - `--replay <file>`   (mode flag, takes a path)
+│                                   #   - `--capture <file>`  (optional tee, valid with either mode)
+│                                   # Exactly one of `--live` / `--replay` must be passed;
+│                                   # Click enforces the mutual exclusion and the requirement.
+│
+├── custom_components/smart_place/  # Home Assistant integration (thin wrapper)
+│   ├── __init__.py                 # async_setup_entry, background task lifecycle.
+│   │                               # Instantiates SmartPlaceClient.live(token=...) and
+│   │                               # subscribes entity handlers to its event stream.
+│   ├── manifest.json
+│   ├── config_flow.py              # UI flow to capture the token
+│   ├── const.py
+│   ├── coordinator.py              # (Optional) DataUpdateCoordinator for fallback
+│   ├── sensor.py / switch.py / …   # Entity platforms (added incrementally)
+│   └── strings.json
+│
+├── tests/
+│   ├── test_protocol.py            # Pure-function tests of parse_frame / encode_frame.
+│   ├── test_client.py              # SmartPlaceClient(replay=fixture, ...) end-to-end tests.
+│   └── fixtures/
+│       └── *.ndjson                # Captured WS frames (redacted of tokens)
+│
+├── scripts/
+│   ├── lint                        # Ruff format + check
+│   ├── test                        # Pytest with coverage
+│   └── setup                       # uv-based env bootstrap
+│
+├── .github/workflows/              # CI: hassfest, HACS, ruff, pytest
+├── .vscode/                        # Recommended extensions + launch config
+├── .claude/                        # Project-specific Claude Code skills
+├── pyproject.toml                  # uv + ruff + pyright + pytest config
+├── hacs.json
+├── .gitignore
+├── .ruff.toml
+└── README.md
+```
+
+### Why this split
+
+- The **client library** has no `homeassistant` import. It can be `pip install`-ed
+  on its own, used from a Jupyter notebook, dropped into a different consumer
+  in the future, and tested in isolation in <1s.
+- The **HA integration** is the thin "translate protocol to entities" layer.
+  This is the conventional HA pattern (see e.g. `pyloadapi`/`hass-loadapi`,
+  `aiohue`/`hue` integration). When the integration grows complicated we can
+  later cut the client out into its own PyPI package and reference it as a
+  `requirements` entry in `manifest.json`.
+- The **CLI** gives us a way to iterate on the protocol without running HA —
+  the primary developer-experience benefit asked for in the planning
+  conversation.
+- The **two-file client (protocol + client)** maximises code reuse between
+  the HA integration and the standalone CLI: both import the same
+  `SmartPlaceClient`, just constructed via `.live(...)` or `.replay(...)`.
+  The dispatch / parsing / state code is identical across modes; only the
+  I/O source differs. We deliberately use two classmethod constructors on a
+  single class rather than a Transport abstraction with two implementations
+  — the conditionals around the I/O boundary are the simplest expression of
+  "same code, two sources" for the v1 POC. **If the conditional branches
+  grow**, treat that as a warning: it means the replay path is diverging
+  from the live path, so the tests are exercising less and less of what
+  production runs. Address by moving the difference back to the I/O
+  boundary, not by adding more branches.
+
+---
+
+## 3. Technology choices
+
+| Concern | Choice | Rationale |
+| ------- | ------ | --------- |
+| Language | **Python 3.13+** | HA is Python; no reason to swap. 3.13 is the floor for current HA core. |
+| Concurrency | **asyncio** | HA's event-loop model; aiohttp is async; saves a thread. |
+| WS client | **`aiohttp.ClientSession.ws_connect()`** | Already a HA core dependency — no extra wheel. Sufficient features. We add our own reconnect/backoff (see §6). |
+| HTTP client | **aiohttp** | Same session, same loop, same connection pool. |
+| CLI | **Click** | Mature, terse, good UX. CLI surface is small: exactly one of `--live` (no value) or `--replay <file>` is required, plus an optional `--capture <file>` tee. Lives at the bottom of `client.py` behind `if __name__ == "__main__":` so HA never imports it. |
+| Project tooling | **uv** | Fast venv/install; modern Python project default. |
+| Linter / formatter | **Ruff** | What HA core uses. One tool, fast. |
+| Type checker | **Pyright** | Stricter than mypy in practice; what the modern blueprint uses. Runs in CI and in VS Code via Pylance. |
+| Tests | **pytest** + **pytest-asyncio** | Standard. Pure-client tests don't need any HA test plumbing. `pytest-homeassistant-custom-component` (mirrors HA core's `hass`/`hass_ws_client`/`MockConfigEntry` fixtures) is deferred to when HA-level integration tests are added — see §7 "Out of scope for v1". |
+| Pre-commit | **pre-commit** | Hooks: ruff (format + check), hassfest, yamllint, end-of-file fixer. |
+| Validation | **hassfest GitHub Action** + **HACS Action** | Catches manifest / structure issues in CI. |
+| AI tooling | **Claude Code project skills** under `.claude/skills/` | Project-specific conventions (entity naming, protocol gotchas). Anthropic's official HA MCP server is for *consuming* HA from Claude; not useful for *developing* an integration. |
+| Scaffold | **`jpawlowski/hacs.integration_blueprint`** as starting point | HA 2026.4+, uv, Ruff+Pyright+pytest preconfigured, includes `AGENTS.md` for AI assistants. We do not literally `Use template` — we cherry-pick its `pyproject.toml`, `scripts/`, and CI workflows into a fresh repo we control. (Skipping its `.devcontainer/`; the developer brings their own HA for manual end-to-end verification.) |
+| IDE | **VS Code** | First-class HA + Python + Pyright + Ruff support. Recommended extensions tracked in `.vscode/extensions.json`. |
+
+---
+
+## 4. Secret storage
+
+**Decision:** HA config flow (production) **plus** environment-variable override
+(local development only).
+
+| Path | Where the token lives | Used when |
+| ---- | --------------------- | --------- |
+| HA config flow | `~/.storage/core.config_entries` (HA-owned, file-perm protected) | Normal user setup in the HA UI. |
+| `.env` (gitignored) → `SMART_PLACE_TOKEN` env var | Memory of the local shell / dev process only | Local development: the CLI reads from env so we can iterate against the real WS without typing the token every time. |
+| **Never** | secrets.yaml committed; logs; PR descriptions; chat to third-party services; test fixtures | — |
+
+Implementation:
+
+- `config_flow.py` validates the token by running the same browser-compatible
+  connection flow through the app WS bootstrap reads, with a bounded total
+  timeout and retry budget: discovery WS → routed page GET → `/UpdatenLS` WS
+  → `GiveMeGlobalConfig` / `GiveStatusListe` responses. This avoids accepting
+  a token that can route but cannot open the real app channel. A preliminary
+  `Start5` GET is optional diagnostics, not required for validation.
+- `manifest.json` declares `config_flow: true` and, provisionally,
+  `iot_class: cloud_push`. Revisit `iot_class` if later captures show the app
+  channel is only request/response and never pushes live change frames.
+- `.gitignore` includes `.env`, `*.env`, `config/`, `.storage/`, and `access-url-secret*`.
+- The existing `access-url-secret.txt` in the repo root is for one-time
+  reference during early development and **must be deleted** (or moved to
+  `.env`) before the first commit. It is added to `.gitignore` regardless.
+- All logging uses a token-redacting filter (see `client.py`) so the WS URL is
+  never logged in full.
+
+---
+
+## 5. Testing strategy
+
+Three layers, in order from fastest/cheapest to slowest/most-realistic.
+Two things are intentionally *not* in v1 and will be added later if needed:
+HA-level integration tests (`pytest-homeassistant-custom-component`) and a
+scripted devcontainer end-to-end harness. End-to-end verification in HA is
+done manually, against whatever HA instance the developer already has.
+
+### 5.1 Pure client unit tests (primary feedback loop)
+
+- pytest + pytest-asyncio.
+- Two layers of tests against the same code production runs:
+  - **`test_protocol.py`** calls `parse_frame()` / `encode_frame()` directly
+    on byte strings. Pure functions, no async, instant. Covers happy path,
+    `HostNotOnline`, legacy redirect, malformed frames, bootstrap message
+    encoding, token redaction in logs.
+  - **`test_client.py`** instantiates `SmartPlaceClient.replay(<fixture>)`
+    and asserts on the event stream it emits. Same dispatch loop production
+    uses — no mock WS server, no localhost port; the only difference is that
+    incoming frames come from a fixture iterator instead of an aiohttp WS.
+- Target: full suite runs in **< 2 seconds**, on every save.
+
+### 5.2 Captured frame replay
+
+- `sp-cli --live --capture tests/fixtures/session1.ndjson` runs a normal live
+  session against the real server and tees both directions (server → client
+  *and* client → server frames) to a newline-delimited JSON file, with tokens
+  redacted on write.
+- `sp-cli --replay tests/fixtures/session1.ndjson` runs the same
+  `SmartPlaceClient` but with its I/O source pointed at the fixture instead
+  of an aiohttp WS. The client iterates the *server-direction* frames from
+  the fixture and dispatches them through the same parsing/state code that
+  live mode uses. The live smartplace.ch service is not contacted — replay
+  is a fully offline loop, and there is no localhost server in the picture
+  either. We deliberately do **not** replay the captured client-side frames
+  back at the real server, since that would re-issue whatever device commands
+  the original session contained.
+- Replay fixtures are committed; they let us evolve the parser without ever
+  re-touching the live system. Both `sp-cli --replay` and `test_client.py`
+  drive the same `SmartPlaceClient.replay(...)` code path — one replay
+  implementation, two consumers (CLI for humans, pytest for assertions).
+
+### 5.3 Live smoke test (occasional)
+
+- `sp-cli --live` against real `spr1.smartplace.ch` with `SMART_PLACE_TOKEN`
+  set. Bidirectional: server frames print to stdout, lines typed on stdin
+  are sent. There is **no software guard** against accidental sends — the
+  safety is behavioural: if you don't want to send anything, don't type
+  anything. To exercise send paths without touching real devices, run
+  `sp-cli --replay <fixture>` instead — sends are accepted but logged
+  to memory, not transmitted anywhere.
+- Pair with `--capture <file>` when running `--live` so the session is
+  preserved as a fixture for later parser work and replay-based testing.
+
+---
+
+## 6. Persistent connection
+
+### 6.1 Lifecycle
+
+```text
+HA boots
+ └─ async_setup_entry(hass, entry)
+     ├─ client = SmartPlaceClient.live(token, session=async_get_clientsession(hass))
+     ├─ entry.async_create_background_task(hass, client.run(), "smart_place_ws")
+     └─ register entity platforms (sensor, switch, …) — they subscribe to client events
+
+HA shuts down / config entry removed
+ └─ async_unload_entry → client.aclose() → background task cancelled cleanly
+```
+
+`entry.async_create_background_task` is the right API in 2026: HA owns the
+task, cancels it on unload, and warns if it leaks. No `hass.async_create_task`
+(which can keep HA alive at shutdown), no bare `asyncio.create_task`.
+
+### 6.2 The `run()` loop
+
+Pseudocode:
+
+```python
+async def run(self) -> None:
+    backoff = ExponentialBackoff(base=2.0, cap=60.0, jitter=0.3)
+    while not self._closing:
+        try:
+            await self._one_connection_lifetime()
+            backoff.reset()
+        except asyncio.CancelledError:
+            raise
+        except SmartPlaceAuthError:
+            # Token is bad; surface to HA as a reauth flow, stop trying.
+            await self._trigger_reauth()
+            return
+        except Exception as err:                  # noqa: BLE001
+            self._logger.warning("WS dropped: %s; retrying in %.1fs", err, backoff.peek())
+            await asyncio.sleep(backoff.next())
+```
+
+`_one_connection_lifetime()`:
+
+1. Open discovery WS at `spr1.smartplace.ch:8770/StartAppExt/?TOKEN=<token>`
+   with `Origin: https://spr1.smartplace.ch:8770` and the same browser-like
+   `User-Agent`. Fetching `Start5?<token>` first is not required; direct
+   discovery WS with the token was verified live.
+2. Read first frame, expect `GoToLinkSSL:host:port-or-port/path:token2`.
+   Handle `HostNotOnline` by raising a typed error (becomes "unavailable"
+   entities).
+3. Close discovery WS and fetch the routed HTTPS page exactly like the browser
+   iframe does:
+   - If `token2 == "Leer"` and the route contains a path, use that path. The
+     observed live route was `https://host:port/Start1`.
+   - Otherwise use `https://host:port/Infoboard1?<token2>`.
+4. Open app WS at `wss://host:port/UpdatenLS` with
+   `Origin: https://host:port`.
+5. Send the read/bootstrap message `GiveMeGlobalConfig`; parse the
+   `EINSTELLUNGENGLOBAL>...` response.
+6. Send the read/bootstrap message `GiveStatusListe`; parse the
+   `StatusListe>...` response.
+7. Iterate `ws.receive()` forever; dispatch each frame to subscribed entity
+   handlers via an asyncio.Queue / event bus.
+8. Heartbeat / ping-pong: rely on aiohttp's built-in WS pong (default heartbeat
+   off — turn on, e.g. `heartbeat=30`).
+9. On any disconnect or connect timeout, fall through to the outer retry loop.
+
+Connection attempts should use a generous socket-connect timeout, e.g. 30-60 s,
+plus the retry loop above. Timeout alone is too blunt: it can reduce false
+offline reports, but it cannot recover from a single stuck/lost TCP attempt as
+quickly as a bounded retry loop can. One live run saw two app-WS TCP connect
+attempts time out after 20 seconds each, then the next attempt complete the
+WebSocket handshake in 0.4 seconds. Only treat the installation as offline
+after repeated failures or an explicit `HostNotOnline` frame.
+
+### 6.3 Why not also a DataUpdateCoordinator
+
+Smart Place is WS-first and the reconnect logic above can re-run the same
+bootstrap reads (`GiveMeGlobalConfig`, `GiveStatusListe`) after every app WS
+connect. Adding a polling coordinator would be redundant until we prove those
+bootstrap reads do not provide enough current state. If live captures show that
+additional periodic read messages are needed, add them over the same WS first;
+only add a DataUpdateCoordinator if Home Assistant entity semantics genuinely
+need a separate polling abstraction.
+
+### 6.4 Why not an HA add-on
+
+Add-ons buy us: a separate runtime, non-Python tooling, isolation, and the
+ability to be consumed by things outside HA. We need none of those — the
+client is async Python, fits HA's event loop perfectly, and is consumed only
+by HA. An add-on would only add operational and packaging complexity.
+
+---
+
+## 7. Implementation phases
+
+### Phase 0 — scaffolding (no Smart Place code yet)
+
+1. `git init`, set up `.gitignore` (incl. `access-url-secret*`, `.env`, `config/`).
+2. Cherry-pick `pyproject.toml`, `.ruff.toml`, `.pre-commit-config.yaml`,
+   `scripts/`, and GitHub workflows from the modern blueprint. (Skip its
+   `.devcontainer/`.)
+3. Create empty `custom_components/smart_place/` with stub `manifest.json`
+   (`domain: smart_place`, provisional `iot_class: cloud_push`,
+   `config_flow: true`).
+4. Get `scripts/lint` and `scripts/test` running green.
+5. Hassfest + HACS CI green on first commit.
+
+### Phase 1 — standalone client + CLI (the value-bearing core)
+
+1. `smart_place_client.protocol` (Component 1): message dataclasses, pure
+   `parse_frame()` / `encode_frame()`, `SessionState`. Start with
+   `GoToLinkSSL`, `GoToLinkOLDSYSTEM`, `HostNotOnline`, `GlobalConfig`
+   (`EINSTELLUNGENGLOBAL>...`), and `StatusListe`; extend as live captures
+   reveal more.
+2. `smart_place_client.client.SmartPlaceClient` (Component 2) with two
+   classmethod constructors: `.live(token, …)` and `.replay(path)`. Live mode
+   does the full discovery → routed page → app WS sequence and sends the
+   bootstrap reads (`GiveMeGlobalConfig`, `GiveStatusListe`). Replay mode
+   iterates the server-direction frames from the fixture through the same
+   dispatch loop. No reconnect yet.
+3. Click CLI at the bottom of `client.py` (behind `if __name__ == "__main__":`):
+   one of `--live` or `--replay <file>` is required (mutually exclusive),
+   plus `--capture <file>` tee flag. Token from `SMART_PLACE_TOKEN` env var.
+   All printed/captured frames have the token redacted.
+4. `test_protocol.py` and `test_client.py` — see §5.1. Goal: capture one real
+   session via `--live --capture`, replay it in CI via
+   `SmartPlaceClient.replay(...)`; parser and dispatch are exercised end-to-end
+   without any network or mock server.
+5. Add reconnect with exponential backoff + jitter to the live branch; cover
+   it with tests that drive a single failing connect attempt followed by a
+   replay-mode session.
+
+### Phase 2 — HA integration wrapper
+
+1. `config_flow.py`: single step asks for token, validates with the same
+   bounded discovery → routed page → app WS → bootstrap-read flow as §6.2,
+   then persists the entry.
+2. `__init__.py`: `async_setup_entry` constructs the client and starts the
+   background task; `async_unload_entry` cleans up.
+3. One trivial entity platform (e.g. a `binary_sensor` reporting WS connection
+   health) — proves the end-to-end wiring. No real device mapping yet.
+4. Verify manually by dropping `custom_components/smart_place/` into the
+   developer's own HA instance and adding the integration through the UI.
+   Automated HA-level tests are deferred (see §7 "Out of scope for v1").
+
+### Phase 3 — POC validation
+
+1. Live smoke test against the developer's own HA instance: enter token via
+   UI, watch the "WS connection" binary sensor flip on; pull the network for
+   30 s, watch it reconnect; restart HA, watch it come back up.
+2. Run `sp-cli --live --capture phase3-smoke.ndjson` against the live system
+   for a few minutes (no typing — observe only); document every distinct
+   message shape we see into a "Protocol notes" appendix.
+3. Decision point: which entity types (light, cover, climate, …) are present
+   in the captured stream — drives Phase 4 device mapping (out of v1 scope).
+
+### Out of scope for v1
+
+- Device-type mapping (light/switch/cover/etc.) — Phase 4.
+- Sending control commands from HA entities — implemented in the client but
+  not wired to HA write handlers in v1.
+- HACS publication, README polish, screenshots.
+- Multi-installation support (multiple config entries).
+- Localisation strings beyond English.
+- HA-level integration tests with `pytest-homeassistant-custom-component`
+  (config-flow tests, entity-creation tests, unload/reload tests). Add when
+  the integration grows beyond a single binary sensor.
+- Scripted devcontainer / `scripts/develop` harness for booting a local HA.
+  Add only if manual end-to-end verification proves to be a real friction
+  point.
+
+---
+
+## 8. Decision summary
+
+| # | Question | Decision |
+| - | -------- | -------- |
+| 1 | Framework / language | Python 3.13 custom integration + asyncio + aiohttp. Standalone client library has two files only: `protocol.py` (pure parsing/state, shared) and `client.py` (`SmartPlaceClient` with `.live(...)` and `.replay(...)` classmethod constructors, plus the Click CLI at the bottom). HA integration is a thin wrapper that instantiates `SmartPlaceClient.live(...)`. |
+| 2 | Dev tools | uv, Ruff, Pyright, pytest + pytest-asyncio, pre-commit, hassfest + HACS GitHub Actions, Claude Code project skills under `.claude/`. Scaffold cherry-picked from `jpawlowski/hacs.integration_blueprint` (devcontainer skipped). |
+| 3 | Token storage | HA config flow (production) + `SMART_PLACE_TOKEN` env var in the local shell for CLI iteration. `.env` and `access-url-secret*` gitignored. Token-redacting log filter. |
+| 4 | Local testing | Layered: `test_protocol.py` (pure functions, instant) + `test_client.py` driving `SmartPlaceClient(replay=fixture)` (same dispatch as live) → manual `sp-cli --replay` for human eyeballing → `sp-cli --live` smoke test against the real server (always bidirectional; safety is behavioural, not a CLI gate). No mock WS server; replay is in-memory. HA-level integration tests and a scripted devcontainer harness are deferred — end-to-end in HA is verified manually. |
+| 5 | Always-on connection | `entry.async_create_background_task` runs a reconnect-with-backoff loop inside the integration. `iot_class: cloud_push` is provisional until live-change frames are captured. No add-on. No speculative DataUpdateCoordinator. |
+
+---
+
+## 9. Open questions for implementation
+
+These don't block starting; they get resolved by doing.
+
+1. **Route variants.** One live route returned
+   `GoToLinkSSL:<host>:<port>/Start1:Leer`, but the parser must still support
+   `GoToLinkSSL:<host>:<port>:<token2>` and the legacy/offline messages already
+   seen in the Start5 JavaScript.
+2. **State coverage after bootstrap.** The verified bootstrap reads returned
+   `EINSTELLUNGENGLOBAL>...` and `StatusListe>...`, but did not produce separate
+   per-device frames during the capture. Determine which additional read
+   messages, if any, are needed to enumerate and hydrate all HA entities.
+3. **State re-delivery on reconnect.** Does re-running the bootstrap reads on
+   every fresh app WS provide complete current state, or do we need periodic
+   read messages over the same WS?
+4. **Write command serialization format.** The frontend uses plain text
+   `spsocket2.send(...)` messages. Read/bootstrap messages are visible in
+   `javallg.js`; write/control messages still need to be identified and tested
+   only against a known-safe target, typed into `sp-cli --live` against the
+   live server.
+5. **Frame schema.** The JavaScript handlers expect text frames, mostly
+   prefix-delimited messages such as `EINSTELLUNGENGLOBAL>...` and
+   `leuchte<ID>:<value>`. To be catalogued during Phase 3 from captured frames.

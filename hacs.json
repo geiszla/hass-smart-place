@@ -1,0 +1,6 @@
+{
+  "name": "Smart Place",
+  "render_readme": true,
+  "homeassistant": "2026.4.0",
+  "zip_release": false
+}

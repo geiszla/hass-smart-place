@@ -1,0 +1,11 @@
+{
+  "domain": "smart_place",
+  "name": "Smart Place",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://www.smartplace.ch",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/geiszla/smart-place-ha/issues",
+  "requirements": [],
+  "version": "0.0.1"
+}
