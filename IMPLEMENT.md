@@ -359,3 +359,76 @@ asserts on the parsed state. **Total: 59 tests, ~0.8 s.**
   state change so we can identify the push frame shape. DESIGN §10
   "Pending captures (post-v1)".
 
+## Final verification
+
+**Status:** done.
+
+### Tooling
+
+- `./scripts/lint-check` — 10 files formatted, ruff 0 errors,
+  pyright 0 errors / 0 warnings.
+- `./scripts/test` — **59 passed in 0.84 s**. Coverage 100% on
+  `protocol.py`, 66% on `client.py` (uncovered: live-mode I/O loop
+  and CLI body, exercised by manual run not pytest). 0% on
+  `custom_components/smart_place/` — expected per Phase 2 deferral.
+
+### CLI surface
+
+`uv run sp-cli --help` shows the documented options:
+`--live | --replay <file>` (mutually exclusive, one required) plus
+`--capture <file>` and `--log-level`.
+
+Offline replay end-to-end through the production dispatch:
+`uv run sp-cli --replay tests/fixtures/phase3-smoke.ndjson` prints
+the three parsed server frames and exits cleanly.
+
+### Live connectivity
+
+`SMART_PLACE_TOKEN=… timeout 20s sp-cli --live --log-level INFO < /dev/null`
+produced the full happy-path log (all token-redacted):
+
+```text
+INFO opening discovery WS: wss://spr1.smartplace.ch:8770/StartAppExt/?TOKEN=<REDACTED>
+INFO discovery routed to spr1.smartplace.ch:38435/Start1
+INFO app WS open at spr1.smartplace.ch/UpdatenLS
+<- GlobalConfig(language='2', standby='300', brightness='0.8', ...)
+<- StatusListe(fields=('Wetter', 'Tagesverbrauch', ''))
+```
+
+So the integration's runtime flow (discovery WS → routed page GET →
+app WS → bootstrap reads → dispatch) runs end-to-end against the real
+server. No commands were sent beyond the two read frames documented
+in DESIGN §6.2. Exit code 124 confirms the run was terminated by the
+20-second `timeout` (i.e. the loop was healthy and waiting for more
+frames when wall-clock cut it off).
+
+### Design-coverage cross-check
+
+Every numbered requirement in DESIGN.md is satisfied:
+
+| Section | Status |
+| ------- | ------ |
+| §1 Protocol (5 known frame shapes + UnknownFrame catch-all) | Implemented in `protocol.py`; every shape has a `# observed:` / source citation. |
+| §1.1 Live connection probe | Re-verified in Phase 3 (60 s capture committed). |
+| §1.2 Prior art | Captured at design time; referenced from `smart-place-prior-art` memory. |
+| §2 Architecture (two-file client, thin HA wrapper) | `protocol.py` + `client.py`, HA wrapper under `custom_components/smart_place/`. |
+| §3 Tech choices (Python 3.13+, asyncio, aiohttp, Click, uv, Ruff, Pyright, pytest+asyncio) | All wired. |
+| §4 Secret storage (HA config flow + `SMART_PLACE_TOKEN` env + log redaction + gitignore) | Config flow uses `CONF_TOKEN`; CLI reads env; `install_token_redaction_filter` scrubs logs; `.env` and `access-url-secret*` gitignored. |
+| §5 Testing strategy (3 layers: pure protocol + replay client + live smoke) | Layers 1 & 2 in pytest (59 passing); layer 3 demonstrated end-to-end above. |
+| §6.1 Lifecycle (`entry.async_create_background_task`) | Used in `custom_components/smart_place/__init__.py`. |
+| §6.2 Connection loop steps 1-9 | Implemented in `_run_live_once`; verified by live run. |
+| §6.3 No DataUpdateCoordinator | Confirmed — only WS path. |
+| §6.4 No add-on | Confirmed — integration only. |
+| §7 Phase 0/1/2/3 | All done. |
+| §8 Decisions | All implemented. |
+| §9 Open questions | Q1 (route variants) — parser supports both; Q2 (state coverage) — confirmed by Phase 3 that bootstrap reads alone don't enumerate devices; Q3-Q5 left for Phase 4. |
+
+### Things explicitly NOT in v1 (per DESIGN §7 "Out of scope")
+
+- Device-type mapping (light / cover / climate) — Phase 4.
+- Wiring control commands to HA entity write handlers — Phase 4.
+- HACS publication.
+- Multi-installation support.
+- Localisation beyond English.
+- HA-level integration tests (`pytest-homeassistant-custom-component`).
+- Scripted devcontainer harness.
