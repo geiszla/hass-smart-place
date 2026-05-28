@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Smart Place",
+        "description": "Paste the long secret URL token from your Smart Place app URL. The token is everything after `?` in `https://spr1.smartplace.ch:8770/Start5?<token>`.",
+        "data": {
+          "token": "Smart Place URL token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Smart Place",
+        "description": "Your Smart Place token has been rejected. Paste a fresh token from the app URL.",
+        "data": {
+          "token": "Smart Place URL token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The token was rejected by Smart Place.",
+      "cannot_connect": "Could not reach the Smart Place server. Check connectivity and try again.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This Smart Place installation is already configured."
+    }
+  }
+}

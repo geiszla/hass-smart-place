@@ -44,7 +44,12 @@ dev = [
 ]
 
 [tool.pyright]
-include = ["smart_place_client", "custom_components/smart_place", "tests"]
+# custom_components/smart_place is intentionally NOT type-checked here —
+# its HA-specific call surface needs `homeassistant` installed to resolve,
+# and HA isn't a runtime dependency for the standalone client or for our
+# tests. The HA integration is verified by hassfest CI and by manual
+# installation against the developer's own HA instance (DESIGN §7 Phase 2).
+include = ["smart_place_client", "tests"]
 exclude = [
     "**/.*",
     "**/__pycache__",
@@ -52,6 +57,7 @@ exclude = [
     "**/node_modules",
     "**/venv",
     "**/.venv",
+    "custom_components",
 ]
 typeCheckingMode = "basic"
 reportUnusedImport = "none"

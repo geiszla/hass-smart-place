@@ -247,3 +247,50 @@ Tests added (8 new, 55 total):
   blocked; tests patch on the class instead. Functionally equivalent;
   worth flagging because slots dataclasses subtly limit mocking.
 
+## Phase 2 — Home Assistant integration wrapper
+
+**Status:** done (manual HA install verification deferred to user).
+
+Files:
+
+- `custom_components/smart_place/const.py` — `DOMAIN`, `CONF_TOKEN`,
+  `CONFIG_FLOW_TIMEOUT`.
+- `custom_components/smart_place/__init__.py` — `async_setup_entry`
+  builds the client via `SmartPlaceClient.live(token=..., session=...,
+  on_reauth=...)`, stores it on `hass.data[DOMAIN][entry_id]` in a
+  `SmartPlaceData` dataclass, subscribes a single fan-out listener
+  that wakes all entities on each frame, schedules `client.run()` via
+  `entry.async_create_background_task` (HA owns the cancel), then
+  forwards setup to `Platform.BINARY_SENSOR`. `async_unload_entry`
+  calls `aclose()` and unloads the platform.
+- `custom_components/smart_place/config_flow.py` — single-step token
+  prompt + reauth flow. `_validate_token` actually opens a live
+  connection bounded by `asyncio.timeout(CONFIG_FLOW_TIMEOUT)` and
+  awaits `wait_for_bootstrap`, so HA only accepts a token that
+  reaches the bootstrap reads. Errors map to `invalid_auth` (auth
+  error), `cannot_connect` (timeout), `unknown` (anything else).
+  Unique ID derived from first 16 chars of token so duplicates abort.
+- `custom_components/smart_place/binary_sensor.py` —
+  `SmartPlaceConnectionSensor` (`device_class=connectivity`,
+  `EntityCategory.DIAGNOSTIC`); `is_on` iff
+  `state.phase in {APP_OPEN, BOOTSTRAPPED, READY}`. Subscribes
+  `async_write_ha_state` to the fan-out listener so every frame
+  refreshes the entity. No polling.
+- `strings.json` + `translations/en.json` — UI copy for the two flow
+  steps and error keys.
+- `manifest.json` — added `@geiszla` as codeowner so hassfest passes.
+
+### Phase 2 divergence
+
+- Pyright was originally going to type-check
+  `custom_components/smart_place/` to catch HA API misuse, but
+  `homeassistant>=2025.10` won't install in this dev env without
+  Python.h headers and the install is heavy. Pyright now excludes
+  `custom_components/`. The HA wrapper is verified by:
+  1. Ruff (syntax / style — no HA needed).
+  2. The hassfest GitHub Action (full HA + integration validation).
+  3. Manual install per DESIGN §7 Phase 2 step 4.
+- Coverage shows 0% on `custom_components/smart_place/*` because no
+  automated tests touch HA in v1; this matches DESIGN §7 "Out of
+  scope for v1" (HA-level tests).
+

@@ -1,7 +1,7 @@
 {
   "domain": "smart_place",
   "name": "Smart Place",
-  "codeowners": [],
+  "codeowners": ["@geiszla"],
   "config_flow": true,
   "documentation": "https://www.smartplace.ch",
   "iot_class": "cloud_push",
