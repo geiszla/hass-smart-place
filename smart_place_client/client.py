@@ -111,9 +111,19 @@ class CapturedFrame:
     text: str
 
     def to_json(self) -> str:
-        """Return a single ndjson line (no trailing newline)."""
+        """Return a single ndjson line (no trailing newline).
+
+        Includes a human-readable ``iso_ts`` alongside the machine-readable
+        unix ``ts`` so the file is scannable by eye. Replay ignores
+        ``iso_ts``; only ``ts`` is used for re-pacing.
+        """
         return json.dumps(
-            {"direction": self.direction, "ts": self.ts, "text": self.text},
+            {
+                "direction": self.direction,
+                "ts": self.ts,
+                "iso_ts": datetime.fromtimestamp(self.ts, tz=UTC).isoformat(timespec="milliseconds"),
+                "text": self.text,
+            },
             ensure_ascii=False,
         )
 
@@ -681,7 +691,8 @@ async def _run_cli(
     """Async body of the CLI: print server frames, send stdin lines."""
 
     async def printer(frame: ServerFrame) -> None:
-        sys.stdout.write(f"<- {frame!r}\n")
+        ts = datetime.now(tz=UTC).isoformat(timespec="milliseconds")
+        sys.stdout.write(f"[{ts}] <- {frame!r}\n")
         sys.stdout.flush()
 
     # Auto-load .env so users don't have to export SMART_PLACE_TOKEN in
