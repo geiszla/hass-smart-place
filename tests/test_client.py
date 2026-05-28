@@ -50,7 +50,7 @@ async def test_replay_walks_dispatch_to_ready_state() -> None:
 
     # Server-direction frames only — client direction lines are skipped
     # so commands are never re-issued during replay. Typed classes use
-    # their dataclass name; NamedFields/Marker use the registry .name.
+    # their dataclass name; NamedFields/NamedValue use the registry .name.
     seen_labels = [f.name if isinstance(f, NamedFields) else type(f).__name__ for f in collected]
     assert seen_labels == ["GoToLinkSSL", "GlobalConfig", "InfoboardWidgets", "UnknownFrame"]
 

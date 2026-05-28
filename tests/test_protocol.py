@@ -25,7 +25,6 @@ from smart_place_client.protocol import (
     GoToLinkOldSystem,
     GoToLinkSSL,
     HostNotOnline,
-    Marker,
     MessageDefinition,
     NamedFields,
     NamedValue,
@@ -128,14 +127,14 @@ def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
 @pytest.mark.parametrize(
     ("text", "sensor", "value"),
     [
-        ("TEMPIST1:26.6", 1, "26.6"),
-        ("TEMPIST3:27.2", 3, "27.2"),
-        ("TEMPIST6:25.8", 6, "25.8"),
-        ("TEMPIST12:21.0", 12, "21.0"),
+        ("TEMPIST1:26.6", 1, 26.6),
+        ("TEMPIST3:27.2", 3, 27.2),
+        ("TEMPIST6:25.8", 6, 25.8),
+        ("TEMPIST12:21.0", 12, 21.0),
     ],
 )
-def test_parse_temperature_generalises_across_sensors(text: str, sensor: int, value: str) -> None:
-    """One Temperature entry handles TEMPIST<N> for any N (live captures 2026-05-28)."""
+def test_parse_temperature_generalises_across_sensors(text: str, sensor: int, value: float) -> None:
+    """One Temperature entry handles TEMPIST<N> for any N; value parses as float."""
     frame = parse_frame(text)
     assert frame == Temperature(sensor=sensor, value=value)
 
@@ -145,6 +144,12 @@ def test_parse_temperature_missing_value_raises() -> None:
     # but the parser's stricter regex requires at least one character after `:`.
     with pytest.raises(ProtocolError):
         parse_frame("TEMPIST3:")
+
+
+def test_parse_temperature_non_float_value_raises() -> None:
+    """Bad numeric values surface as ProtocolError, not raw ValueError."""
+    with pytest.raises(ProtocolError):
+        parse_frame("TEMPIST1:not-a-float")
 
 
 def test_parse_outdoor_temperature() -> None:
@@ -400,14 +405,13 @@ def test_known_messages_entries_have_descriptions_and_examples() -> None:
 def test_known_messages_examples_round_trip_through_parse_frame() -> None:
     """parse_frame(defn.example) yields the named shape declared by the entry.
 
-    Typed classes are identified by their dataclass name; Marker /
-    NamedFields / NamedValue / Marker entries are identified by the
-    parsed frame's ``name`` attribute (the dataclass itself is shared
-    across many registry rows).
+    Typed classes are identified by their dataclass name; NamedFields /
+    NamedValue entries are identified by the parsed frame's ``name``
+    attribute (the dataclass itself is shared across many registry rows).
     """
     for defn in KNOWN_MESSAGES:
         frame = parse_frame(defn.example)
-        if isinstance(frame, Marker | NamedFields | NamedValue):
+        if isinstance(frame, NamedFields | NamedValue):
             actual = frame.name
         else:
             actual = type(frame).__name__

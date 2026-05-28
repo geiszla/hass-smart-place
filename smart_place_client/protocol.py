@@ -106,49 +106,31 @@ class GlobalConfig:
 
 @dataclass(frozen=True, slots=True)
 class Temperature:
-    """Per-sensor indoor temperature push (TEMPIST<sensor>:<value>)."""
+    """Per-sensor indoor temperature push (TEMPIST<sensor>:<value>); value in °C."""
 
     sensor: int
-    value: str
-
-
-@dataclass(frozen=True, slots=True)
-class MediacenterUpdateInfos:
-    """Media/multiroom status update; raw text until field semantics are confirmed."""
-
-    raw: str
-
-
-@dataclass(frozen=True, slots=True)
-class Marker:
-    """Generic placeholder for a no-payload server frame.
-
-    Used for the many ``*Finished`` / list-terminator frames whose entire
-    semantic is "this transmission completed" — the wire shape carries no
-    data, so a typed class per shape would be 25 lines of boilerplate for
-    no field. ``name`` distinguishes them; the registry's
-    :class:`MessageDefinition` carries the description / source.
-
-    Dispatchers can branch on ``isinstance(frame, Marker) and frame.name == "..."``
-    or by mapping ``frame.name`` to a handler table.
-    """
-
-    name: str
+    value: float
 
 
 @dataclass(frozen=True, slots=True)
 class NamedValue:
-    """Generic ``prefix:<value>`` server frame, identified by ``name``.
+    """Generic single-string-value server frame, identified by ``name``.
 
-    Used for sensor / status pushes that carry a single string value.
-    The wire shape is uniform (``prefix:value``) so one class plus a
-    ``name`` discriminator covers any number of registry entries —
-    OutdoorTemperature, WindSpeed, and future similar shapes — without
-    a dedicated dataclass per shape.
+    Covers three shapes — the registry's :class:`MessageDefinition`
+    description tells you which one applies, and ``name`` is the
+    dispatch key:
+
+    - **Markers** (HostNotOnline, ``*Finished``): no payload; ``value``
+      is the empty string.
+    - **Single-value pushes** (OutdoorTemperature, WindSpeed): wire
+      format is ``prefix:value``; ``value`` is the substring after the
+      colon.
+    - **Raw-text fallback** (MediacenterUpdateInfos): wire delimiter
+      unconfirmed; ``value`` stores the entire frame text verbatim.
     """
 
     name: str
-    value: str
+    value: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,8 +166,6 @@ ServerFrame = (
     | HostNotOnline
     | GlobalConfig
     | Temperature
-    | MediacenterUpdateInfos
-    | Marker
     | NamedValue
     | NamedFields
     | UnknownFrame
@@ -278,7 +258,16 @@ def _parse_temperature(text: str) -> Temperature:
     m = _TEMPIST_RE.match(text)
     if m is None:
         raise ProtocolError(f"TEMPIST frame malformed: {text!r}")
-    return Temperature(sensor=int(m.group(1)), value=m.group(2))
+    try:
+        value = float(m.group(2))
+    except ValueError as err:
+        raise ProtocolError(f"TEMPIST value not a float: {m.group(2)!r}") from err
+    return Temperature(sensor=int(m.group(1)), value=value)
+
+
+def _parse_host_not_online(_text: str) -> HostNotOnline:
+    """Return the offline marker; the regex match already verified the wire shape."""
+    return HostNotOnline()
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,9 +304,9 @@ class MessageDefinition:
     example: str
 
 
-def _marker_parser(name: str) -> Callable[[str], Marker]:
-    """Build a parser for a marker frame whose only data is its identifier."""
-    return lambda _text: Marker(name=name)
+def _marker_parser(name: str) -> Callable[[str], NamedValue]:
+    """Build a parser for a no-payload marker — returns ``NamedValue(name, "")``."""
+    return lambda _text: NamedValue(name=name)
 
 
 def _named_value_parser(name: str, prefix: str) -> Callable[[str], NamedValue]:
@@ -332,6 +321,11 @@ def _named_value_parser(name: str, prefix: str) -> Callable[[str], NamedValue]:
         return NamedValue(name=name, value=value)
 
     return parse
+
+
+def _named_raw_parser(name: str) -> Callable[[str], NamedValue]:
+    """Build a parser that stores the full frame text as value (no prefix stripping)."""
+    return lambda text: NamedValue(name=name, value=text)
 
 
 def _named_fields_parser(name: str, prefix: str) -> Callable[[str], NamedFields]:
@@ -349,7 +343,7 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "JavaScript; not yet observed as a live frame."
         ),
         pattern=re.compile(r"^HostNotOnline$"),
-        parse=lambda _text: HostNotOnline(),
+        parse=_parse_host_not_online,
         example="HostNotOnline",
     ),
     MessageDefinition(
@@ -522,11 +516,11 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         name="MediacenterUpdateInfos",
         description=(
             "Media/multiroom playback or service-state update. Wire-frame "
-            "delimiter and per-field semantics unconfirmed — kept as raw text. "
-            "Not yet live-captured."
+            "delimiter and per-field semantics unconfirmed — kept as raw text "
+            "in NamedValue.value. Not yet live-captured."
         ),
         pattern=re.compile(r"^MediacenterUpdateInfos"),
-        parse=lambda text: MediacenterUpdateInfos(raw=text),
+        parse=_named_raw_parser("MediacenterUpdateInfos"),
         example="MediacenterUpdateInfos>1>playing",
     ),
     MessageDefinition(
