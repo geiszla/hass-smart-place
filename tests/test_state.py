@@ -7,7 +7,7 @@ exactly this kind of test.
 
 from __future__ import annotations
 
-from smart_place_client import NamedFields, NamedValue, SmartPlaceState, Temperature, UnknownFrame
+from smart_place_client import NamedFields, NamedValue, SmartPlaceState, Temperature, UnknownFrame, chart_target_status
 
 
 def test_apply_outdoor_temperature_parses_float() -> None:
@@ -162,6 +162,93 @@ def test_apply_lights_central_and_blinds_central_track_groups() -> None:
     state.apply(NamedValue(name="BlindsCentral", value="03", index=2))
     assert state.lights_central == {1: False, 2: True}
     assert state.blinds_central == {1: False, 2: True}
+
+
+def test_apply_humidity_records_per_zone_value() -> None:
+    """``FEUCHTEIST<N>`` folds into ``humidities`` keyed by zone id."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="Humidity", value="42.5", index=3))
+    state.apply(NamedValue(name="Humidity", value="0.0", index=4))
+    assert state.humidities == {3: 42.5, 4: 0.0}
+
+
+def test_apply_humidity_ignores_invalid_float() -> None:
+    """Non-numeric humidity values don't crash — they're dropped silently."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="Humidity", value="--", index=3))
+    assert state.humidities == {}
+
+
+def test_apply_door_intercom_only_ring_means_on() -> None:
+    """``SPRECHEN<N>:ring`` flips the per-intercom ringing flag; other values are off."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="DoorIntercom", value="ring", index=1))
+    state.apply(NamedValue(name="DoorIntercom", value="idle", index=2))
+    assert state.intercom_ringing == {1: True, 2: False}
+
+
+def test_apply_call_info_translates_known_german_labels() -> None:
+    """``CALLINFO<N>`` known German labels translate to English; unknowns pass through."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="CallInfo", value="Wohnungseingang", index=1))
+    state.apply(NamedValue(name="CallInfo", value="Mystery Location", index=2))
+    assert state.intercom_callers == {1: "Apartment entrance", 2: "Mystery Location"}
+
+
+def test_apply_infoboard_content_read_becomes_none() -> None:
+    """``INFOBOARD<n>INHALT:Read`` reads as ``None``; other text passes through."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="InfoboardContent", value="Read", index=2))
+    state.apply(NamedValue(name="InfoboardContent", value="New parcel waiting", index=1))
+    assert state.infoboard_contents == {2: None, 1: "New parcel waiting"}
+
+
+def test_apply_person_info_read_becomes_none() -> None:
+    """``PERSINFO:Read`` clears the banner; other text is kept verbatim."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="PersonInfo", value="Read"))
+    assert state.person_info is None
+    state.apply(NamedValue(name="PersonInfo", value="Family bonus available"))
+    assert state.person_info == "Family bonus available"
+
+
+def test_apply_chart_target_parses_float() -> None:
+    """``CHARTZIEL<id>`` folds into ``chart_targets`` parsed as float."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="ChartTarget", value="300", index=337))
+    state.apply(NamedValue(name="ChartTarget", value="25.5", index=144))
+    state.apply(NamedValue(name="ChartTarget", value="not-a-number", index=49))
+    assert state.chart_targets == {337: 300.0, 144: 25.5}
+
+
+def test_chart_target_status_thresholds_match_spa_traffic_light() -> None:
+    """``chart_target_status`` mirrors the SPA's <60% / 60-90% / ≥90% breakpoints."""
+    assert chart_target_status(0, 100) == "green"
+    assert chart_target_status(59.0, 100) == "green"
+    assert chart_target_status(60.0, 100) == "orange"
+    assert chart_target_status(89.0, 100) == "orange"
+    assert chart_target_status(90.0, 100) == "red"
+    assert chart_target_status(150.0, 100) == "red"
+
+
+def test_chart_target_status_returns_none_when_inputs_missing() -> None:
+    """Without both current and a positive target, the status is unknown (None)."""
+    assert chart_target_status(None, 100) is None
+    assert chart_target_status(50.0, None) is None
+    assert chart_target_status(50.0, 0) is None
+    assert chart_target_status(50.0, -1) is None
+
+
+def test_state_chart_target_status_method_pairs_stand1_with_target() -> None:
+    """``SmartPlaceState.chart_target_status`` reads STAND1 + the target snapshot."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="ChartStand", value="49STAND1:5"))
+    state.apply(NamedValue(name="ChartTarget", value="10", index=49))
+    assert state.chart_target_status(49) == "green"
+    state.apply(NamedValue(name="ChartPointUpdate", value="STAND1:7.5", index=49))
+    assert state.chart_target_status(49) == "orange"
+    state.apply(NamedValue(name="ChartPointUpdate", value="STAND1:9.5", index=49))
+    assert state.chart_target_status(49) == "red"
 
 
 def test_apply_unknown_frame_does_not_raise() -> None:

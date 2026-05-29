@@ -196,6 +196,8 @@ class _LiveSources:
     own_session: bool
     heartbeat: float
     chart_poll_interval: float
+    ping_interval: float
+    ping_timeout: float
 
 
 @dataclass(slots=True)
@@ -234,6 +236,8 @@ class SmartPlaceClient:
     _closing: bool = False
     _bootstrap_done: asyncio.Event = field(default_factory=asyncio.Event)
     _chart_poll_task: asyncio.Task[None] | None = None
+    _heartbeat_task: asyncio.Task[None] | None = None
+    _last_pong: float = 0.0
 
     # ------------------------- constructors -------------------------
 
@@ -247,6 +251,8 @@ class SmartPlaceClient:
         unknown_log: Path | str | None = None,
         heartbeat: float = 30.0,
         chart_poll_interval: float = 60.0,
+        ping_interval: float = 60.0,
+        ping_timeout: float = 30.0,
         handlers: list[FrameHandler] | None = None,
         on_reauth: ReauthCallback | None = None,
         backoff: ExponentialBackoff | None = None,
@@ -268,6 +274,14 @@ class SmartPlaceClient:
                 consumption charts via ``GiveMeChartStandsManuell<id>``.
                 Chart values don't push; this loop keeps them current.
                 Set <=0 to disable polling.
+            ping_interval: how often (seconds) to send the
+                application-level ``Ping`` heartbeat. Mirrors the
+                SPA's ``StartWebsocketTestMain`` cadence (60s). Set
+                <=0 to disable the heartbeat (aiohttp's WS-level
+                ping still runs via ``heartbeat`` above).
+            ping_timeout: deadline (seconds) for a ``PongOK`` reply
+                after the last sent ``Ping``. If the deadline lapses
+                the WS is closed so the reconnect loop fires.
             handlers: optional initial frame handlers.
             on_reauth: coroutine invoked once if the token is rejected;
                 HA wires this to its reauth flow. After it returns,
@@ -282,6 +296,8 @@ class SmartPlaceClient:
             own_session=session is None,
             heartbeat=heartbeat,
             chart_poll_interval=chart_poll_interval,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
         )
         return cls(
             state=SessionState(),
@@ -498,21 +514,21 @@ class SmartPlaceClient:
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
 
             # Bootstrap reads (DESIGN §10):
-            #   1. Commands.InfoboardWidgets -> InfoboardWidgets reply
-            #      (info-board column labels).
-            #   2. Commands.InfoboardContent -> InfoboardEntry rows +
+            #   1. Commands.InfoboardContent -> InfoboardEntry rows +
             #      chart-id hints, terminated by
             #      InfoboardContentFinished. The chart-chase below
             #      then issues Commands.ChartStands(<id>) per chart
             #      id referenced in the rows.
-            #   3. Commands.Mainmenu -> Big config + state dump:
+            #   2. Commands.Mainmenu -> Big config + state dump:
             #      ChartDefinition (chart labels/categories/units),
             #      ClimateConfig (room names — used to label TEMPIST
             #      sensors), LightConfig/BlindConfig/etc., plus the
             #      initial state snapshot (ChartStand STAND1 readings,
             #      group switch states, volumes, scenes). Terminated
-            #      by MainMenuFinished.
-            #   4. Commands.SocketConnected -> Tells the server we're
+            #      by MainMenuFinished — used as the bootstrap-done
+            #      signal because by then every config frame an HA
+            #      entity might need has arrived.
+            #   3. Commands.SocketConnected -> Tells the server we're
             #      ready for the broadcast stream. Server then pushes
             #      the full state snapshot: PACKETBOX<N>, REGEN, HAGEL,
             #      TEMPOUT, WINDGESCHWINDIGKEIT, WINDALARM<N>,
@@ -524,9 +540,10 @@ class SmartPlaceClient:
             #      HAR audit + live probe).
             # TEMPIST<N> (indoor temps) does push spontaneously
             # independent of SocketConnected.
+            # GiveStatusListe is sent first by the SPA but the
+            # server doesn't require it — verified 2026-05-29.
             # GiveMeGlobalConfig is sent first by the SPA but the
             # server doesn't require it — verified 2026-05-28.
-            await self.send(Commands.InfoboardWidgets.encode())
             await self.send(Commands.InfoboardContent.encode())
             await self.send(Commands.Mainmenu.encode())
             await self.send(Commands.SocketConnected.encode())
@@ -535,15 +552,26 @@ class SmartPlaceClient:
                 self._poll_charts(),
                 name="smart_place_chart_poll",
             )
+            # Seed the heartbeat clock so the first deadline doesn't fire
+            # immediately on a freshly-opened socket — we treat connection
+            # open as a fresh liveness signal.
+            loop = asyncio.get_running_loop()
+            self._last_pong = loop.time()
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat(),
+                name="smart_place_heartbeat",
+            )
             try:
                 # Dispatch loop.
                 await self._dispatch_loop(_aiter_ws_text(app_ws))
             finally:
-                if self._chart_poll_task is not None:
-                    self._chart_poll_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await self._chart_poll_task
-                    self._chart_poll_task = None
+                for task_attr in ("_chart_poll_task", "_heartbeat_task"):
+                    task: asyncio.Task[None] | None = getattr(self, task_attr)
+                    if task is not None:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                        setattr(self, task_attr, None)
 
         self._ws = None
 
@@ -596,6 +624,45 @@ class SmartPlaceClient:
             for cid in sorted(self.state.chart_ids):
                 await self.send(Commands.ChartStands.encode(cid))
 
+    async def _heartbeat(self) -> None:
+        """Application-level Ping/PongOK liveness probe.
+
+        Sends ``Ping`` every ``ping_interval`` seconds; if no
+        ``PongOK`` has arrived within ``ping_timeout`` seconds since
+        the last one (or since the connection opened), closes the
+        WebSocket so the reconnect loop in
+        :meth:`_run_live_with_reconnect` fires. Mirrors the SPA's
+        ``StartWebsocketTestMain`` cadence — the aiohttp WS-level
+        ``heartbeat`` covers TCP-keepalive but doesn't catch an
+        application that's gone deaf above the socket layer.
+        """
+        assert self._live is not None
+        interval = self._live.ping_interval
+        timeout = self._live.ping_timeout
+        if interval <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        while not self._closing:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            if self._closing or self._ws is None or self._ws.closed:
+                return
+            if loop.time() - self._last_pong > interval + timeout:
+                _LOGGER.warning(
+                    "no PongOK in %.0fs; closing WS to force reconnect",
+                    loop.time() - self._last_pong,
+                )
+                with contextlib.suppress(Exception):
+                    await self._ws.close()
+                return
+            try:
+                await self.send(Commands.Ping.encode())
+            except (RuntimeError, ConnectionError) as err:
+                _LOGGER.debug("heartbeat send failed (%s); stopping", err)
+                return
+
     async def _poll_charts(self) -> None:
         """Periodically re-issue ``GiveMeChartStandsManuell<id>`` for known charts.
 
@@ -647,9 +714,12 @@ class SmartPlaceClient:
             else:
                 self.state.on_app_frame(frame)
 
-            is_infoboard_widgets = isinstance(frame, NamedFields) and frame.name == "InfoboardWidgets"
-            if not self._bootstrap_done.is_set() and is_infoboard_widgets and self.state.infoboard_widgets is not None:
-                self._bootstrap_done.set()
+            if isinstance(frame, NamedFields) and frame.name == "MainMenuFinished":
+                if not self._bootstrap_done.is_set():
+                    self._bootstrap_done.set()
+
+            if isinstance(frame, NamedFields) and frame.name == "PongOK":
+                self._last_pong = asyncio.get_running_loop().time()
 
             await self._chase_chart_ids(frame)
 

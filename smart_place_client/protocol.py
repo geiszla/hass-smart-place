@@ -100,7 +100,7 @@ class NamedValue:
 class NamedFields:
     """Generic multi-field server frame, identified by ``name``.
 
-    Covers ``prefix>f1>f2>...`` replies (InfoboardWidgets, GlobalGsa)
+    Covers ``prefix>f1>f2>...`` replies (LanguageOptions, GlobalGsa)
     and ``prefix<index>:f1,f2,...`` per-id configs (INHALTLeuchten,
     UnterMenuJalousien, Floorplan). For per-id shapes, ``index`` is
     the trailing-digit suffix; for singletons it is ``None``.
@@ -390,9 +390,12 @@ class SessionState:
     callers can both drive control flow and assert on transitions.
     Invariants:
     - ``route`` is populated once we've parsed a ``GoToLinkSSL`` frame.
-    - ``infoboard_widgets`` is populated by the
-      ``Commands.InfoboardWidgets`` reply (wire ``GiveStatusListe`` →
-      ``StatusListe>...``) and signals BOOTSTRAPPED.
+    - ``main_menu_loaded`` flips ``True`` when the ``MainMenuFinished``
+      marker arrives (wire: ``GiveMeMainMenuFinished``). By that
+      point the server has delivered every ``ChartDefinition`` /
+      ``ClimateConfig`` / ``LightConfig`` / ... config frame for the
+      installation, so the snapshot is rich enough to enumerate HA
+      entities. The marker signals BOOTSTRAPPED.
     - ``global_config`` is populated opportunistically if the client
       chose to send ``GiveMeGlobalConfig`` (the bootstrap doesn't
       require it; see ``client.py`` notes).
@@ -404,7 +407,7 @@ class SessionState:
     phase: SessionPhase = SessionPhase.DISCOVERY_OPEN
     route: GoToLinkSSL | None = None
     global_config: GlobalConfig | None = None
-    infoboard_widgets: NamedFields | None = None  # name == "InfoboardWidgets"
+    main_menu_loaded: bool = False
     chart_ids: set[int] = field(default_factory=set)
     chart_units: dict[int, str] = field(default_factory=dict)
 
@@ -434,18 +437,18 @@ class SessionState:
     def on_app_frame(self, frame: ServerFrame) -> SessionPhase:
         """Apply a frame received on the app WS.
 
-        InfoboardWidgets advances the phase; anything else (including
-        the opportunistic GlobalConfig) is stashed but does not gate
-        progress.
+        ``MainMenuFinished`` advances the phase to ``BOOTSTRAPPED``;
+        anything else (including the opportunistic ``GlobalConfig``)
+        is stashed but does not gate progress.
         """
         if isinstance(frame, GlobalConfig):
             self.global_config = frame
-        elif isinstance(frame, NamedFields) and frame.name == "InfoboardWidgets":
-            self.infoboard_widgets = frame
+        elif isinstance(frame, NamedFields) and frame.name == "MainMenuFinished":
+            self.main_menu_loaded = True
 
-        if self.phase is SessionPhase.APP_OPEN and self.infoboard_widgets:
+        if self.phase is SessionPhase.APP_OPEN and self.main_menu_loaded:
             self.phase = SessionPhase.BOOTSTRAPPED
-        elif self.phase is SessionPhase.BOOTSTRAPPED and self.infoboard_widgets:
+        elif self.phase is SessionPhase.BOOTSTRAPPED and self.main_menu_loaded:
             self.phase = SessionPhase.READY
         return self.phase
 

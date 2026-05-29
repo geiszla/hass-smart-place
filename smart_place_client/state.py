@@ -49,6 +49,52 @@ _CHART_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
 # zones with this trailing "heating" / "Heizung" tag.
 _CLIMATE_ROOM_TAIL_RE = re.compile(r"\s+(?:heating|Heizung)\s*$", re.IGNORECASE)
 
+# Intercom CALLINFO values are German location labels for the building's
+# call points (front door, mailbox, ...). Only tokens we've observed
+# live; unknown labels pass through unchanged.
+_CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
+    "Wohnungseingang": "Apartment entrance",
+    "Haupteingang": "Main entrance",
+    "Hauseingang": "Building entrance",
+    "Eingang": "Entrance",
+    "Briefkasten": "Mailbox",
+    "Garageneingang": "Garage entrance",
+    "Garagentor": "Garage door",
+    "Garage": "Garage",
+    "Tiefgarage": "Underground garage",
+}
+
+# SPA chart traffic-light thresholds — taken verbatim from javallg.js
+# (~lines 953-973). Below ``ORANGE_THRESHOLD`` (60% of target) the SPA
+# paints the value green; below ``RED_THRESHOLD`` (90%) orange; at or
+# above the target (100%) red. The SPA actually splits 0-60% across
+# six sub-buckets for fill visuals, but the colour switches only at
+# these three breakpoints, so we collapse to three statuses.
+_CHART_ORANGE_THRESHOLD: float = 0.6
+_CHART_RED_THRESHOLD: float = 0.9
+
+
+def _translate_caller_label(raw: str) -> str:
+    """Translate a CALLINFO location label to English where known."""
+    return _CALLER_INFO_GERMAN_TO_ENGLISH.get(raw, raw)
+
+
+def chart_target_status(current: float | None, target: float | None) -> str | None:
+    """Classify a chart reading against its target — ``green``/``orange``/``red``.
+
+    Mirrors the SPA's own thresholds: <60% green, 60-90% orange, ≥90%
+    red. Returns ``None`` if either value is missing or the target is
+    non-positive (no meaningful ratio).
+    """
+    if current is None or target is None or target <= 0:
+        return None
+    ratio = current / target
+    if ratio >= _CHART_RED_THRESHOLD:
+        return "red"
+    if ratio >= _CHART_ORANGE_THRESHOLD:
+        return "orange"
+    return "green"
+
 
 def _clean_chart_label(raw: str) -> str:
     """Return an HA-friendly chart label.
@@ -150,6 +196,29 @@ class SmartPlaceState:
     # else = at least one closed. The SPA's semantics here aren't
     # fully documented; revisit if the user reports false positives.
     blinds_central: dict[int, bool] = field(default_factory=dict)
+    # ``FEUCHTEIST<N>`` indoor humidity in % per climate-zone id —
+    # paired 1:1 with ``Klimas<N>`` zones the same way as
+    # ``indoor_temperatures``.
+    humidities: dict[int, float] = field(default_factory=dict)
+    # ``SPRECHEN<N>`` door-intercom ring state. ``True`` while the
+    # SPA-side value is ``"ring"`` (incoming call); any other value
+    # reads as idle.
+    intercom_ringing: dict[int, bool] = field(default_factory=dict)
+    # ``CALLINFO<N>`` caller location label (translated to English
+    # via ``_CALLER_INFO_GERMAN_TO_ENGLISH``).
+    intercom_callers: dict[int, str] = field(default_factory=dict)
+    # ``INFOBOARD<N>INHALT`` slot content. ``None`` when the SPA sent
+    # the literal ``Read`` (= acknowledged / cleared); otherwise the
+    # raw text the SPA would render in the slot.
+    infoboard_contents: dict[int, str | None] = field(default_factory=dict)
+    # ``PERSINFO`` banner text. Same convention as
+    # ``infoboard_contents``: ``None`` when ``Read``, otherwise the
+    # raw banner text the SPA would display.
+    person_info: str | None = None
+    # ``CHARTZIEL<id>`` daily target value per chart id, parsed to
+    # float. Paired with the chart's STAND1 reading to compute the
+    # traffic-light status (see :func:`chart_target_status`).
+    chart_targets: dict[int, float] = field(default_factory=dict)
 
     def apply(self, frame: ServerFrame) -> None:
         """Fold one frame into the snapshot — best-effort, never raises."""
@@ -162,6 +231,14 @@ class SmartPlaceState:
         if isinstance(frame, NamedFields):
             self._apply_named_fields(frame)
             return
+
+    def chart_target_status(self, chart_id: int) -> str | None:
+        """Return ``green``/``orange``/``red`` for chart ``chart_id``'s STAND1 vs target."""
+        chart = self.charts.get(chart_id)
+        if chart is None:
+            return None
+        current = _safe_float(chart.stands.get(1))
+        return chart_target_status(current, self.chart_targets.get(chart_id))
 
     def _apply_named_value(self, frame: NamedValue) -> None:
         name = frame.name
@@ -191,6 +268,22 @@ class SmartPlaceState:
             self.lights_central[frame.index] = _alarm_on(frame.value)
         elif name == "BlindsCentral" and frame.index is not None:
             self.blinds_central[frame.index] = _alarm_on(frame.value)
+        elif name == "Humidity" and frame.index is not None:
+            value = _safe_float(frame.value)
+            if value is not None:
+                self.humidities[frame.index] = value
+        elif name == "DoorIntercom" and frame.index is not None:
+            self.intercom_ringing[frame.index] = frame.value == "ring"
+        elif name == "CallInfo" and frame.index is not None:
+            self.intercom_callers[frame.index] = _translate_caller_label(frame.value)
+        elif name == "InfoboardContent" and frame.index is not None:
+            self.infoboard_contents[frame.index] = None if frame.value == "Read" else frame.value
+        elif name == "PersonInfo":
+            self.person_info = None if frame.value == "Read" else frame.value
+        elif name == "ChartTarget" and frame.index is not None:
+            value = _safe_float(frame.value)
+            if value is not None:
+                self.chart_targets[frame.index] = value
 
     def _apply_named_fields(self, frame: NamedFields) -> None:
         if frame.name == "ClimateConfig" and frame.index is not None and frame.fields:
@@ -250,7 +343,9 @@ def _parse_stand_series(series_raw: str) -> int | None:
         return None
 
 
-def _safe_float(raw: str) -> float | None:
+def _safe_float(raw: str | None) -> float | None:
+    if raw is None:
+        return None
     try:
         return float(raw)
     except ValueError:

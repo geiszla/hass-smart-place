@@ -90,12 +90,6 @@ def test_parse_global_config_phase3_observed_shape() -> None:
     )
 
 
-def test_parse_infoboard_widgets_phase3_observed_shape() -> None:
-    """Phase 3 live capture: info-board widget labels (StatusListe wire prefix)."""
-    frame = parse_frame("StatusListe>Wetter>Tagesverbrauch>")
-    assert frame == NamedFields(name="InfoboardWidgets", fields=("Wetter", "Tagesverbrauch", ""))
-
-
 def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
     """Phase 3 capture confirmed routed port is dynamic, not always 8770."""
     frame = parse_frame("GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer")
@@ -163,24 +157,6 @@ def test_parse_wind_speed_missing_value_raises() -> None:
 def test_parse_global_config_wrong_field_count(bad: str) -> None:
     with pytest.raises(ProtocolError):
         parse_frame(bad)
-
-
-def test_parse_infoboard_widgets() -> None:
-    """`StatusListe>1>2>3` wire frame parses as InfoboardWidgets NamedFields."""
-    frame = parse_frame("StatusListe>1>2>3")
-    assert frame == NamedFields(name="InfoboardWidgets", fields=("1", "2", "3"))
-
-
-def test_parse_infoboard_widgets_trailing_empty_field_preserved() -> None:
-    """A trailing `>` produces a trailing empty field (matches Phase 3 capture)."""
-    frame = parse_frame("StatusListe>Wetter>Tagesverbrauch>")
-    assert frame == NamedFields(name="InfoboardWidgets", fields=("Wetter", "Tagesverbrauch", ""))
-
-
-def test_parse_infoboard_widgets_bare_prefix_has_no_fields() -> None:
-    """`StatusListe` alone (no `>`) decodes as an empty tuple of fields."""
-    frame = parse_frame("StatusListe")
-    assert frame == NamedFields(name="InfoboardWidgets", fields=())
 
 
 def test_parse_unknown_frame() -> None:
@@ -298,7 +274,7 @@ def test_session_state_starts_in_discovery_open() -> None:
     assert state.phase is SessionPhase.DISCOVERY_OPEN
     assert state.route is None
     assert state.global_config is None
-    assert state.infoboard_widgets is None
+    assert state.main_menu_loaded is False
 
 
 def test_session_state_routing_transitions_to_routed() -> None:
@@ -320,10 +296,11 @@ def test_session_state_full_happy_path() -> None:
     state.on_app_open()
     assert state.phase is SessionPhase.APP_OPEN
     state.on_app_frame(GlobalConfig("de", "0", "0", "0", "0", "0"))
-    # Still APP_OPEN: need both bootstrap reads.
+    # Still APP_OPEN: needs the MainMenuFinished marker before BOOTSTRAPPED.
     assert state.phase is SessionPhase.APP_OPEN
-    state.on_app_frame(NamedFields(name="InfoboardWidgets", fields=("a", "b", "c")))
+    state.on_app_frame(NamedFields(name="MainMenuFinished", fields=()))
     assert state.phase is SessionPhase.BOOTSTRAPPED
+    assert state.main_menu_loaded is True
 
 
 def test_session_state_close_is_terminal() -> None:

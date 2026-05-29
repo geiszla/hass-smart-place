@@ -29,9 +29,9 @@ def test_known_commands_have_descriptions_and_examples() -> None:
 def test_static_commands_encode_matches_example() -> None:
     """Static commands take no args and their encode() output is the example."""
     static_names = {
-        "InfoboardWidgets",
         "InfoboardContent",
         "Mainmenu",
+        "Ping",
         "OpenGroundFloorEntrance",
         "OpenMailbox",
         "OpenGarageEntrance",
@@ -40,6 +40,11 @@ def test_static_commands_encode_matches_example() -> None:
     for defn in KNOWN_COMMANDS:
         if defn.name in static_names:
             assert defn.encode() == defn.example, f"{defn.name} encode() != example"
+
+
+def test_ping_command_encodes_to_wire_ping() -> None:
+    """The Ping heartbeat command emits the SPA's literal ``Ping`` wire string."""
+    assert Commands.Ping.encode() == "Ping"
 
 
 def test_socket_connected_default_and_override() -> None:
