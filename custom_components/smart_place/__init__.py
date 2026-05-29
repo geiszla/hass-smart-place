@@ -80,19 +80,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def trigger_reauth() -> None:
         entry.async_start_reauth(hass)
 
-    data_holder: list[SmartPlaceData] = []  # captured by the closures below
-
-    def _notify_listeners() -> None:
-        if not data_holder:
-            return
-        for listener in list(data_holder[0].listeners):
-            listener()
-
+    # ``data`` is bound below but the closures only fire after
+    # ``client.run()`` starts — which happens after the binding —
+    # so Python's call-time free-variable lookup resolves cleanly.
     async def trigger_disconnect_notify() -> None:
         # Push the WS drop to every entity so ``available`` flips False
         # for the whole reconnect-backoff gap (otherwise listeners only
         # wake on the next frame, which doesn't arrive until reconnect).
-        _notify_listeners()
+        for listener in list(data.listeners):
+            listener()
 
     client = SmartPlaceClient.live(
         token=token,
@@ -103,12 +99,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     data = SmartPlaceData(client=client, state=SmartPlaceState())
-    data_holder.append(data)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
     async def _on_frame(frame: ServerFrame) -> None:
         data.state.apply(frame)
-        _notify_listeners()
+        for listener in list(data.listeners):
+            listener()
 
     client.subscribe(_on_frame)
 
