@@ -4,7 +4,7 @@ Has no homeassistant dependency; safe to import from a notebook or CLI.
 The HA integration in custom_components/smart_place/ is a thin wrapper.
 """
 
-from smart_place_client.client import (
+from .client import (
     CapturedFrame,
     ExponentialBackoff,
     FrameHandler,
@@ -12,9 +12,9 @@ from smart_place_client.client import (
     SmartPlaceClient,
     install_token_redaction_filter,
 )
-from smart_place_client.commands import KNOWN_COMMANDS, CommandDefinition, Commands
-from smart_place_client.messages import KNOWN_MESSAGES, parse_frame
-from smart_place_client.protocol import (
+from .commands import KNOWN_COMMANDS, CommandDefinition, Commands
+from .messages import KNOWN_MESSAGES, parse_frame
+from .protocol import (
     GlobalConfig,
     GoToLinkSSL,
     MessageDefinition,
@@ -25,12 +25,13 @@ from smart_place_client.protocol import (
     SessionPhase,
     SessionState,
     SmartPlaceAuthError,
+    SmartPlaceOfflineError,
     Temperature,
     UnknownFrame,
     encode_frame,
     parse_chart_references,
 )
-from smart_place_client.state import ChartReading, SmartPlaceState, chart_target_status
+from .state import ChartReading, SmartPlaceState, chart_target_status
 
 __all__ = [
     "KNOWN_COMMANDS",
@@ -53,6 +54,7 @@ __all__ = [
     "SessionState",
     "SmartPlaceAuthError",
     "SmartPlaceClient",
+    "SmartPlaceOfflineError",
     "SmartPlaceState",
     "Temperature",
     "UnknownFrame",

@@ -17,15 +17,14 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from smart_place_client import (
+from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
+from .smart_place_client import (
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
     SmartPlaceState,
     install_token_redaction_filter,
 )
-
-from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -17,10 +17,9 @@ from typing import TYPE_CHECKING, Final
 from homeassistant.components.button import ButtonEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from smart_place_client import CommandDefinition, Commands
-
 from . import SmartPlaceData
 from .const import DOMAIN
+from .smart_place_client import CommandDefinition, Commands
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -67,6 +66,11 @@ class SmartPlaceDoorButton(ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    # Disabled by default — pressing one of these opens a real physical
+    # door, mailbox, or garage. Users can enable per-button in the HA
+    # entity registry once they've confirmed the label matches the
+    # door on their property.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, door: _DoorButton) -> None:
         """Wire the door's name, unique_id, and write command."""

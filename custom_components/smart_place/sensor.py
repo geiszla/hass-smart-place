@@ -55,10 +55,9 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from smart_place_client import chart_target_status
-
 from . import SmartPlaceData
 from .const import DOMAIN
+from .smart_place_client import chart_target_status
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry

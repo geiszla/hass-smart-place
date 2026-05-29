@@ -31,16 +31,17 @@ import random
 import re
 import sys
 from types import TracebackType
-from typing import Any, Literal, Self
+from typing import Any, Final, Literal, Self
 
 import aiohttp
 
-from smart_place_client.commands import Commands
-from smart_place_client.messages import parse_frame
-from smart_place_client.protocol import (
+from .commands import Commands
+from .messages import parse_frame
+from .protocol import (
     APP_WS_PATH,
     DISCOVERY_ORIGIN,
     GoToLinkSSL,
+    HostNotOnline,
     NamedFields,
     NamedValue,
     ProtocolError,
@@ -48,6 +49,7 @@ from smart_place_client.protocol import (
     SessionPhase,
     SessionState,
     SmartPlaceAuthError,
+    SmartPlaceOfflineError,
     UnknownFrame,
     discovery_ws_url,
     encode_frame,
@@ -55,6 +57,15 @@ from smart_place_client.protocol import (
 )
 
 _LOGGER = logging.getLogger("smart_place_client")
+
+# Per-step timeout for the discovery → routed-page → app-WS chain. A
+# server that accepts the TCP connection but stalls without sending the
+# first frame would otherwise hang the reconnect loop indefinitely
+# (``aiohttp.WSMessage.receive()`` has no built-in deadline). 30 s is
+# generous for the slowest legitimate handshake observed in captures
+# (~1 s) but short enough that a stalled session recovers in under a
+# minute.
+DISCOVERY_STEP_TIMEOUT: Final[float] = 30.0
 
 # Browser-like UA so the server treats us the same as the SPA.
 # Source: matches what a current desktop browser would send to the SPA.
@@ -64,9 +75,12 @@ USER_AGENT: str = (
 
 # Token-shaped strings the redacting filter scrubs.
 # Smart Place tokens are typically opaque ~100-char URL-safe strings;
-# we redact anything that follows ``TOKEN=`` or ``?<long-string>`` in URLs.
+# we redact anything that follows ``TOKEN=`` or ``?<long-string>`` in
+# URLs. The path alternation covers both the discovery / routed-page
+# paths (``/Start<N>?``) and the post-route iframe (``/Infoboard<N>?``)
+# — both carry token-bearing query strings (token2 in the latter).
 _TOKEN_QUERY = re.compile(r"(TOKEN=)[^&\s\"']+", re.IGNORECASE)
-_URL_TOKEN_TRAILING = re.compile(r"(/Start[0-9]\?)[^\s\"']+")
+_URL_TOKEN_TRAILING = re.compile(r"(/(?:Start|Infoboard)[0-9]?\?)[^\s\"']+")
 
 
 def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
@@ -384,6 +398,15 @@ class SmartPlaceClient:
                     except Exception:
                         _LOGGER.exception("on_reauth callback raised")
                 return
+            except SmartPlaceOfflineError:
+                # Installation offline — still transient; retry. Logged
+                # separately so the user sees the actual cause rather
+                # than a generic ``WS dropped``.
+                delay = self.backoff.next()
+                _LOGGER.info("Smart Place installation offline; retrying in %.1fs", delay)
+                if self._closing:
+                    return
+                await asyncio.sleep(delay)
             except Exception as err:  # noqa: BLE001
                 delay = self.backoff.next()
                 _LOGGER.warning("WS dropped: %s; retrying in %.1fs", err, delay)
@@ -464,11 +487,17 @@ class SmartPlaceClient:
         _LOGGER.info("opening discovery WS: %s", ws_url)
         discovery_headers = {"User-Agent": USER_AGENT, "Origin": DISCOVERY_ORIGIN}
 
-        async with session.ws_connect(
-            ws_url,
-            headers=discovery_headers,
-            heartbeat=self._live.heartbeat,
-        ) as discovery_ws:
+        # Each step gets its own deadline so a stalled server (TCP
+        # accepted but no application frame) doesn't hang the reconnect
+        # loop.
+        async with (
+            asyncio.timeout(DISCOVERY_STEP_TIMEOUT),
+            session.ws_connect(
+                ws_url,
+                headers=discovery_headers,
+                heartbeat=self._live.heartbeat,
+            ) as discovery_ws,
+        ):
             self._ws = discovery_ws
             first_msg = await discovery_ws.receive()
             if first_msg.type is not aiohttp.WSMsgType.TEXT:
@@ -480,6 +509,8 @@ class SmartPlaceClient:
             frame = parse_frame(text)
 
             self.state.on_discovery_frame(frame)
+            if isinstance(frame, HostNotOnline):
+                raise SmartPlaceOfflineError("Smart Place installation is offline")
             if not isinstance(frame, GoToLinkSSL):
                 raise ProtocolError(f"discovery returned non-routing frame {type(frame).__name__}")
 
@@ -490,10 +521,13 @@ class SmartPlaceClient:
 
         # Step 3: fetch routed page as the browser iframe would.
         routed_url = route.routed_https_url
-        async with session.get(
-            routed_url,
-            headers={"User-Agent": USER_AGENT, "Referer": DISCOVERY_ORIGIN},
-        ) as resp:
+        async with (
+            asyncio.timeout(DISCOVERY_STEP_TIMEOUT),
+            session.get(
+                routed_url,
+                headers={"User-Agent": USER_AGENT, "Referer": DISCOVERY_ORIGIN},
+            ) as resp,
+        ):
             if resp.status != 200:
                 raise ProtocolError(
                     f"routed page GET returned {resp.status} for {routed_url}",
@@ -504,11 +538,15 @@ class SmartPlaceClient:
         # Step 4: open the app WS at /UpdatenLS.
         app_ws_url = route.app_ws_url
         app_headers = {"User-Agent": USER_AGENT, "Origin": route.app_ws_origin}
-        async with session.ws_connect(
-            app_ws_url,
-            headers=app_headers,
-            heartbeat=self._live.heartbeat,
-        ) as app_ws:
+        # Deadline only the handshake — the dispatch loop body below
+        # runs for the life of the connection and must not be wrapped.
+        async with asyncio.timeout(DISCOVERY_STEP_TIMEOUT):
+            app_ws = await session.ws_connect(
+                app_ws_url,
+                headers=app_headers,
+                heartbeat=self._live.heartbeat,
+            )
+        try:
             self._ws = app_ws
             self.state.on_app_open()
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
@@ -572,8 +610,13 @@ class SmartPlaceClient:
                         with contextlib.suppress(asyncio.CancelledError):
                             await task
                         setattr(self, task_attr, None)
-
-        self._ws = None
+        finally:
+            # Replaces the auto-cleanup the original ``async with`` did.
+            # Suppressed because we don't care about close-time errors
+            # during reconnect — the loop will reopen a fresh WS.
+            with contextlib.suppress(Exception):
+                await app_ws.close()
+            self._ws = None
 
     # ---------------------- replay-mode internals ---------------------
 

@@ -19,6 +19,7 @@ from smart_place_client.protocol import (
     DISCOVERY_WS_PATH,
     GlobalConfig,
     GoToLinkSSL,
+    HostNotOnline,
     MessageDefinition,
     NamedFields,
     NamedValue,
@@ -94,6 +95,11 @@ def test_parse_go_to_link_ssl_dynamic_routed_port() -> None:
     """Phase 3 capture confirmed routed port is dynamic, not always 8770."""
     frame = parse_frame("GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer")
     assert frame == GoToLinkSSL(host="spr1.smartplace.ch", port=38435, path="/Start1", token2="Leer")
+
+
+def test_parse_host_not_online_yields_typed_frame() -> None:
+    """``HostNotOnline`` parses to the typed frame the client maps to ``SmartPlaceOfflineError``."""
+    assert parse_frame("HostNotOnline") == HostNotOnline()
 
 
 @pytest.mark.parametrize(

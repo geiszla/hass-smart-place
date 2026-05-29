@@ -18,7 +18,8 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from smart_place_client.protocol import (
+from .protocol import (
+    HostNotOnline,
     MessageDefinition,
     ServerFrame,
     UnknownFrame,
@@ -32,6 +33,12 @@ from smart_place_client.protocol import (
     _raw_value_parser,
 )
 
+
+def _parse_host_not_online(_text: str) -> HostNotOnline:
+    """Parse the literal ``HostNotOnline`` discovery reply (no payload)."""
+    return HostNotOnline()
+
+
 KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     # -- Discovery + routing -----------------------------------------------
     MessageDefinition(
@@ -44,6 +51,19 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         pattern=re.compile(r"^GoToLinkSSL:"),
         parse=_parse_go_to_link_ssl,
         example="GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer",
+    ),
+    MessageDefinition(
+        name="HostNotOnline",
+        description=(
+            "Discovery reply: the user's installation is currently offline. "
+            "Format is the literal text ``HostNotOnline`` (no payload). "
+            "Client maps to :class:`SmartPlaceOfflineError` so the reconnect "
+            "loop retries with backoff and the failure surfaces as "
+            "``cannot_connect`` in the config-flow / Connection sensor."
+        ),
+        pattern=re.compile(r"^HostNotOnline$"),
+        parse=_parse_host_not_online,
+        example="HostNotOnline",
     ),
     # -- Bootstrap responses (singletons, sent once per session) -----------
     MessageDefinition(
