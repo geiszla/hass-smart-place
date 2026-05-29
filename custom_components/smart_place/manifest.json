@@ -5,7 +5,7 @@
   "config_flow": true,
   "documentation": "https://www.smartplace.ch",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/geiszla/smart-place-ha/issues",
+  "issue_tracker": "https://github.com/geiszla/hass-smart-place/issues",
   "requirements": [],
   "version": "0.0.1"
 }

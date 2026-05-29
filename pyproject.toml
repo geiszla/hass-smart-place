@@ -1,5 +1,5 @@
 [project]
-name = "smart-place-ha"
+name = "hass-smart-place"
 version = "0.0.0"
 description = "Home Assistant integration for smartplace.ch + standalone client library"
 requires-python = ">=3.13"
