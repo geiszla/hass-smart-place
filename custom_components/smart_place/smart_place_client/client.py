@@ -171,6 +171,7 @@ class CapturedFrame:
 
 FrameHandler = Callable[[ServerFrame], Awaitable[None]]
 ReauthCallback = Callable[[], Awaitable[None]]
+DisconnectCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -260,6 +261,7 @@ class SmartPlaceClient:
     capture_path: Path | None
     unknown_log_path: Path | None = None
     on_reauth: ReauthCallback | None = None
+    on_disconnect: DisconnectCallback | None = None
     backoff: ExponentialBackoff = field(default_factory=ExponentialBackoff)
     _capture_handle: object | None = None
     _unknown_handle: object | None = None
@@ -288,6 +290,7 @@ class SmartPlaceClient:
         ping_timeout: float = 30.0,
         handlers: list[FrameHandler] | None = None,
         on_reauth: ReauthCallback | None = None,
+        on_disconnect: DisconnectCallback | None = None,
         backoff: ExponentialBackoff | None = None,
     ) -> Self:
         """Build a live client that connects to the real smartplace.ch.
@@ -319,6 +322,11 @@ class SmartPlaceClient:
             on_reauth: coroutine invoked once if the token is rejected;
                 HA wires this to its reauth flow. After it returns,
                 :meth:`run` exits (no further reconnect attempts).
+            on_disconnect: coroutine invoked after every WS lifetime
+                ends (drop, error, or graceful close — before the
+                reconnect-backoff sleep). HA wires this to fan
+                listeners out so entity ``available`` flips False
+                during the gap, instead of showing stale values.
             backoff: optional reconnect schedule override (mainly for
                 tests).
         """
@@ -338,6 +346,7 @@ class SmartPlaceClient:
             unknown_log_path=Path(unknown_log) if unknown_log else None,
             capture_path=Path(capture) if capture else None,
             on_reauth=on_reauth,
+            on_disconnect=on_disconnect,
             backoff=backoff or ExponentialBackoff(),
             _live=live,
         )
@@ -486,6 +495,20 @@ class SmartPlaceClient:
         """In-memory log of sends — populated only in replay mode."""
         return self._replay.sent_log if self._replay else []
 
+    @property
+    def connected(self) -> bool:
+        """True iff an app/discovery WS is currently open.
+
+        ``SessionState.phase`` alone is not enough to gate entity
+        availability: when the WS drops, ``_run_live_once`` clears
+        ``self._ws`` but the phase stays at ``READY`` / ``BOOTSTRAPPED``
+        until the next handshake's ``on_app_open`` fires, which can
+        be many backoff seconds away. Pair this with the phase check
+        in the HA layer so entities flip ``available=False`` for the
+        whole gap, not just up to the disconnect.
+        """
+        return self._ws is not None and not self._ws.closed
+
     async def wait_for_bootstrap(self) -> None:
         """Wait until both bootstrap reads have completed.
 
@@ -493,6 +516,50 @@ class SmartPlaceClient:
         caller if you want a deadline.
         """
         await self._bootstrap_done.wait()
+
+    async def connect_and_bootstrap(self) -> None:
+        """One-shot discovery → app WS → bootstrap, with no retries.
+
+        For config-flow validation. ``run()`` swallows
+        :class:`SmartPlaceAuthError` (to trigger the HA reauth flow
+        and exit) and retries :class:`SmartPlaceOfflineError` (so the
+        background task survives transient outages) — both behaviours
+        leave the bootstrap event un-set, so a caller awaiting
+        ``wait_for_bootstrap`` only learns about the failure when its
+        own timeout trips and surfaces it as ``cannot_connect``.
+
+        This method runs exactly one ``_run_live_once`` attempt,
+        races it against the bootstrap event, and propagates the
+        original exception so the caller can map it to the right
+        config-flow error key.
+        """
+        runner = asyncio.create_task(self._run_live_once(), name="smart_place_validate")
+        bootstrap_wait = asyncio.create_task(
+            self._bootstrap_done.wait(),
+            name="smart_place_validate_wait",
+        )
+        try:
+            done, pending = await asyncio.wait(
+                {runner, bootstrap_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            if bootstrap_wait in done:
+                return  # success — caller closes the client
+            # Runner exited first — re-raise whatever it threw, or
+            # surface the unexpected clean exit as a protocol error.
+            exc = runner.exception()
+            if exc is not None:
+                raise exc
+            raise ProtocolError("connection closed before bootstrap completed")
+        finally:
+            if not runner.done():
+                runner.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await runner
 
     # ----------------------- live-mode internals ----------------------
 
@@ -635,6 +702,14 @@ class SmartPlaceClient:
             with contextlib.suppress(Exception):
                 await app_ws.close()
             self._ws = None
+            # Fan the disconnect out so HA flips entity ``available``
+            # immediately — without this, listeners only wake on the
+            # next frame, which doesn't arrive until reconnect.
+            if self.on_disconnect is not None:
+                try:
+                    await self.on_disconnect()
+                except Exception:
+                    _LOGGER.exception("on_disconnect callback raised")
 
     # ---------------------- replay-mode internals ---------------------
 

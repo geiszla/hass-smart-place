@@ -636,6 +636,69 @@ async def test_run_live_exits_when_closing_after_failure(monkeypatch: pytest.Mon
     assert sleeps == []
 
 
+def test_connected_is_false_when_ws_is_none() -> None:
+    """The HA layer pairs ``connected`` with the phase check to flip ``available`` on drop."""
+    client = SmartPlaceClient.live(token="t")
+    assert client.connected is False
+    fake = _FakeAppWs()
+    client._ws = fake  # type: ignore[assignment]
+    assert client.connected is True
+    fake.closed = True
+    assert client.connected is False
+
+
+class _FakeAppWs:
+    """Stand-in for ``aiohttp.ClientWebSocketResponse`` in unit tests."""
+
+    closed: bool = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_connect_and_bootstrap_propagates_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validation path must surface ``SmartPlaceAuthError`` immediately.
+
+    Regression test for: ``run()`` swallows ``SmartPlaceAuthError`` so
+    the config-flow validation timed out as ``cannot_connect`` instead
+    of returning ``invalid_auth``.
+    """
+    client = SmartPlaceClient.live(token="bad")
+
+    async def fake_once(_: SmartPlaceClient) -> None:
+        raise SmartPlaceAuthError("token rejected")
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    with pytest.raises(SmartPlaceAuthError):
+        await client.connect_and_bootstrap()
+
+
+async def test_connect_and_bootstrap_propagates_offline_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validation must surface ``SmartPlaceOfflineError`` instead of the retry loop hiding it."""
+    client = SmartPlaceClient.live(token="t")
+
+    async def fake_once(_: SmartPlaceClient) -> None:
+        raise SmartPlaceOfflineError("installation offline")
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    with pytest.raises(SmartPlaceOfflineError):
+        await client.connect_and_bootstrap()
+
+
+async def test_connect_and_bootstrap_returns_on_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: bootstrap event fires before runner completes → returns cleanly."""
+    client = SmartPlaceClient.live(token="t")
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        # Simulate a successful connect that bootstraps and then runs
+        # the dispatch loop forever (until cancellation).
+        self_._bootstrap_done.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.connect_and_bootstrap()  # should return without raising
+
+
 def test_unknown_frame_dispatched_without_state_advance() -> None:
     """An unknown app frame doesn't break state — it just goes to handlers."""
 

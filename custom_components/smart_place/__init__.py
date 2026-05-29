@@ -61,8 +61,13 @@ class SmartPlaceData:
 
     @property
     def is_healthy(self) -> bool:
-        """Return True iff the WS session is in a phase where state is meaningful."""
-        return self.client.state.phase in HEALTHY_PHASES
+        """Return True iff the WS is open AND the session is in a usable phase.
+
+        Both legs are needed. ``client.connected`` flips False the moment
+        the WS drops; the phase check covers the brief window while a
+        new WS is open but bootstrap hasn't completed yet.
+        """
+        return self.client.connected and self.client.state.phase in HEALTHY_PHASES
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -75,20 +80,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def trigger_reauth() -> None:
         entry.async_start_reauth(hass)
 
+    data_holder: list[SmartPlaceData] = []  # captured by the closures below
+
+    def _notify_listeners() -> None:
+        if not data_holder:
+            return
+        for listener in list(data_holder[0].listeners):
+            listener()
+
+    async def trigger_disconnect_notify() -> None:
+        # Push the WS drop to every entity so ``available`` flips False
+        # for the whole reconnect-backoff gap (otherwise listeners only
+        # wake on the next frame, which doesn't arrive until reconnect).
+        _notify_listeners()
+
     client = SmartPlaceClient.live(
         token=token,
         session=session,
         chart_poll_interval=CHART_POLL_INTERVAL,
         on_reauth=trigger_reauth,
+        on_disconnect=trigger_disconnect_notify,
     )
 
     data = SmartPlaceData(client=client, state=SmartPlaceState())
+    data_holder.append(data)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
     async def _on_frame(frame: ServerFrame) -> None:
         data.state.apply(frame)
-        for listener in list(data.listeners):
-            listener()
+        _notify_listeners()
 
     client.subscribe(_on_frame)
 
