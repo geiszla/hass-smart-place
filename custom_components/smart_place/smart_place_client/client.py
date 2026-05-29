@@ -67,6 +67,14 @@ _LOGGER = logging.getLogger("smart_place_client")
 # minute.
 DISCOVERY_STEP_TIMEOUT: Final[float] = 30.0
 
+# A live-once attempt that ran longer than this counts as a healthy
+# session — the next reconnect resets the backoff to the base delay
+# rather than inheriting the growth from previous flaps. The
+# threshold has to comfortably exceed bootstrap (typically <2 s) so
+# the first short flap doesn't get retroactively classified as
+# stable; 60 s is well above that.
+_STABLE_RUN_THRESHOLD: Final[float] = 60.0
+
 # Browser-like UA so the server treats us the same as the SPA.
 # Source: matches what a current desktop browser would send to the SPA.
 USER_AGENT: str = (
@@ -413,9 +421,9 @@ class SmartPlaceClient:
     async def _run_live_with_reconnect(self) -> None:
         """Live-mode outer loop: reconnect on errors, stop on auth/cancel."""
         while not self._closing:
+            run_start = asyncio.get_running_loop().time()
             try:
                 await self._run_live_once()
-                self.backoff.reset()
             except asyncio.CancelledError:
                 raise
             except SmartPlaceAuthError as err:
@@ -430,17 +438,46 @@ class SmartPlaceClient:
                 # Installation offline — still transient; retry. Logged
                 # separately so the user sees the actual cause rather
                 # than a generic ``WS dropped``.
-                delay = self.backoff.next()
-                _LOGGER.info("Smart Place installation offline; retrying in %.1fs", delay)
                 if self._closing:
                     return
+                delay = self._postrun_delay(run_start)
+                _LOGGER.info("Smart Place installation offline; retrying in %.1fs", delay)
                 await asyncio.sleep(delay)
             except Exception as err:  # noqa: BLE001
-                delay = self.backoff.next()
-                _LOGGER.warning("WS dropped: %s; retrying in %.1fs", err, delay)
                 if self._closing:
                     return
+                delay = self._postrun_delay(run_start)
+                _LOGGER.warning("WS dropped: %s; retrying in %.1fs", err, delay)
                 await asyncio.sleep(delay)
+            else:
+                # ``_run_live_once`` returned normally — the dispatch
+                # loop's ``_aiter_ws_text`` saw a server-sent
+                # CLOSE/CLOSED frame and exited cleanly. Without an
+                # explicit backoff here the outer ``while`` would
+                # immediately spin a fresh reconnect, which tight-loops
+                # against a server that keeps closing the WS (e.g.
+                # session limit, maintenance window, or a server-side
+                # bug).
+                if self._closing:
+                    return
+                delay = self._postrun_delay(run_start)
+                _LOGGER.info("app WS closed by server; reconnecting in %.1fs", delay)
+                await asyncio.sleep(delay)
+
+    def _postrun_delay(self, run_start: float) -> float:
+        """Pick the next reconnect delay; reset backoff after a stable run.
+
+        Called from every branch of ``_run_live_with_reconnect`` that
+        decides to sleep before reconnecting. If the just-finished
+        attempt lasted past ``_STABLE_RUN_THRESHOLD`` it counts as a
+        real session (any prior flap-growth is irrelevant) and the
+        next reconnect starts at the base delay; otherwise the
+        backoff keeps growing so a thrashing server doesn't pin the
+        client into a tight retry loop.
+        """
+        if asyncio.get_running_loop().time() - run_start > _STABLE_RUN_THRESHOLD:
+            self.backoff.reset()
+        return self.backoff.next()
 
     async def send(self, text: str) -> None:
         """Send a text frame to the server (live) or log it (replay).

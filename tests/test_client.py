@@ -545,6 +545,43 @@ def test_exponential_backoff_jitter_within_range() -> None:
     assert 1.0 <= delay < 1.3
 
 
+async def test_run_live_normal_close_applies_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server-sent CLOSE returns from ``_run_live_once`` normally; outer loop must sleep.
+
+    Regression: an earlier draft reset the backoff and re-entered the
+    loop immediately, so a server that consistently CLOSEs would cause
+    a tight reconnect spin. The fix treats normal exit as a disconnect
+    and applies the same backoff sleep as the exception paths.
+    """
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+
+    client = SmartPlaceClient.live(
+        token="t",
+        backoff=ExponentialBackoff(base=2.0, cap=10.0, jitter=0.0, initial=1.0),
+    )
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        # Returns normally — emulates _aiter_ws_text seeing CLOSE/CLOSED.
+        attempts.append(len(attempts))
+        if len(attempts) >= 3:
+            self_._closing = True
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    await client.run()
+    # Three runs all return normally. After attempts 1 and 2 we sleep;
+    # after attempt 3 we exit via _closing without sleeping. Backoff
+    # grows (1s → 2s) because the runs aren't long enough to clear the
+    # stability threshold (loop time doesn't advance with fake_sleep).
+    assert len(attempts) == 3
+    assert sleeps == [1.0, 2.0]
+
+
 async def test_run_live_reconnects_after_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-auth failure triggers backoff sleep, then a successful retry."""
     attempts: list[int] = []
