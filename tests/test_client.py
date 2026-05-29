@@ -20,14 +20,17 @@ from smart_place_client import (
     GoToLinkSSL,
     NamedFields,
     NamedValue,
+    ProtocolError,
     ServerFrame,
     SessionPhase,
     SmartPlaceAuthError,
     SmartPlaceClient,
+    SmartPlaceOfflineError,
     UnknownFrame,
     install_token_redaction_filter,
 )
-from smart_place_client.client import _LOGGER, ExponentialBackoff, _scrub_token
+from smart_place_client.client import _LOGGER, ExponentialBackoff, _interpret_discovery_frame, _scrub_token
+from smart_place_client.protocol import HostNotOnline
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -387,6 +390,34 @@ async def test_replay_realtime_paces_between_server_frames(tmp_path: Path) -> No
         await client.run()
     elapsed = loop.time() - started
     assert elapsed >= 0.04
+
+
+# ------------------ discovery-frame classification --------------
+
+
+def test_interpret_discovery_frame_offline_raises_typed_error() -> None:
+    """``HostNotOnline`` must trip ``SmartPlaceOfflineError`` (not generic ``ProtocolError``).
+
+    Regression test for an ordering bug: an earlier draft applied the
+    state-side discovery check first, which raised ``ProtocolError``
+    on anything non-``GoToLinkSSL`` — including ``HostNotOnline`` —
+    so the reconnect-loop / config-flow paths that catch
+    ``SmartPlaceOfflineError`` never fired.
+    """
+    with pytest.raises(SmartPlaceOfflineError):
+        _interpret_discovery_frame(HostNotOnline())
+
+
+def test_interpret_discovery_frame_passes_route_through() -> None:
+    """The happy path returns the same ``GoToLinkSSL`` instance for downstream use."""
+    route = GoToLinkSSL(host="h", port=1, path=None, token2="t")
+    assert _interpret_discovery_frame(route) is route
+
+
+def test_interpret_discovery_frame_unexpected_raises_protocol_error() -> None:
+    """Anything other than ``HostNotOnline`` / ``GoToLinkSSL`` is a protocol violation."""
+    with pytest.raises(ProtocolError):
+        _interpret_discovery_frame(UnknownFrame(raw="xyz"))
 
 
 # --------------------- token redaction --------------------------
