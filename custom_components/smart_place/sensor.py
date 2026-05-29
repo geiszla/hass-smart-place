@@ -352,9 +352,7 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         if chart is None:
             return {}
         attrs: dict[str, str | float | None] = {
-            f"stand{series}": value
-            for series, value in sorted(chart.stands.items())
-            if series != _DAILY_SERIES
+            f"stand{series}": value for series, value in sorted(chart.stands.items()) if series != _DAILY_SERIES
         }
         target = self._data.state.chart_targets.get(self._chart_id)
         current = _safe_float(chart.stands.get(_DAILY_SERIES))
