@@ -514,9 +514,9 @@ class SmartPlaceClient:
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
 
             # Bootstrap reads (DESIGN §10):
-            #   1. Commands.InfoboardContent -> InfoboardEntry rows +
+            #   1. Commands.StatusContent -> StatusEntry rows +
             #      chart-id hints, terminated by
-            #      InfoboardContentFinished. The chart-chase below
+            #      StatusContentFinished. The chart-chase below
             #      then issues Commands.ChartStands(<id>) per chart
             #      id referenced in the rows.
             #   2. Commands.Mainmenu -> Big config + state dump:
@@ -544,7 +544,7 @@ class SmartPlaceClient:
             # server doesn't require it — verified 2026-05-29.
             # GiveMeGlobalConfig is sent first by the SPA but the
             # server doesn't require it — verified 2026-05-28.
-            await self.send(Commands.InfoboardContent.encode())
+            await self.send(Commands.StatusContent.encode())
             await self.send(Commands.Mainmenu.encode())
             await self.send(Commands.SocketConnected.encode())
 
@@ -594,24 +594,24 @@ class SmartPlaceClient:
 
         Two discovery paths:
 
-        - ``InfoboardEntry`` frames embed ``CHART<id>STAND<series>~
+        - ``StatusEntry`` frames embed ``CHART<id>STAND<series>~
           SPDB-CHARTSSTANDS>unit-<unit>`` references — collected from
-          the ``Commands.InfoboardContent`` reply.
+          the ``Commands.StatusContent`` reply.
         - ``ChartDefinition`` frames (one per chart in the
           installation) arrive during the ``Commands.Mainmenu``
-          response — these surface charts the infoboard doesn't
+          response — these surface charts the status list doesn't
           reference (e.g. per-meter sub-charts when only the SUMME is
           on the panel) and carry the authoritative unit.
 
         Both feed :attr:`SessionState.chart_ids` /
-        ``chart_units``; after either ``InfoboardContentFinished`` or
+        ``chart_units``; after either ``StatusContentFinished`` or
         ``MainMenuFinished``, one ``GiveMeChartStandsManuell<id>`` is
         sent per known chart so the full STAND fan-out arrives. Live
         mode only — replay has no live WS to send on.
         """
         if self._live is None or self._ws is None:
             return
-        if isinstance(frame, NamedValue) and frame.name == "InfoboardEntry":
+        if isinstance(frame, NamedValue) and frame.name == "StatusEntry":
             for chart_id, _series, unit in parse_chart_references(frame.value):
                 self.state.chart_ids.add(chart_id)
                 self.state.chart_units[chart_id] = unit
@@ -620,7 +620,7 @@ class SmartPlaceClient:
             fields = frame.value.split(";")
             if len(fields) > 14 and fields[14]:
                 self.state.chart_units[frame.index] = fields[14]
-        elif isinstance(frame, NamedFields) and frame.name in ("InfoboardContentFinished", "MainMenuFinished"):
+        elif isinstance(frame, NamedFields) and frame.name in ("StatusContentFinished", "MainMenuFinished"):
             for cid in sorted(self.state.chart_ids):
                 await self.send(Commands.ChartStands.encode(cid))
 

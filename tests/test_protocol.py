@@ -337,7 +337,7 @@ def test_known_messages_entries_have_descriptions_and_examples() -> None:
 
 
 def test_parse_chart_references_extracts_id_series_and_unit() -> None:
-    """Real-world InfoboardEntry value yields one ``(chart_id, series, unit)`` tuple."""
+    """Real-world StatusEntry value yields one ``(chart_id, series, unit)`` tuple."""
     raw = "SPtext397>CHART49STAND1~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff"
     assert list(parse_chart_references(raw)) == [(49, 1, "KWh")]
 

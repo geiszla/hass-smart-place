@@ -59,15 +59,15 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         example="EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined",
     ),
     MessageDefinition(
-        name="InfoboardEntry",
+        name="StatusEntry",
         description=(
-            "Per-row info-board content entry. Format: "
+            "Per-row status-list entry. Format: "
             "StatusInhaltListe_<level>_<row>_SPtext<id>>... — internal "
             "structure mixes '_', '>' and '~' delimiters and is opaque "
             "here; value preserves the trailing payload verbatim."
         ),
         pattern=re.compile(r"^StatusInhaltListe_"),
-        parse=_raw_value_parser("InfoboardEntry", "StatusInhaltListe_"),
+        parse=_raw_value_parser("StatusEntry", "StatusInhaltListe_"),
         example="StatusInhaltListe_1_1_SPtext390>TEMPOUT~SPDB-REM>unit-C~>LinkOff",
     ),
     MessageDefinition(
@@ -167,14 +167,14 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         example="GiveMeMainMenuFinished",
     ),
     MessageDefinition(
-        name="InfoboardContentFinished",
+        name="StatusContentFinished",
         description=(
-            "Marker: end of the InfoboardEntry response stream "
-            "(reply to ``Commands.InfoboardContent``). Triggers "
+            "Marker: end of the StatusEntry response stream "
+            "(reply to ``Commands.StatusContent``). Triggers "
             "``GiveMeMainmenu`` in the SPA."
         ),
         pattern=re.compile(r"^StatusInhaltFinishedListe$"),
-        parse=_named_fields_parser("InfoboardContentFinished", "StatusInhaltFinishedListe"),
+        parse=_named_fields_parser("StatusContentFinished", "StatusInhaltFinishedListe"),
         example="StatusInhaltFinishedListe",
     ),
     # -- Weather + environment (singletons) --------------------------------
