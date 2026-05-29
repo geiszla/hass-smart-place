@@ -52,7 +52,7 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfTemperature, UnitOfVolume
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from . import SmartPlaceData
@@ -192,12 +192,21 @@ class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
 
 
 class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
-    """Wind speed reading from the WINDGESCHWINDIGKEIT broadcast."""
+    """Wind speed reading from the WINDGESCHWINDIGKEIT broadcast.
+
+    Unit is unconfirmed — the SPA's wire payload is just a float, no
+    suffix, and the wind UI lives on a panel page we haven't fetched.
+    A previous draft asserted ``km/h`` outright, but a wrong unit
+    silently breaks Energy/Weather dashboards and any automation that
+    compares against thresholds. Until the unit is verified from a
+    live install (or the SPA JS), this is exposed as a unit-less
+    numeric measurement; the user can wrap it in a template helper
+    to add the right unit once they've confirmed it.
+    """
 
     _attr_name = "Wind speed"
-    _attr_device_class = SensorDeviceClass.WIND_SPEED
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfSpeed.KILOMETERS_PER_HOUR
+    _attr_icon = "mdi:weather-windy"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""

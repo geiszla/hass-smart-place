@@ -6,6 +6,7 @@ The HA integration in custom_components/smart_place/ is a thin wrapper.
 
 from .client import (
     CapturedFrame,
+    DisconnectCallback,
     ExponentialBackoff,
     FrameHandler,
     ReauthCallback,
@@ -40,6 +41,7 @@ __all__ = [
     "ChartReading",
     "CommandDefinition",
     "Commands",
+    "DisconnectCallback",
     "ExponentialBackoff",
     "FrameHandler",
     "GlobalConfig",

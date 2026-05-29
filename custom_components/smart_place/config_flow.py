@@ -9,7 +9,6 @@ open the real app channel.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import logging
 from typing import TYPE_CHECKING, Any
@@ -83,10 +82,13 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
             token: str = user_input[CONF_TOKEN].strip()
             error = await self._validate_token(token)
             if error is None:
-                existing = self._get_reauth_entry()
+                # ``data_updates`` is the HA-recommended idiom for
+                # reauth (HA merges into the existing entry data);
+                # ``data=...`` works too but replaces the whole dict
+                # and forces us to remember the spread.
                 return self.async_update_reload_and_abort(
-                    existing,
-                    data={**existing.data, CONF_TOKEN: token},
+                    self._get_reauth_entry(),
+                    data_updates={CONF_TOKEN: token},
                 )
             errors["base"] = error
 
@@ -97,19 +99,21 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _validate_token(self, token: str) -> str | None:
-        """Return None on success, or an error key for the form."""
+        """Return None on success, or an error key for the form.
+
+        Uses the one-shot :meth:`SmartPlaceClient.connect_and_bootstrap`
+        rather than ``run()`` so auth / offline errors propagate
+        immediately instead of being swallowed by the reconnect loop
+        and surfacing as a generic ``cannot_connect`` timeout.
+        """
         session = async_get_clientsession(self.hass)
         client = SmartPlaceClient.live(token=token, session=session)
         try:
             async with asyncio.timeout(CONFIG_FLOW_TIMEOUT):
-                runner = asyncio.create_task(client.run())
                 try:
-                    await client.wait_for_bootstrap()
+                    await client.connect_and_bootstrap()
                 finally:
                     await client.aclose()
-                    runner.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await runner
         except SmartPlaceAuthError:
             return "invalid_auth"
         except SmartPlaceOfflineError:
