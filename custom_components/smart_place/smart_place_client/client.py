@@ -83,6 +83,25 @@ _TOKEN_QUERY = re.compile(r"(TOKEN=)[^&\s\"']+", re.IGNORECASE)
 _URL_TOKEN_TRAILING = re.compile(r"(/(?:Start|Infoboard)[0-9]?\?)[^\s\"']+")
 
 
+def _interpret_discovery_frame(frame: ServerFrame) -> GoToLinkSSL:
+    """Validate the first discovery WS reply and return the route, or raise.
+
+    Split out of ``_run_live_once`` so the disposition order is unit-
+    testable without mocking ``aiohttp.ClientSession``: the offline
+    branch must fire *before* anything that only accepts ``GoToLinkSSL``
+    (otherwise ``HostNotOnline`` would surface as a generic
+    ``ProtocolError`` and the reconnect / config-flow code that
+    catches ``SmartPlaceOfflineError`` would never see it).
+    """
+    if isinstance(frame, HostNotOnline):
+        raise SmartPlaceOfflineError("Smart Place installation is offline")
+    if not isinstance(frame, GoToLinkSSL):
+        raise ProtocolError(
+            f"discovery returned non-routing frame {type(frame).__name__}",
+        )
+    return frame
+
+
 def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
     """Install a log filter that scrubs URL tokens from emitted records.
 
@@ -508,13 +527,12 @@ class SmartPlaceClient:
             self._write_capture(CapturedFrame("server", _now_ts(), text))
             frame = parse_frame(text)
 
-            self.state.on_discovery_frame(frame)
-            if isinstance(frame, HostNotOnline):
-                raise SmartPlaceOfflineError("Smart Place installation is offline")
-            if not isinstance(frame, GoToLinkSSL):
-                raise ProtocolError(f"discovery returned non-routing frame {type(frame).__name__}")
-
-            route = frame
+            # Classify FIRST — ``on_discovery_frame`` only accepts
+            # ``GoToLinkSSL`` and raises ``ProtocolError`` otherwise,
+            # which would mask the typed ``SmartPlaceOfflineError``
+            # the reconnect / config-flow paths catch.
+            route = _interpret_discovery_frame(frame)
+            self.state.on_discovery_frame(route)
 
         self._ws = None
         _LOGGER.info("discovery routed to %s:%s%s", route.host, route.port, route.path or "")
