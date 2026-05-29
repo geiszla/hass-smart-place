@@ -39,7 +39,7 @@ You need to drop `custom_components/smart_place/` into the Home Assistant
 1. If HACS isn't already installed, follow
    [the HACS install guide](https://hacs.xyz/docs/use/download/download/).
 2. In Home Assistant: **HACS → ⋮ → Custom repositories**.
-3. Add `https://github.com/geiszla/smart-place-ha` with category
+3. Add `https://github.com/geiszla/hass-smart-place` with category
    **Integration**.
 4. Find **Smart Place** in the HACS integrations list → **Download**.
 5. Skip to step 3 (restart).
