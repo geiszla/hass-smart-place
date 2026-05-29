@@ -29,7 +29,7 @@ def test_known_commands_have_descriptions_and_examples() -> None:
 def test_static_commands_encode_matches_example() -> None:
     """Static commands take no args and their encode() output is the example."""
     static_names = {
-        "InfoboardContent",
+        "StatusContent",
         "Mainmenu",
         "Ping",
         "OpenGroundFloorEntrance",

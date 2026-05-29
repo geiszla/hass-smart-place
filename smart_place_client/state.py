@@ -125,7 +125,7 @@ def _alarm_on(raw: str) -> bool:
 class ChartReading:
     """Latest values for one consumption chart.
 
-    ``unit`` is the raw token from the ``InfoboardEntry`` reference
+    ``unit`` is the raw token from the ``StatusEntry`` reference
     (``KWh``, ``l``, ...); the sensor platform maps it to a proper HA
     unit/device-class. ``stands`` maps the STAND series id to its
     latest reading (e.g. ``99`` for the cumulative total, lower series

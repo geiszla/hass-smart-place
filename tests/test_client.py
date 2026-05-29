@@ -182,13 +182,13 @@ async def test_live_logs_unknown_frame_to_file(
         assert entry["iso_ts"].startswith("20")
 
 
-async def test_live_chases_chart_ids_after_infoboard_content_finished(
+async def test_live_chases_chart_ids_after_status_content_finished(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """After the InfoboardEntry burst, fetch each referenced chart's stands.
+    """After the StatusEntry burst, fetch each referenced chart's stands.
 
-    Mimics the SPA flow: InfoboardEntry rows embed CHART<id>STAND<series>
-    references; once the InfoboardContentFinished marker arrives, one
+    Mimics the SPA flow: StatusEntry rows embed CHART<id>STAND<series>
+    references; once the StatusContentFinished marker arrives, one
     GiveMeChartStandsManuell<id> per unique chart-id is issued so the
     server emits CHART<id>STAND<n>:<value> push frames. The chase also
     populates ``state.chart_units`` from the embedded ``unit-...`` tag

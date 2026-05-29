@@ -674,9 +674,9 @@ noted; per-id families collapse with a `\d+` regex):
   dump), `Rain`, `Hail`, `BlindsMaintenance`, `PersonInfo`,
   `ApiToken`, `SpotifyToken`, `MediacenterUpdate`,
   `InvoicesPendingCount`, `OffersCount`, `InvoicesCount`,
-  `InfoboardEntry` (`StatusInhaltListe_<lvl>_<row>_SPtext<id>>...`).
+  `StatusEntry` (`StatusInhaltListe_<lvl>_<row>_SPtext<id>>...`).
 - *Markers* (no payload): `PongOK`, `SocketConnectedFinished`,
-  `MainMenuFinished`, `InfoboardContentFinished`. Stored as
+  `MainMenuFinished`, `StatusContentFinished`. Stored as
   `NamedFields(name=..., fields=())`.
 - *Per-id values* (`prefix<N>:value`): `TemperatureSetpoint`,
   `Humidity`, `ClimateInfo`, `SceneState`, `LightState`, `BlindState`,
@@ -721,8 +721,8 @@ Call sites go through the namespace: ``Commands.Mainmenu.encode()``
 for static reads, ``Commands.ChartStands.encode(cid)`` for the
 chart fetch, ``Commands.OpenFrontDoor.encode()`` for door openers.
 Command names mirror the related message names where applicable
-(e.g. ``Commands.InfoboardContent`` is the request that yields
-``InfoboardEntry`` rows; the wire payload ``StatusInhaltListe``
+(e.g. ``Commands.StatusContent`` is the request that yields
+``StatusEntry`` rows; the wire payload ``StatusInhaltListe``
 stays inside the encoder).
 ``KNOWN_COMMANDS`` enumerates the full set for introspection / tests
 / docs.
@@ -748,8 +748,9 @@ HA integration needs, the bootstrap is now:
                               # ← StatusInhaltFinishedListe (terminator)
 → GiveMeMainmenu              # ← Big config + state dump:
                               #     ChartDefinition (labels/categories
-                              #     /units, including non-infoboard
-                              #     charts), ClimateConfig (room names),
+                              #     /units, including charts not
+                              #     referenced by StatusEntry rows),
+                              #     ClimateConfig (room names),
                               #     LightConfig/BlindConfig/SceneConfig,
                               #     plus initial state: ChartStand
                               #     STAND1 readings, LightsCentral,
@@ -767,7 +768,7 @@ HA integration needs, the bootstrap is now:
                               #   SPRECHEN / CALLINFO, SceneState etc.
                               # ← SocketConnectedFinished>...
 
-For each unique CHART<id> discovered via either InfoboardEntry refs
+For each unique CHART<id> discovered via either StatusEntry refs
 or ChartDefinition frames:
 → GiveMeChartStandsManuell<id>  # ← CHART<id>STAND<n>:<value> per series
 
@@ -782,7 +783,7 @@ Heartbeat (runs for the life of the connection):
 So **three static commands** plus **one command per discovered
 chart** at bootstrap, plus the periodic ``Ping`` heartbeat. The SPA
 also sends ``GiveStatusListe`` first (one extra round trip yielding
-just the info-board column titles) and ``GiveMeGlobalConfig`` —
+just the status-list column titles) and ``GiveMeGlobalConfig`` —
 **neither is required by the server** (verified 2026-05-29) so we
 skip them.
 
@@ -796,8 +797,8 @@ earlier notes incorrectly claimed) + a live probe confirming the
 broadcast burst arrives ~70ms after the send.
 
 `_chase_chart_ids` in `client.py` collects chart ids from both
-`InfoboardEntry` and `ChartDefinition` frames and issues the chart
-fetches on either the `InfoboardContentFinished` or
+`StatusEntry` and `ChartDefinition` frames and issues the chart
+fetches on either the `StatusContentFinished` or
 `MainMenuFinished` marker.
 
 ### Write commands (not auto-issued)
@@ -836,7 +837,7 @@ HA reload to surface.
 Chart device-class and native unit are derived from the
 `ChartDefinition` frames that arrive during `GiveMeMainmenu` (the
 authoritative source) with fallback to the `unit-KWh` / `unit-l`
-tokens embedded in `InfoboardEntry` references.
+tokens embedded in `StatusEntry` references.
 
 Chart **state** is the daily `STAND1` reading (today's consumption
 so far). It resets to 0 at midnight; HA treats that as a period

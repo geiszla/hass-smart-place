@@ -65,14 +65,14 @@ class Commands:
     """
 
     # -- Bootstrap reads ---------------------------------------------------
-    InfoboardContent = CommandDefinition(
-        name="InfoboardContent",
+    StatusContent = CommandDefinition(
+        name="StatusContent",
         description=(
-            "Bootstrap read (wire: ``StatusInhaltListe``): ask for per-row "
-            "info-board content. Server replies with one ``InfoboardEntry`` "
+            "Bootstrap read (wire: ``StatusInhaltListe``): ask for the "
+            "status-list schema. Server replies with one ``StatusEntry`` "
             "frame per row (each binding a label to a push frame such as "
             "``TEMPOUT``, ``REGEN``, ``CHART<id>STAND<n>``...), terminated "
-            "by ``InfoboardContentFinished`` (wire: ``StatusInhaltFinishedListe``)."
+            "by ``StatusContentFinished`` (wire: ``StatusInhaltFinishedListe``)."
         ),
         encode=_static("StatusInhaltListe"),
         example="StatusInhaltListe",
@@ -123,7 +123,7 @@ class Commands:
         description=(
             "Fetch every STAND<series>:<value> reading for chart <id>. "
             "Server replies with one ``CHART<id>STAND<series>:<value>`` "
-            "frame per series. Chart ids come from ``InfoboardEntry`` "
+            "frame per series. Chart ids come from ``StatusEntry`` "
             "references and ``ChartDefinition`` frames."
         ),
         encode=lambda chart_id: f"GiveMeChartStandsManuell{chart_id}",

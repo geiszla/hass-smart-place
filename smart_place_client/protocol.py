@@ -214,22 +214,22 @@ def _parse_temperature(text: str) -> Temperature:
     return Temperature(sensor=int(m.group(1)), value=value)
 
 
-_INFOBOARD_CHART_REF_RE = re.compile(
+_STATUS_CHART_REF_RE = re.compile(
     r"CHART(\d+)STAND(\d+)~SPDB-CHARTSSTANDS>unit-([^~]+)",
 )
 
 
-def parse_chart_references(infoboard_entry_value: str) -> Iterator[tuple[int, int, str]]:
-    """Yield ``(chart_id, series, unit)`` tuples from an InfoboardEntry value.
+def parse_chart_references(status_entry_value: str) -> Iterator[tuple[int, int, str]]:
+    """Yield ``(chart_id, series, unit)`` tuples from a StatusEntry value.
 
-    InfoboardEntry rows that bind a label to a consumption chart embed
+    StatusEntry rows that bind a label to a consumption chart embed
     one or more ``CHART<id>STAND<series>~SPDB-CHARTSSTANDS>unit-<unit>``
     references (e.g. ``unit-l`` for water, ``unit-KWh`` for electricity).
     Use this to populate :attr:`SessionState.chart_units` and feed the
     HA layer the device-class/unit hints it needs to expose the chart
     as a sensor.
     """
-    for m in _INFOBOARD_CHART_REF_RE.finditer(infoboard_entry_value):
+    for m in _STATUS_CHART_REF_RE.finditer(status_entry_value):
         yield int(m.group(1)), int(m.group(2)), m.group(3)
 
 
