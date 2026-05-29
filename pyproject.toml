@@ -31,8 +31,18 @@ sp-cli = "smart_place_client.client:_cli_entry"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The library lives inside the HA integration tree so HACS deploys it
+# alongside ``__init__.py`` / ``manifest.json`` — without this, a fresh
+# HACS install would fail with ``ModuleNotFoundError: smart_place_client``.
+# The ``sources`` mapping strips the ``custom_components/smart_place``
+# prefix so wheels (and the editable dev install used by tests + the
+# sp-cli script) still expose the package at the top-level
+# ``smart_place_client`` name.
 [tool.hatch.build.targets.wheel]
-packages = ["smart_place_client"]
+packages = ["custom_components/smart_place/smart_place_client"]
+
+[tool.hatch.build.targets.wheel.sources]
+"custom_components/smart_place/smart_place_client" = "smart_place_client"
 
 [dependency-groups]
 dev = [
@@ -47,12 +57,14 @@ dev = [
 ]
 
 [tool.pyright]
-# custom_components/smart_place is intentionally NOT type-checked here —
-# its HA-specific call surface needs `homeassistant` installed to resolve,
-# and HA isn't a runtime dependency for the standalone client or for our
-# tests. The HA integration is verified by hassfest CI and by manual
-# installation against the developer's own HA instance (DESIGN §7 Phase 2).
-include = ["smart_place_client", "tests"]
+# The standalone library and tests are type-checked here. The HA-facing
+# files in ``custom_components/smart_place/`` need ``homeassistant``
+# installed to resolve, which isn't a runtime dep of the library or tests
+# — hassfest CI + manual install against the dev's HA instance cover them
+# (DESIGN §7 Phase 2). The library now lives nested inside
+# ``custom_components/smart_place/smart_place_client/`` (vendored for
+# HACS), so include only that path and exclude the sibling HA modules.
+include = ["custom_components/smart_place/smart_place_client", "tests"]
 exclude = [
     "**/.*",
     "**/__pycache__",
@@ -60,7 +72,12 @@ exclude = [
     "**/node_modules",
     "**/venv",
     "**/.venv",
-    "custom_components",
+    "custom_components/smart_place/__init__.py",
+    "custom_components/smart_place/binary_sensor.py",
+    "custom_components/smart_place/button.py",
+    "custom_components/smart_place/config_flow.py",
+    "custom_components/smart_place/const.py",
+    "custom_components/smart_place/sensor.py",
 ]
 typeCheckingMode = "basic"
 reportUnusedImport = "none"
@@ -79,7 +96,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["smart_place_client", "custom_components/smart_place"]
+source = ["custom_components/smart_place"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

@@ -425,6 +425,24 @@ def test_log_filter_scrubs_url_start_query() -> None:
     assert "supersecretURLtoken" not in record.getMessage()
 
 
+def test_log_filter_scrubs_url_infoboard_query() -> None:
+    """``/Infoboard<N>?<token2>`` (the routed-iframe URL) must be redacted too."""
+    install_token_redaction_filter()
+    record = _LOGGER.makeRecord(
+        name="smart_place_client",
+        level=logging.DEBUG,
+        fn="x.py",
+        lno=1,
+        msg="routed page https://h:38435/Infoboard1?routedtoken99 -> 200",
+        args=(),
+        exc_info=None,
+    )
+    for filt in _LOGGER.filters:
+        assert filt.filter(record) is True
+    assert "routedtoken99" not in record.getMessage()
+    assert "<REDACTED>" in record.getMessage()
+
+
 def test_scrub_token_helper_idempotent() -> None:
     raw = "GET /Start5?abcdef and TOKEN=xyz123"
     once = _scrub_token(raw)

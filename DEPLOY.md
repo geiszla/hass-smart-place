@@ -65,6 +65,13 @@ You need to drop `custom_components/smart_place/` into the Home Assistant
        button.py
        strings.json
        translations/en.json
+       smart_place_client/         # bundled WebSocket client library
+           __init__.py
+           client.py
+           commands.py
+           messages.py
+           protocol.py
+           state.py
    ```
 
 ### Option C — SSH

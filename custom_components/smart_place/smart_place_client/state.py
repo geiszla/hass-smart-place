@@ -20,10 +20,10 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING
 
-from smart_place_client.protocol import NamedFields, NamedValue, Temperature
+from .protocol import NamedFields, NamedValue, Temperature
 
 if TYPE_CHECKING:
-    from smart_place_client.protocol import ServerFrame
+    from .protocol import ServerFrame
 
 
 # Strip the trailing site code the SPA appends to chart titles, e.g.

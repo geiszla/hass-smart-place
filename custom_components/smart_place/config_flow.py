@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -17,9 +18,20 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import voluptuous as vol
 
-from smart_place_client import SmartPlaceAuthError, SmartPlaceClient
-
 from .const import CONF_TOKEN, CONFIG_FLOW_TIMEOUT, DOMAIN
+from .smart_place_client import SmartPlaceAuthError, SmartPlaceClient, SmartPlaceOfflineError
+
+
+def _token_fingerprint(token: str) -> str:
+    """Return a stable opaque id for the token that doesn't leak its prefix.
+
+    The unique_id ends up on disk in HA's ``core.config_entries`` and
+    surfaces in diagnostics, so using ``token[:16]`` would leak the
+    first quarter of the secret. A truncated SHA-256 is collision-safe
+    for the number of installations one user is realistically going
+    to have and reveals nothing about the original value.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()[:32]
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -40,8 +52,10 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
             error = await self._validate_token(token)
             if error is None:
                 # Single installation per token; key uniqueness keeps the user
-                # from configuring the same Smart Place twice.
-                await self.async_set_unique_id(token[:16])
+                # from configuring the same Smart Place twice. Use a hash so
+                # the unique_id (which persists to disk + surfaces in
+                # diagnostics) doesn't leak any of the secret.
+                await self.async_set_unique_id(_token_fingerprint(token))
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title="Smart Place",
@@ -98,6 +112,9 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
                         await runner
         except SmartPlaceAuthError:
             return "invalid_auth"
+        except SmartPlaceOfflineError:
+            _LOGGER.info("Smart Place installation reported offline during config flow")
+            return "cannot_connect"
         except TimeoutError:
             _LOGGER.warning("Smart Place config flow timed out validating token")
             return "cannot_connect"

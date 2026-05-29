@@ -30,6 +30,31 @@ class SmartPlaceAuthError(ProtocolError):
 
     Token-bearing values are never included in the exception message — the
     log redaction layer assumes nothing here will leak.
+
+    Note: the SPA's wire frame for "invalid token" hasn't been captured
+    live yet — DESIGN.md §3 lists it as JS-observed only. Currently no
+    code path raises this; the catch sites are wired so the reauth flow
+    triggers as soon as we learn the frame and add a parser.
+    """
+
+
+class SmartPlaceOfflineError(ProtocolError):
+    """Raised on a ``HostNotOnline`` discovery reply — the installation is down.
+
+    The reconnect loop treats this like any other transient error
+    (retry with backoff); the typed class just makes the log message
+    informative rather than the generic ``WS dropped: ...``.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class HostNotOnline:
+    """Discovery reply: the user's Smart Place installation is currently offline.
+
+    Wire payload is the literal text ``HostNotOnline`` (no payload).
+    Observed in the Start5 JavaScript; the parser surfaces it as this
+    typed frame so the client can raise :class:`SmartPlaceOfflineError`
+    instead of failing with a generic ``ProtocolError``.
     """
 
 
@@ -126,7 +151,7 @@ class UnknownFrame:
     raw: str
 
 
-ServerFrame = GoToLinkSSL | GlobalConfig | Temperature | NamedValue | NamedFields | UnknownFrame
+ServerFrame = GoToLinkSSL | HostNotOnline | GlobalConfig | Temperature | NamedValue | NamedFields | UnknownFrame
 """Any frame the server may emit, post-parsing."""
 
 
