@@ -32,9 +32,17 @@ class SmartPlaceAuthError(ProtocolError):
     log redaction layer assumes nothing here will leak.
 
     Note: the SPA's wire frame for "invalid token" hasn't been captured
-    live yet — DESIGN.md §3 lists it as JS-observed only. Currently no
-    code path raises this; the catch sites are wired so the reauth flow
-    triggers as soon as we learn the frame and add a parser.
+    live yet. The locally-fetched JS (``javallg.js``, ``settings.js``,
+    ``Start1.html``) doesn't reference it — the auth-reject handler
+    likely lives on the ``Start5`` entry page we haven't fetched. Until
+    a real frame name is in hand, no parser raises this and a bad
+    token surfaces as ``cannot_connect`` (the validation timeout).
+    The catch sites in :meth:`SmartPlaceClient._run_live_with_reconnect`
+    and :func:`custom_components.smart_place.config_flow._validate_token`
+    are wired so the reauth flow triggers as soon as a parser lands.
+    To close the gap: capture an invalid-token attempt (e.g. mangle one
+    character of a real token and run ``sp-cli --live --capture``) and
+    add the resulting frame to ``KNOWN_MESSAGES``.
     """
 
 

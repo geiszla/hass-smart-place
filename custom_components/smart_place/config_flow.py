@@ -32,6 +32,7 @@ def _token_fingerprint(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()[:32]
 
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
