@@ -26,23 +26,31 @@ class ProtocolError(Exception):
 
 
 class SmartPlaceAuthError(ProtocolError):
-    """Raised when the token is rejected or the discovery channel refuses to route.
+    """Raised when the token is rejected — placeholder; see Note.
 
     Token-bearing values are never included in the exception message — the
     log redaction layer assumes nothing here will leak.
 
-    Note: the SPA's wire frame for "invalid token" hasn't been captured
-    live yet. The locally-fetched JS (``javallg.js``, ``settings.js``,
-    ``Start1.html``) doesn't reference it — the auth-reject handler
-    likely lives on the ``Start5`` entry page we haven't fetched. Until
-    a real frame name is in hand, no parser raises this and a bad
-    token surfaces as ``cannot_connect`` (the validation timeout).
+    Note: empirically (probe 2026-05-29 against the real server with a
+    deliberately invalidated token), the SPA's response to a bad token
+    is **silence**: the discovery WS handshake completes, then the
+    server never sends a frame. Three back-to-back attempts each timed
+    out at exactly 30 s with no payload received in either direction.
+    There is no wire frame to parse — so no parser raises this class.
+    A bad token surfaces as ``cannot_connect`` via the discovery-step
+    timeout.
+
     The catch sites in :meth:`SmartPlaceClient._run_live_with_reconnect`
     and :func:`custom_components.smart_place.config_flow._validate_token`
-    are wired so the reauth flow triggers as soon as a parser lands.
-    To close the gap: capture an invalid-token attempt (e.g. mangle one
-    character of a real token and run ``sp-cli --live --capture``) and
-    add the resulting frame to ``KNOWN_MESSAGES``.
+    are wired in case a future SPA build adds a positive auth-reject
+    frame; until then this class is intentionally dormant.
+
+    Distinguishing "bad token" from "server slow" would mean inferring
+    auth-failure from the 30 s silence pattern (valid tokens reply in
+    <1 s per existing captures), but that's a guess — a transient
+    server hiccup would get mis-classified as ``invalid_auth`` and
+    prompt the user to paste a perfectly good token. Leaving the
+    timeout-based fallback alone for now.
     """
 
 
