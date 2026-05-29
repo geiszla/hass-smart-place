@@ -30,7 +30,7 @@ from smart_place_client.protocol import (
     encode_frame,
     parse_chart_references,
 )
-from smart_place_client.state import ChartReading, SmartPlaceState
+from smart_place_client.state import ChartReading, SmartPlaceState, chart_target_status
 
 __all__ = [
     "KNOWN_COMMANDS",
@@ -56,6 +56,7 @@ __all__ = [
     "SmartPlaceState",
     "Temperature",
     "UnknownFrame",
+    "chart_target_status",
     "encode_frame",
     "install_token_redaction_filter",
     "parse_chart_references",

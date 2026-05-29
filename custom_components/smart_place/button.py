@@ -80,6 +80,11 @@ class SmartPlaceDoorButton(ButtonEntity):
             manufacturer="smart PLACE AG",
         )
 
+    @property
+    def available(self) -> bool:
+        """Gray out the button while the WS isn't connected (press would no-op)."""
+        return self._data.is_healthy
+
     async def async_press(self) -> None:
         """Send the door's OEFFNER command on the live WS."""
         try:

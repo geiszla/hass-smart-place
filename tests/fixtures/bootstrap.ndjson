@@ -1,7 +1,7 @@
 {"direction": "server", "ts": 1716908400.0, "text": "GoToLinkSSL:spr1.smartplace.ch:8770/Start1:Leer"}
 {"direction": "client", "ts": 1716908400.5, "text": "GiveMeGlobalConfig"}
 {"direction": "server", "ts": 1716908401.0, "text": "EINSTELLUNGENGLOBAL>de>0>80>1>23:00>30"}
-{"direction": "client", "ts": 1716908401.5, "text": "GiveStatusListe"}
-{"direction": "server", "ts": 1716908402.0, "text": "StatusListe>1>2>3"}
+{"direction": "client", "ts": 1716908401.5, "text": "GiveMeMainmenu"}
+{"direction": "server", "ts": 1716908402.0, "text": "GiveMeMainMenuFinished"}
 {"direction": "server", "ts": 1716908403.0, "text": "leuchte12:75"}
 {"direction": "server", "ts": 1716908404.0, "text": "MysteryFrameXYZ:opaque"}

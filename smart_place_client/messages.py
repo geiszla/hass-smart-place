@@ -59,18 +59,6 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         example="EINSTELLUNGENGLOBAL>2>300>0.8>1>300>undefined",
     ),
     MessageDefinition(
-        name="InfoboardWidgets",
-        description=(
-            "Response to GiveStatusListe — ordered list of info-board widget labels "
-            "the user has enabled (e.g. 'Wetter' for weather, 'Tagesverbrauch' for "
-            "daily energy consumption). Does NOT enumerate devices; per-device "
-            "pushes arrive separately."
-        ),
-        pattern=re.compile(r"^StatusListe(?:>|$)"),
-        parse=_named_fields_parser("InfoboardWidgets", "StatusListe"),
-        example="StatusListe>Wetter>Tagesverbrauch>",
-    ),
-    MessageDefinition(
         name="InfoboardEntry",
         description=(
             "Per-row info-board content entry. Format: "

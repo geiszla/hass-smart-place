@@ -65,17 +65,6 @@ class Commands:
     """
 
     # -- Bootstrap reads ---------------------------------------------------
-    InfoboardWidgets = CommandDefinition(
-        name="InfoboardWidgets",
-        description=(
-            "Bootstrap read (wire: ``GiveStatusListe``): ask for the "
-            "info-board column labels. Server replies with a single "
-            "``StatusListe>...`` frame parsed as the ``InfoboardWidgets`` "
-            "message. Marks the WS as bootstrapped once the reply arrives."
-        ),
-        encode=_static("GiveStatusListe"),
-        example="GiveStatusListe",
-    )
     InfoboardContent = CommandDefinition(
         name="InfoboardContent",
         description=(
@@ -114,6 +103,19 @@ class Commands:
         ),
         encode=lambda n=1: f"SocketConnected:{n}",
         example="SocketConnected:1",
+    )
+    # -- Heartbeat ---------------------------------------------------------
+    Ping = CommandDefinition(
+        name="Ping",
+        description=(
+            "Application-level heartbeat. Server replies with the "
+            "``PongOK`` marker message. The SPA sends ``Ping`` every "
+            "60s and reconnects if no ``PongOK`` arrives in time "
+            "(see ``StartWebsocketTestMain`` in ``javallg.js``); the "
+            "client mirrors that pattern in :meth:`SmartPlaceClient._heartbeat`."
+        ),
+        encode=_static("Ping"),
+        example="Ping",
     )
     # -- Per-id chart fetch (parameterized) --------------------------------
     ChartStands = CommandDefinition(

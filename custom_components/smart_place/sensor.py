@@ -10,15 +10,29 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   aggregated SUMME charts surface — they expose the same data at
   different aggregation levels and consumers can pick whichever
   fits. The sensor state is the daily ``STAND1`` reading; the
-  other STAND series surface as ``stand<N>`` attributes.
+  other STAND series surface as ``stand<N>`` attributes, plus
+  ``target`` / ``target_percent`` / ``target_status`` (green /
+  orange / red — same thresholds the SPA uses) when a
+  ``CHARTZIEL<id>`` value has been observed.
 - One package-box sensor per ``PACKETBOX<N>`` index. The state is
   the package's unlock code while a package is waiting in the box,
   and ``None`` (HA renders as ``unknown`` → effectively "free")
   while the box is empty (``PACKETBOX<N>:Frei``).
-- One indoor temperature sensor per ``TEMPIST<N>`` where the
-  matching ``Klimas<N>`` climate zone exists in the snapshot — the
-  zone's room name labels the sensor. Sensor IDs without a matching
-  zone are skipped (we can't surface a meaningful name for them).
+- One indoor temperature sensor + one humidity sensor per climate
+  zone, paired under a per-zone HA sub-device
+  (``via_device=<entry>``) so they render together in the device
+  card. The zone's room name labels the sub-device. Sensor IDs
+  without a matching ``Klimas<N>`` zone are skipped.
+- One intercom sensor per id seen in ``SPRECHEN<N>`` /
+  ``CALLINFO<N>`` — state is the translated caller location while
+  ringing, ``None`` while idle. The raw ``ringing`` flag and the
+  last-seen ``caller`` surface as attributes.
+- One aggregated ``Infoboard`` sensor — state is the first
+  non-``Read`` slot body in slot-id order; ``None`` when every
+  slot is cleared. Per-slot bodies surface as ``slot<n>``
+  attributes.
+- One ``Personal info`` text sensor for ``PERSINFO`` (same
+  ``Read`` → ``None`` convention).
 - Aggregated rollups computed from the snapshot — ``Active package
   box code`` (first non-Frei code across all boxes) and ``Weather
   alarm`` (single line summarising which alarms are currently on).
@@ -38,8 +52,10 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
 from homeassistant.helpers.device_registry import DeviceInfo
+
+from smart_place_client import chart_target_status
 
 from . import SmartPlaceData
 from .const import DOMAIN
@@ -88,13 +104,21 @@ async def async_setup_entry(
         entities.extend(SmartPlacePackageBoxSensor(entry, data, box_id) for box_id in sorted(state.package_boxes))
     if state.rain_alarm is not None or state.hail_alarm is not None or state.wind_alarms:
         entities.append(SmartPlaceWeatherAlarmSensor(entry, data))
-    # Only expose temp sensors whose climate-zone room name we know;
-    # the SPA pairs ``TEMPIST<N>`` with ``Klimas<N>`` 1:1.
-    entities.extend(
-        SmartPlaceIndoorTemperatureSensor(entry, data, sensor_id)
-        for sensor_id in sorted(state.indoor_temperatures)
-        if sensor_id in state.climate_zones
-    )
+    # Per-zone temperature + humidity, both attached to a per-zone
+    # sub-device so they render together in HA's device card.
+    # ``TEMPIST<N>`` pairs 1:1 with ``Klimas<N>``; humidity follows
+    # the same id convention.
+    for zone_id in sorted(state.climate_zones):
+        if zone_id in state.indoor_temperatures:
+            entities.append(SmartPlaceIndoorTemperatureSensor(entry, data, zone_id))
+        if zone_id in state.humidities:
+            entities.append(SmartPlaceHumiditySensor(entry, data, zone_id))
+    intercom_ids = sorted(set(state.intercom_ringing) | set(state.intercom_callers))
+    entities.extend(SmartPlaceIntercomSensor(entry, data, idx) for idx in intercom_ids)
+    if state.infoboard_contents:
+        entities.append(SmartPlaceInfoboardSensor(entry, data))
+    if state.person_info is not None:
+        entities.append(SmartPlacePersonInfoSensor(entry, data))
     for chart_id in sorted(state.charts):
         chart = state.charts[chart_id]
         unit = chart.unit or data.client.state.chart_units.get(chart_id, "")
@@ -107,6 +131,16 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities)
+
+
+def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> DeviceInfo:
+    """Return a per-zone sub-device that pairs temp + humidity under one card."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{entry.entry_id}_zone_{zone_id}")},
+        name=f"{room} climate",
+        manufacturer="smart PLACE AG",
+        via_device=(DOMAIN, entry.entry_id),
+    )
 
 
 class _SmartPlaceSensorBase(SensorEntity):
@@ -123,6 +157,11 @@ class _SmartPlaceSensorBase(SensorEntity):
             name="Smart Place",
             manufacturer="smart PLACE AG",
         )
+
+    @property
+    def available(self) -> bool:
+        """Mark the entity unavailable while the WS is disconnected."""
+        return self._data.is_healthy
 
     async def async_added_to_hass(self) -> None:
         """Push state updates to HA on every parsed WS frame."""
@@ -175,14 +214,14 @@ class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
 class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
     """Indoor temperature reading from a ``TEMPIST<N>`` broadcast.
 
-    The display name comes from the matching ``Klimas<N>`` climate
-    zone (``state.climate_zones[N]``) and is read via the ``name``
-    property on every state write — so a late-arriving
-    ``ClimateConfig`` updates the entity name without needing an
-    HA reload. Sensors with no matching zone are dropped at
-    platform setup time.
+    Lives under the per-zone ``<room> climate`` sub-device so it
+    pairs with the humidity sensor of the same zone in HA's device
+    card. The display name (``Temperature``) inherits the zone name
+    via ``has_entity_name``.
     """
 
+    _attr_translation_key = "temperature"
+    _attr_name = "Temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -193,21 +232,49 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
         data: SmartPlaceData,
         sensor_id: int,
     ) -> None:
-        """Wire the per-sensor unique_id."""
+        """Wire the per-zone unique_id + sub-device."""
         super().__init__(entry, data)
         self._sensor_id = sensor_id
         self._attr_unique_id = f"{entry.entry_id}_indoor_temperature_{sensor_id}"
-
-    @property
-    def name(self) -> str:
-        """Return ``<room> temperature`` from the current snapshot."""
-        room = self._data.state.climate_zones.get(self._sensor_id) or "Indoor"
-        return f"{room} temperature"
+        room = data.state.climate_zones.get(sensor_id) or f"Zone {sensor_id}"
+        self._attr_device_info = _climate_zone_device_info(entry, room, sensor_id)
 
     @property
     def native_value(self) -> float | None:
         """Return the latest reading for our TEMPIST<N> sensor."""
         return self._data.state.indoor_temperatures.get(self._sensor_id)
+
+
+class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
+    """Indoor humidity reading from a ``FEUCHTEIST<N>`` broadcast.
+
+    Shares the per-zone sub-device with the matching temperature
+    sensor (1:1 by ``Klimas<N>`` id) so HA's device card renders
+    both side by side.
+    """
+
+    _attr_name = "Humidity"
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = PERCENTAGE
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        data: SmartPlaceData,
+        zone_id: int,
+    ) -> None:
+        """Wire the per-zone unique_id + sub-device."""
+        super().__init__(entry, data)
+        self._zone_id = zone_id
+        self._attr_unique_id = f"{entry.entry_id}_humidity_{zone_id}"
+        room = data.state.climate_zones.get(zone_id) or f"Zone {zone_id}"
+        self._attr_device_info = _climate_zone_device_info(entry, room, zone_id)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the latest humidity reading for our zone."""
+        return self._data.state.humidities.get(self._zone_id)
 
 
 class SmartPlaceChartSensor(_SmartPlaceSensorBase):
@@ -261,12 +328,31 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         return _safe_float(chart.stands.get(_DAILY_SERIES))
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
-        """Expose the non-daily STAND series as ``stand<N>`` attributes."""
+    def extra_state_attributes(self) -> dict[str, str | float | None]:
+        """Expose non-daily STAND series + chart-target attributes.
+
+        ``stand<N>`` carries each non-daily STAND series verbatim.
+        ``target`` is the latest ``CHARTZIEL`` value for the chart;
+        ``target_percent`` is current / target as a percentage; and
+        ``target_status`` (``green`` / ``orange`` / ``red``) mirrors
+        the SPA's own traffic-light thresholds (<60% / 60-90% /
+        ≥90%). All three are ``None`` until both the STAND1
+        reading and the target value have been observed.
+        """
         chart = self._data.state.charts.get(self._chart_id)
         if chart is None:
             return {}
-        return {f"stand{series}": value for series, value in sorted(chart.stands.items()) if series != _DAILY_SERIES}
+        attrs: dict[str, str | float | None] = {
+            f"stand{series}": value
+            for series, value in sorted(chart.stands.items())
+            if series != _DAILY_SERIES
+        }
+        target = self._data.state.chart_targets.get(self._chart_id)
+        current = _safe_float(chart.stands.get(_DAILY_SERIES))
+        attrs["target"] = target
+        attrs["target_percent"] = round(current / target * 100, 1) if (target and current is not None) else None
+        attrs["target_status"] = chart_target_status(current, target)
+        return attrs
 
 
 class SmartPlacePackageBoxSensor(_SmartPlaceSensorBase):
@@ -388,6 +474,98 @@ class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):
             "hail": bool(state.hail_alarm),
             "wind_alarm_zones": sorted(zone for zone, on in state.wind_alarms.items() if on),
         }
+
+
+class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
+    """Per-intercom combined ringing + caller view.
+
+    State is the translated caller location (e.g. ``Apartment
+    entrance``) while ``SPRECHEN<n>`` is ``ring``; ``None`` otherwise.
+    The raw ``ringing`` flag and the last-seen ``caller`` (even when
+    idle) surface as attributes so automations can distinguish
+    "rang from X" from "idle".
+    """
+
+    _attr_icon = "mdi:phone-incoming"
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, intercom_id: int) -> None:
+        """Wire the per-intercom name + unique_id."""
+        super().__init__(entry, data)
+        self._intercom_id = intercom_id
+        self._attr_name = f"Intercom {intercom_id}"
+        self._attr_unique_id = f"{entry.entry_id}_intercom_{intercom_id}"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the translated caller while ringing; None when idle."""
+        state = self._data.state
+        if not state.intercom_ringing.get(self._intercom_id):
+            return None
+        return state.intercom_callers.get(self._intercom_id)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | bool | None]:
+        """Expose the raw ringing flag + last-seen caller for automations."""
+        state = self._data.state
+        return {
+            "ringing": bool(state.intercom_ringing.get(self._intercom_id)),
+            "caller": state.intercom_callers.get(self._intercom_id),
+        }
+
+
+class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
+    """Aggregated infoboard view across every ``INFOBOARD<n>INHALT`` slot.
+
+    State is the first non-``Read`` slot's body text in slot-id
+    order (so users see "any active message"); ``None`` when every
+    slot is acknowledged. Per-slot bodies surface as
+    ``slot<n>`` attributes so finer-grained dashboards can still
+    address them individually.
+    """
+
+    _attr_name = "Infoboard"
+    _attr_icon = "mdi:message-text"
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+        """Wire the entry-scoped unique_id."""
+        super().__init__(entry, data)
+        self._attr_unique_id = f"{entry.entry_id}_infoboard"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the first non-``Read`` slot's body, or None when all are cleared."""
+        for _slot_id, body in sorted(self._data.state.infoboard_contents.items()):
+            if body is not None:
+                return body
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Expose every slot's body as ``slot<n>`` so dashboards can target one."""
+        return {f"slot{slot_id}": body for slot_id, body in sorted(self._data.state.infoboard_contents.items())}
+
+
+class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
+    """``PERSINFO`` banner text — None while the SPA reports ``Read``.
+
+    Surfaced primarily as a diagnostic: the semantics of the
+    non-``Read`` payload aren't fully documented yet, and the SPA's
+    own JS just renders the raw text. Tagged as diagnostic so it
+    doesn't clutter the default device card.
+    """
+
+    _attr_name = "Personal info"
+    _attr_icon = "mdi:account-alert"
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+        """Wire the entry-scoped unique_id."""
+        super().__init__(entry, data)
+        self._attr_unique_id = f"{entry.entry_id}_person_info"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the latest PERSINFO text, or None when cleared."""
+        return self._data.state.person_info
 
 
 def _safe_float(raw: str | None) -> float | None:

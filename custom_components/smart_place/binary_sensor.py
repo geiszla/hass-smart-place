@@ -13,7 +13,9 @@ Three families of entities live here:
 
 Package boxes are exposed as ``sensor`` entities (not binary) since
 the SPA's ``PACKETBOX<N>`` payload carries the package's unlock code
-while occupied — see ``sensor.py``.
+while occupied — see ``sensor.py``. Intercoms are likewise exposed
+as ``sensor`` entities because the useful state is the caller
+location (text) — the ringing flag surfaces as an attribute.
 """
 
 from __future__ import annotations
@@ -25,8 +27,6 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 
-from smart_place_client import SessionPhase
-
 from . import SmartPlaceData
 from .const import DOMAIN
 
@@ -34,15 +34,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
-
-_HEALTHY_PHASES = frozenset(
-    {
-        SessionPhase.APP_OPEN,
-        SessionPhase.BOOTSTRAPPED,
-        SessionPhase.READY,
-    },
-)
 
 
 async def async_setup_entry(
@@ -92,6 +83,11 @@ class _SmartPlaceBinarySensorBase(BinarySensorEntity):
             manufacturer="smart PLACE AG",
         )
 
+    @property
+    def available(self) -> bool:
+        """Mark the entity unavailable while the WS is disconnected."""
+        return self._data.is_healthy
+
     async def async_added_to_hass(self) -> None:
         """Push state updates to HA on every parsed WS frame."""
         self._data.listeners.append(self.async_write_ha_state)
@@ -115,9 +111,14 @@ class SmartPlaceConnectionSensor(_SmartPlaceBinarySensorBase):
         self._attr_unique_id = f"{entry.entry_id}_connection"
 
     @property
+    def available(self) -> bool:
+        """Always available — this entity's whole purpose is reporting WS health."""
+        return True
+
+    @property
     def is_on(self) -> bool:
         """Return True iff the session is in a healthy phase."""
-        return self._data.client.state.phase in _HEALTHY_PHASES
+        return self._data.is_healthy
 
 
 class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):

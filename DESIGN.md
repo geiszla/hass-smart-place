@@ -721,8 +721,8 @@ Call sites go through the namespace: ``Commands.Mainmenu.encode()``
 for static reads, ``Commands.ChartStands.encode(cid)`` for the
 chart fetch, ``Commands.OpenFrontDoor.encode()`` for door openers.
 Command names mirror the related message names where applicable
-(e.g. ``Commands.InfoboardWidgets`` is the request that yields the
-``InfoboardWidgets`` reply; the wire payload ``GiveStatusListe``
+(e.g. ``Commands.InfoboardContent`` is the request that yields
+``InfoboardEntry`` rows; the wire payload ``StatusInhaltListe``
 stays inside the encoder).
 ``KNOWN_COMMANDS`` enumerates the full set for introspection / tests
 / docs.
@@ -742,7 +742,6 @@ HA integration needs, the bootstrap is now:
                               # → PACKETBOX<N> arrives later via the
                               #   server's broadcast fan-out.
 
-→ GiveStatusListe             # ← StatusListe>… (info-board columns)
 → StatusInhaltListe           # ← StatusInhaltListe_<lvl>_<row>_… rows,
                               #   each binding a label to a push frame
                               #   (TEMPOUT, REGEN, CHART<id>STAND<n>, …)
@@ -755,7 +754,10 @@ HA integration needs, the bootstrap is now:
                               #     plus initial state: ChartStand
                               #     STAND1 readings, LightsCentral,
                               #     Volume, SceneState.
-                              # ← GiveMeMainMenuFinished (terminator)
+                              # ← GiveMeMainMenuFinished (terminator —
+                              #   also the SessionState BOOTSTRAPPED
+                              #   signal, since every config frame an
+                              #   HA entity might need has arrived).
 → SocketConnected:1           # Triggers the full broadcast burst:
                               # ← PACKETBOX<N>:<state>, REGEN, HAGEL,
                               #   JALWARTUNG, TEMPOUT, WINDGESCHWINDIGKEIT,
@@ -768,11 +770,21 @@ HA integration needs, the bootstrap is now:
 For each unique CHART<id> discovered via either InfoboardEntry refs
 or ChartDefinition frames:
 → GiveMeChartStandsManuell<id>  # ← CHART<id>STAND<n>:<value> per series
+
+Heartbeat (runs for the life of the connection):
+→ Ping                        # every 60s; closes the WS if no PongOK
+                              #   arrives within 30s so the reconnect
+                              #   loop fires (mirrors the SPA's
+                              #   StartWebsocketTestMain cadence).
+                              # ← PongOK
 ```
 
-So **four static commands** plus **one command per discovered
-chart**. The SPA prefixes this with `GiveMeGlobalConfig` but **the
-server doesn't require it** — verified by probe.
+So **three static commands** plus **one command per discovered
+chart** at bootstrap, plus the periodic ``Ping`` heartbeat. The SPA
+also sends ``GiveStatusListe`` first (one extra round trip yielding
+just the info-board column titles) and ``GiveMeGlobalConfig`` —
+**neither is required by the server** (verified 2026-05-29) so we
+skip them.
 
 `SocketConnected:1` is the gate for the full broadcast burst —
 without it the server stays quiet on PACKETBOX / REGEN / HAGEL /
