@@ -11,11 +11,13 @@ Three families of entities live here:
   ``Any light on`` / ``Any blind closed`` rollups
   (``LEUCHTENZENTRAL<N>`` / ``JALZENTRAL<N>``).
 
-Package boxes are exposed as ``sensor`` entities (not binary) since
-the SPA's ``PACKETBOX<N>`` payload carries the package's unlock code
-while occupied — see ``sensor.py``. Intercoms are likewise exposed
-as ``sensor`` entities because the useful state is the caller
-location (text) — the ringing flag surfaces as an attribute.
+Parcel deliveries are exposed as a ``sensor`` entity (not binary):
+the useful state is the unlock PIN (text), surfaced as the ``Package
+delivery PIN`` sensor — see ``sensor.py``. The PIN rides in the
+``PERSINFO`` banner, not in ``PACKETBOX<N>`` (which only ever reported
+``Frei`` in practice). Intercoms are likewise exposed as ``sensor``
+entities because the useful state is the caller location (text) — the
+ringing flag surfaces as an attribute.
 """
 
 from __future__ import annotations

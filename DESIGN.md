@@ -832,7 +832,7 @@ HA reload to surface.
 | `WINDGESCHWINDIGKEIT:<v>` (singleton) | `SmartPlaceWindSpeedSensor` | `WIND_SPEED` | km/h | `MEASUREMENT` |
 | `TEMPIST<N>:<v>` + matching `Klimas<N>` zone | `SmartPlaceIndoorTemperatureSensor` (per N) | `TEMPERATURE` | °C | `MEASUREMENT` |
 | `StandsSingelChartUpdate<id>:STAND1:<v>` | `SmartPlaceChartSensor` (per non-SUMME chart) | `ENERGY` / `WATER` | kWh / L | `TOTAL_INCREASING` |
-| `PACKETBOX<N>:<state>` | `SmartPlacePackageBoxSensor` (per box) | — | — | (text state) |
+| `PERSINFO:<…PIN:N…>` | `SmartPlacePackageDeliveryPinSensor` (singleton) | — | — | (text state) |
 
 Chart device-class and native unit are derived from the
 `ChartDefinition` frames that arrive during `GiveMeMainmenu` (the
@@ -861,23 +861,30 @@ tag stripped — e.g. `Bedroom temperature`,
 `Living room/dining room/kitchen temperature`. Sensors without a
 matching zone are dropped (we can't surface a meaningful name).
 
-Package boxes are sensors (not binary) because the SPA's
-`PACKETBOX<N>` payload is the unlock code while a package is
-waiting (the same code the user sees on the SPA's main panel).
-``Frei`` (German "free") maps to ``None`` so HA leaves the state
-"unknown" until a package actually arrives. ``PACKETBOX<N>`` is a
-broadcast — no read command, so the entity only updates when the
-server pushes a fresh value.
+Parcel deliveries surface as a single `SmartPlacePackageDeliveryPinSensor`
+holding just the unlock PIN. We originally assumed `PACKETBOX<N>:<code>`
+carried the code while a box was occupied, but live observation
+(2026-06-06) disproved it: during a real delivery every `PACKETBOX<N>`
+still reported ``Frei`` and the unlock PIN arrived as free text in a
+`PERSINFO` banner instead — e.g. "Sie haben eine Lieferung in der
+Paketbox. Bitte verwenden Sie den PIN:4489 um diese rauszuholen." The
+sensor pulls the digits after ``PIN:`` out of that banner (see
+`state.package_delivery_pin`) and reads ``None`` (HA "unknown") when no
+delivery is waiting. The full banner text is still available verbatim on
+the separate `Personal info` sensor — the duplication is intentional.
+The `PACKETBOX<N>` frame is kept in `KNOWN_MESSAGES` so it parses
+cleanly (not dumped to `unknown_frames`) but is intentionally mapped to
+no entity — occupancy-only at best, pending more observation. This
+sensor is created unconditionally rather than observation-gated: a
+delivery is transient and rare, so gating on a PIN being present at
+setup would mean the entity almost never exists.
 
 **Aggregated rollups** — HA's `group` integration is for
 user-defined helpers (UI/YAML); custom integrations can't
 programmatically register Group entities, but the idiomatic
 alternative is just a normal sensor that reads the same shared
-snapshot. Two rollups land in this platform:
+snapshot. One rollup lands in this platform:
 
-- `Active package box code` — first non-``Frei`` code across all
-  ``PACKETBOX<N>`` boxes (None when all free). Box id surfaces as
-  the `box` attribute.
 - `Weather alarm` — comma-joined active alarms across `Rain`,
   `Hail`, and per-zone `WindAlarm<N>` (e.g. "Hail, Wind alarm zone
   1"). Per-source booleans + the active wind-alarm zone list land

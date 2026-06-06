@@ -43,12 +43,20 @@ def test_apply_wind_alarm_indexed() -> None:
     assert state.wind_alarms == {1: False, 2: True}
 
 
-def test_apply_package_box_stores_raw_label() -> None:
-    """Package boxes store the raw label so the entity can decide free vs occupied."""
+def test_apply_package_box_is_ignored() -> None:
+    """PackageBox frames parse but are intentionally dropped by ``apply``.
+
+    The unlock PIN rides in PERSINFO, not PACKETBOX (which only ever
+    reported 'Frei' in practice), so the snapshot no longer tracks
+    package boxes. The frame stays in KNOWN_MESSAGES purely so it parses
+    cleanly instead of landing in unknown_frames — see messages.py.
+    """
     state = SmartPlaceState()
+    # Must not raise, and must not invent any package-box state.
     state.apply(NamedValue(name="PackageBox", value="Frei", index=1))
     state.apply(NamedValue(name="PackageBox", value="DHL-7842", index=2))
-    assert state.package_boxes == {1: "Frei", 2: "DHL-7842"}
+    assert not hasattr(state, "package_boxes")
+    assert state.package_delivery_pin is None
 
 
 def test_apply_chart_point_update_collects_stand_series() -> None:
@@ -210,6 +218,34 @@ def test_apply_person_info_read_becomes_none() -> None:
     assert state.person_info is None
     state.apply(NamedValue(name="PersonInfo", value="Family bonus available"))
     assert state.person_info == "Family bonus available"
+
+
+def test_package_delivery_pin_extracted_from_persinfo_banner() -> None:
+    """The parcel PIN is pulled out of the German PERSINFO delivery banner."""
+    state = SmartPlaceState()
+    state.apply(
+        NamedValue(
+            name="PersonInfo",
+            value=("Sie haben eine Lieferung in der Paketbox. Bitte verwenden Sie den PIN:4489 um diese rauszuholen."),
+        ),
+    )
+    assert state.package_delivery_pin == "4489"
+
+
+def test_package_delivery_pin_none_when_banner_cleared() -> None:
+    """``PERSINFO:Read`` clears the banner, so the PIN reads None again."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="PersonInfo", value="Bitte verwenden Sie den PIN:4489"))
+    assert state.package_delivery_pin == "4489"
+    state.apply(NamedValue(name="PersonInfo", value="Read"))
+    assert state.package_delivery_pin is None
+
+
+def test_package_delivery_pin_none_when_banner_has_no_pin() -> None:
+    """A non-delivery PERSINFO banner yields no PIN."""
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="PersonInfo", value="Family bonus available"))
+    assert state.package_delivery_pin is None
 
 
 def test_apply_chart_target_parses_float() -> None:
