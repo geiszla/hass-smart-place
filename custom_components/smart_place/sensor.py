@@ -14,10 +14,11 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   ``target`` / ``target_percent`` / ``target_status`` (green /
   orange / red — same thresholds the SPA uses) when a
   ``CHARTZIEL<id>`` value has been observed.
-- One package-box sensor per ``PACKETBOX<N>`` index. The state is
-  the package's unlock code while a package is waiting in the box,
-  and ``None`` (HA renders as ``unknown`` → effectively "free")
-  while the box is empty (``PACKETBOX<N>:Frei``).
+- One ``Package delivery PIN`` sensor — the unlock PIN for a waiting
+  parcel, extracted from the ``PERSINFO`` delivery banner; ``None``
+  (HA ``unknown``) when no delivery is waiting. The SPA carries the
+  PIN as free text in PERSINFO, *not* in ``PACKETBOX<N>`` (which only
+  ever reported ``Frei`` in practice) — see ``state.py``.
 - One indoor temperature sensor + one humidity sensor per climate
   zone, paired under a per-zone HA sub-device
   (``via_device=<entry>``) so they render together in the device
@@ -33,9 +34,8 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   attributes.
 - One ``Personal info`` text sensor for ``PERSINFO`` (same
   ``Read`` → ``None`` convention).
-- Aggregated rollups computed from the snapshot — ``Active package
-  box code`` (first non-Frei code across all boxes) and ``Weather
-  alarm`` (single line summarising which alarms are currently on).
+- An aggregated ``Weather alarm`` rollup — a single line summarising
+  which alarms are currently on, computed from the shared snapshot.
   HA's built-in ``group`` integration is for user-defined helpers,
   not integrations: the idiomatic pattern is just a normal sensor
   whose ``native_value`` is computed from the shared snapshot.
@@ -98,9 +98,12 @@ async def async_setup_entry(
         entities.append(SmartPlaceOutdoorTemperatureSensor(entry, data))
     if state.wind_speed is not None:
         entities.append(SmartPlaceWindSpeedSensor(entry, data))
-    if state.package_boxes:
-        entities.append(SmartPlaceActivePackageCodeSensor(entry, data))
-        entities.extend(SmartPlacePackageBoxSensor(entry, data, box_id) for box_id in sorted(state.package_boxes))
+    # Always created (not observation-gated): a delivery PIN is
+    # transient and rare, so gating on its presence at setup time would
+    # mean the sensor almost never exists. As a permanent entity it
+    # reads ``unknown`` between deliveries and shows the PIN while a
+    # parcel is waiting.
+    entities.append(SmartPlacePackageDeliveryPinSensor(entry, data))
     if state.rain_alarm is not None or state.hail_alarm is not None or state.wind_alarms:
         entities.append(SmartPlaceWeatherAlarmSensor(entry, data))
     # Per-zone temperature + humidity, both attached to a per-zone
@@ -362,82 +365,34 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         return attrs
 
 
-class SmartPlacePackageBoxSensor(_SmartPlaceSensorBase):
-    """One ``PACKETBOX<N>`` broadcast: shows the package's unlock code.
+class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
+    """Parcel-box unlock PIN, extracted from the ``PERSINFO`` banner.
 
-    The Smart Place SPA pushes ``PACKETBOX<N>:Frei`` (German for
-    "free") while the box is empty, and ``PACKETBOX<N>:<code>`` when
-    a package is waiting — ``<code>`` is the same string the SPA
-    shows the user on the main panel to open the box. We surface the
-    code as the sensor's state, mapping ``Frei`` to ``None`` so HA
-    leaves the state "unknown" until a package actually arrives.
+    A real delivery does *not* populate ``PACKETBOX<N>:<code>`` (the box
+    keeps reporting ``Frei``). Instead the SPA pushes a free-text
+    ``PERSINFO`` banner that contains the PIN, e.g. "Sie haben eine
+    Lieferung in der Paketbox. Bitte verwenden Sie den PIN:4489 um diese
+    rauszuholen." This sensor surfaces just the digits as a clean code,
+    or ``None`` (HA ``unknown``) when no delivery is waiting. The full
+    banner text is also available verbatim on the separate
+    ``Personal info`` sensor — duplication is intentional.
 
-    No polling needed: ``PACKETBOX<N>`` is a broadcast (no read
-    command exists), so the entity only updates when the server
-    pushes a fresh value.
+    No polling needed: ``PERSINFO`` is a broadcast, so the entity only
+    updates when the server pushes a fresh banner.
     """
 
-    _attr_icon = "mdi:package-variant-closed"
-
-    def __init__(
-        self,
-        entry: ConfigEntry,
-        data: SmartPlaceData,
-        box_id: int,
-    ) -> None:
-        """Wire the per-box name + unique_id."""
-        super().__init__(entry, data)
-        self._box_id = box_id
-        self._attr_name = f"Package box {box_id} code"
-        self._attr_unique_id = f"{entry.entry_id}_package_box_{box_id}_code"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return the package unlock code, or None while the box is free."""
-        raw = self._data.state.package_boxes.get(self._box_id)
-        if raw is None or raw == _PACKAGE_BOX_FREE:
-            return None
-        return raw
-
-
-_PACKAGE_BOX_FREE: str = "Frei"
-
-
-class SmartPlaceActivePackageCodeSensor(_SmartPlaceSensorBase):
-    """Aggregated view: the unlock code of the first occupied package box.
-
-    Iterates the per-box snapshot in id order and returns the first
-    non-``Frei`` value. ``None`` while every box is free. The matching
-    box id is exposed as a ``box`` attribute so dashboards can render
-    "Box 2: ABCD-1234" without subscribing to N entities.
-    """
-
-    _attr_name = "Active package box code"
-    _attr_icon = "mdi:package-variant"
+    _attr_icon = "mdi:lock-open-variant"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
-        """Wire the entry-scoped unique_id."""
+        """Wire the entry-scoped name + unique_id."""
         super().__init__(entry, data)
-        self._attr_unique_id = f"{entry.entry_id}_active_package_code"
-
-    def _first_occupied(self) -> tuple[int, str] | None:
-        for box_id in sorted(self._data.state.package_boxes):
-            raw = self._data.state.package_boxes[box_id]
-            if raw and raw != _PACKAGE_BOX_FREE:
-                return box_id, raw
-        return None
+        self._attr_name = "Package delivery PIN"
+        self._attr_unique_id = f"{entry.entry_id}_package_delivery_pin"
 
     @property
     def native_value(self) -> str | None:
-        """Return the first occupied box's code, or None when all boxes are free."""
-        active = self._first_occupied()
-        return active[1] if active else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, int | str]:
-        """Return ``{"box": <id>}`` while occupied; empty when all boxes are free."""
-        active = self._first_occupied()
-        return {"box": active[0]} if active else {}
+        """Return the parcel unlock PIN, or None when no delivery is waiting."""
+        return self._data.state.package_delivery_pin
 
 
 class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):

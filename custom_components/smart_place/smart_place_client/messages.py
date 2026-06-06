@@ -370,6 +370,15 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         parse=_indexed_value_parser("InfoboardSlot", "INFOBOARD"),
         example="INFOBOARD1:01",
     ),
+    # Kept so the frame parses cleanly (not dumped to unknown_frames),
+    # but intentionally NOT mapped to any HA entity. We originally
+    # assumed PACKETBOX<n>:<code> carries the parcel unlock code while a
+    # box is occupied. Live observation disproved that: during a real
+    # delivery every box still reported ``Frei`` and the unlock PIN
+    # arrived as free text in a ``PERSINFO`` banner instead (see
+    # ``state.package_delivery_pin``). So this is occupancy-only at best;
+    # we surface the PIN from PERSINFO and leave this as a documented,
+    # parsed-but-unused signal until we understand the occupancy states.
     MessageDefinition(
         name="PackageBox",
         description="Push: package-box N occupancy. Format: PACKETBOX<n>:<state> ('Frei' = free).",

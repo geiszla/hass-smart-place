@@ -3,8 +3,7 @@
 One :class:`SmartPlaceState` per consumer (HA config entry, CLI session,
 notebook). Feed every parsed :class:`ServerFrame` through
 :meth:`SmartPlaceState.apply` and the snapshot tracks the latest indoor
-temperatures, weather, alarms, package-box occupancy, and per-chart
-STAND series.
+temperatures, weather, alarms, and per-chart STAND series.
 
 Pure value-object: no I/O, no HA imports. Lives in the client library
 rather than ``custom_components/`` so it's importable from notebooks
@@ -72,6 +71,14 @@ _CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
 # these three breakpoints, so we collapse to three statuses.
 _CHART_ORANGE_THRESHOLD: float = 0.6
 _CHART_RED_THRESHOLD: float = 0.9
+
+# Parcel-box unlock PIN, extracted from the free-text ``PERSINFO``
+# banner. Empirically a real delivery does NOT set ``PACKETBOX<N>:<code>``
+# (the box keeps reporting ``Frei``); instead the SPA pushes a German
+# banner like "Sie haben eine Lieferung in der Paketbox. Bitte verwenden
+# Sie den PIN:4489 um diese rauszuholen." and the digits after ``PIN:``
+# are the code that opens the box.
+_PERSINFO_PIN_RE = re.compile(r"PIN:\s*(\d+)", re.IGNORECASE)
 
 
 def _translate_caller_label(raw: str) -> str:
@@ -150,8 +157,8 @@ class SmartPlaceState:
     """Per-entry snapshot of everything we've seen on the WS.
 
     Each field is ``None`` / empty until the first matching frame
-    arrives. Discovery is observation-based: a PACKETBOX<2> push
-    registers box 2 in ``package_boxes``. The integration sets up
+    arrives. Discovery is observation-based: a ``WINDALARM<2>`` push
+    registers zone 2 in ``wind_alarms``. The integration sets up
     entities after ``wait_for_bootstrap`` plus a brief observation
     window (see ``__init__.py``); IDs that arrive after platforms have
     been forwarded won't materialise as entities until HA reloads the
@@ -171,10 +178,6 @@ class SmartPlaceState:
     hail_alarm: bool | None = None
     blinds_maintenance: bool | None = None
     wind_alarms: dict[int, bool] = field(default_factory=dict)
-    # Per ``PACKETBOX<N>:<state>`` broadcasts: value is ``"Frei"`` while the
-    # box is empty, otherwise it is the package's unlock code (the same
-    # string the SPA shows the user on the main panel).
-    package_boxes: dict[int, str] = field(default_factory=dict)
     charts: dict[int, ChartReading] = field(default_factory=dict)
     # ``TEMPIST<N>`` indoor temperature in °C, by sensor id.
     indoor_temperatures: dict[int, float] = field(default_factory=dict)
@@ -213,7 +216,9 @@ class SmartPlaceState:
     infoboard_contents: dict[int, str | None] = field(default_factory=dict)
     # ``PERSINFO`` banner text. Same convention as
     # ``infoboard_contents``: ``None`` when ``Read``, otherwise the
-    # raw banner text the SPA would display.
+    # raw banner text the SPA would display. A parcel delivery rides
+    # in here as free text containing the unlock PIN — see the
+    # ``package_delivery_pin`` property, which pulls just the digits out.
     person_info: str | None = None
     # ``CHARTZIEL<id>`` daily target value per chart id, parsed to
     # float. Paired with the chart's STAND1 reading to compute the
@@ -240,6 +245,22 @@ class SmartPlaceState:
         current = _safe_float(chart.stands.get(1))
         return chart_target_status(current, self.chart_targets.get(chart_id))
 
+    @property
+    def package_delivery_pin(self) -> str | None:
+        """Return the parcel-box unlock PIN, or ``None`` when no delivery is waiting.
+
+        The PIN is carried as free text in the ``PERSINFO`` banner
+        (``person_info``), not in ``PACKETBOX<N>`` — see
+        ``_PERSINFO_PIN_RE``. Returns the digits after ``PIN:`` when the
+        banner is present and matches; ``None`` once the banner clears
+        (``PERSINFO:Read`` sets ``person_info`` back to ``None``) or when
+        the banner is some other notice without a PIN.
+        """
+        if self.person_info is None:
+            return None
+        match = _PERSINFO_PIN_RE.search(self.person_info)
+        return match.group(1) if match else None
+
     def _apply_named_value(self, frame: NamedValue) -> None:
         name = frame.name
         if name == "OutdoorTemperature":
@@ -254,8 +275,6 @@ class SmartPlaceState:
             self.blinds_maintenance = _alarm_on(frame.value)
         elif name == "WindAlarm" and frame.index is not None:
             self.wind_alarms[frame.index] = _alarm_on(frame.value)
-        elif name == "PackageBox" and frame.index is not None:
-            self.package_boxes[frame.index] = frame.value
         elif name == "ChartPointUpdate" and frame.index is not None:
             self._apply_chart_point(frame.index, frame.value)
         elif name == "ChartStand":

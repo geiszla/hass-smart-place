@@ -124,9 +124,9 @@ Open **Settings → Devices & Services → Smart Place**. You should see:
 - A **Connection** diagnostic binary sensor — should read **Connected**.
   This is the one entity that stays *available* even when the WS is down,
   so you can build automations on it (e.g. notify when it flips Off).
-- Sensors for outdoor temperature, wind speed, package boxes, consumption
-  charts, intercom, infoboard, person info — whichever the server pushed
-  during the 2-second observation window after bootstrap.
+- Sensors for outdoor temperature, wind speed, package delivery PIN,
+  consumption charts, intercom, infoboard, person info — whichever the
+  server pushed during the 2-second observation window after bootstrap.
 - Binary sensors for rain / hail / wind alarms, scenes, and the
   `Any light on` / `Any blind closed` group rollups.
 - Four **door** buttons (Front door, Ground floor entrance, Garage
