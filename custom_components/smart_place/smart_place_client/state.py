@@ -67,6 +67,32 @@ _CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
     "Tiefgarage": "Underground garage",
 }
 
+# GlobalGsa door-opener labels (field [5]) name the building's call
+# points; the camera platform reuses them to name the paired intercom
+# cameras (camera id N ↔ opener id N). Only tokens observed live
+# (2026-05-28 capture: ``Eingang EG`` / ``Briefkasten`` / ``Garage`` /
+# ``Eingang WHG``). ``EG`` = Erdgeschoss (ground floor), ``WHG`` =
+# Wohnung (apartment). Unknown labels pass through unchanged.
+_GSA_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
+    "Eingang EG": "Ground floor entrance",
+    "Eingang WHG": "Apartment entrance",
+    "Briefkasten": "Mailbox",
+    "Garage": "Garage",
+    "Garageneingang": "Garage entrance",
+    "Haupteingang": "Main entrance",
+    "Hauseingang": "Building entrance",
+    "Wohnungseingang": "Apartment entrance",
+}
+
+# Field offsets within the ``GsaConfig`` frame's ``>``-split payload
+# (NamedFields.fields, prefix ``GlobalGsa`` already stripped). Traced to
+# javallg.js ``GlobalGsaInhalt`` indexing (~line 909) and the 2026-05-28
+# capture: index 3 is the camera array (``CamGsaArrNew``), index 4 the
+# door-opener array (``OeffnerArrNew``). Both are ``id^value<id^value``
+# lists, or the sentinel ``LEER`` when the SPA reports none.
+_GSA_CAMERA_FIELD: int = 3
+_GSA_OPENER_FIELD: int = 4
+
 # SPA chart traffic-light thresholds — taken verbatim from javallg.js
 # (~lines 953-973). Below ``ORANGE_THRESHOLD`` (60% of target) the SPA
 # paints the value green; below ``RED_THRESHOLD`` (90%) orange; at or
@@ -94,6 +120,34 @@ _PERSINFO_PIN_RE = re.compile(r"PIN:\s*(\d+)", re.IGNORECASE)
 def _translate_caller_label(raw: str) -> str:
     """Translate a CALLINFO location label to English where known."""
     return _CALLER_INFO_GERMAN_TO_ENGLISH.get(raw, raw)
+
+
+def _translate_gsa_label(raw: str) -> str:
+    """Translate a GlobalGsa door-opener label to English where known."""
+    return _GSA_LABEL_GERMAN_TO_ENGLISH.get(raw, raw)
+
+
+def _parse_gsa_pairs(raw: str) -> dict[int, str]:
+    """Parse a ``id^value<id^value`` GlobalGsa sub-list into ``{id: value}``.
+
+    Used for both the camera-link array (field [3]) and the
+    door-opener-label array (field [4]). Tolerates the ``LEER`` sentinel
+    (the SPA's "none" marker), an empty string, and malformed entries
+    (a missing ``^`` or non-integer id is skipped) — best-effort, never
+    raises.
+    """
+    if not raw or raw == "LEER":
+        return {}
+    pairs: dict[int, str] = {}
+    for entry in raw.split("<"):
+        key, sep, value = entry.partition("^")
+        if not sep:
+            continue
+        try:
+            pairs[int(key)] = value
+        except ValueError:
+            continue
+    return pairs
 
 
 def chart_target_status(current: float | None, target: float | None) -> str | None:
@@ -236,6 +290,17 @@ class SmartPlaceState:
     # layer maps these to proper HA units instead of hardcoding,
     # falling back to the units observed on this installation.
     unit_hints: dict[str, str] = field(default_factory=dict)
+    # ``GlobalGsa`` field [3] (CamGsaArrNew): door-intercom camera id ->
+    # proxy link path (e.g. ``{1: "/linkmap1"}``). The live MJPEG stream
+    # is served at ``https://<routed-host>:<routed-port - 1><link>`` —
+    # see the camera platform. Empty until the GsaConfig frame arrives
+    # (the client requests it via ``GiveMeGlobalGsa`` at bootstrap).
+    gsa_cameras: dict[int, str] = field(default_factory=dict)
+    # ``GlobalGsa`` field [4] (OeffnerArrNew): door-opener id -> English
+    # label (e.g. ``{1: "Ground floor entrance"}``). Shares the id space
+    # with ``gsa_cameras`` 1:1, so the camera platform names each camera
+    # from the matching label.
+    gsa_door_labels: dict[int, str] = field(default_factory=dict)
 
     def apply(self, frame: ServerFrame) -> None:
         """Fold one frame into the snapshot — best-effort, never raises."""
@@ -328,6 +393,25 @@ class SmartPlaceState:
             self.climate_zones[frame.index] = _climate_zone_room(frame.fields[0])
         elif frame.name == "SceneConfig" and frame.index is not None and frame.fields:
             self.scenes[frame.index] = frame.fields[0]
+        elif frame.name == "GsaConfig":
+            self._apply_gsa_config(frame)
+
+    def _apply_gsa_config(self, frame: NamedFields) -> None:
+        """Fold the ``GlobalGsa`` reply: intercom cameras + door labels.
+
+        Replaces (not merges) both maps so a re-issued ``GiveMeGlobalGsa``
+        on reconnect reflects the current camera set. Each field is parsed
+        independently and tolerates truncation — a short frame just leaves
+        the missing map untouched.
+        """
+        fields = frame.fields
+        if len(fields) > _GSA_CAMERA_FIELD:
+            self.gsa_cameras = _parse_gsa_pairs(fields[_GSA_CAMERA_FIELD])
+        if len(fields) > _GSA_OPENER_FIELD:
+            self.gsa_door_labels = {
+                opener_id: _translate_gsa_label(label)
+                for opener_id, label in _parse_gsa_pairs(fields[_GSA_OPENER_FIELD]).items()
+            }
 
     def _apply_chart_point(self, chart_id: int, payload: str) -> None:
         """Fold a ``StandsSingelChartUpdate<id>:STAND<series>:<reading>`` payload."""

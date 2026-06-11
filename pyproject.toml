@@ -75,6 +75,7 @@ exclude = [
     "custom_components/smart_place/__init__.py",
     "custom_components/smart_place/binary_sensor.py",
     "custom_components/smart_place/button.py",
+    "custom_components/smart_place/camera.py",
     "custom_components/smart_place/config_flow.py",
     "custom_components/smart_place/const.py",
     "custom_components/smart_place/sensor.py",
