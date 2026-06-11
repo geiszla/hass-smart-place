@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
@@ -113,6 +114,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         target=client.run(),
         name=f"smart_place_ws_{entry.entry_id}",
     )
+
+    # Scenes were exposed as binary sensors until 2026-06 and then
+    # dropped (the server reports several "active" at once, so on/off
+    # carries no usable meaning — see binary_sensor.py). Their registry
+    # entries would otherwise linger forever as dead "restored"
+    # entities, so prune them here.
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if reg_entry.unique_id.startswith(f"{entry.entry_id}_scene_"):
+            registry.async_remove(reg_entry.entity_id)
 
     # Wait for the bootstrap + a brief observation window so the initial
     # broadcast pushes (TEMPIST<N>, PACKETBOX<N>, REGEN, ...) and the

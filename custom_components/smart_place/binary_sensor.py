@@ -4,12 +4,21 @@ Three families of entities live here:
 
 - ``SmartPlaceConnectionSensor`` — diagnostic; tracks WS health.
 - Alarm sensors derived from broadcast pushes (``Rain``, ``Hail``,
-  ``BlindsMaintenance``, ``WindAlarm<N>``).
-- Activity sensors derived from the ``GiveMeMainmenu`` state
-  snapshot: per-scene "currently active" indicators (paired by
-  ``SceneConfig`` name + ``SZENEN<N>`` value), plus per-group
-  ``Any light on`` / ``Any blind closed`` rollups
+  ``BlindsMaintenance``, ``WindAlarm<N>``). All carry
+  ``device_class=PROBLEM``: they are the building's weather alarms
+  (the ones that retract the blinds), not ambient weather readings,
+  so a uniform Problem/OK reading fits all of them — including
+  rain, which previously used ``MOISTURE`` and stuck out.
+- Per-group ``Any light on`` / ``Any blind closed`` rollups
   (``LEUCHTENZENTRAL<N>`` / ``JALZENTRAL<N>``).
+
+Scenes (``SceneConfig`` + ``SZENEN<N>``) are deliberately *not*
+exposed: the server reports several "active" at once (verified live
+2026-06-11 — six of twelve on simultaneously), so an on/off entity
+has no usable meaning. The client library still parses and tracks
+them in ``SmartPlaceState`` for future use; ``async_setup_entry``
+in ``__init__.py`` removes the previously-registered scene entities
+from the registry.
 
 Parcel deliveries are exposed as a ``sensor`` entity (not binary):
 the useful state is the unlock PIN (text), surfaced as the ``Package
@@ -56,14 +65,6 @@ async def async_setup_entry(
     if state.blinds_maintenance is not None:
         entities.append(SmartPlaceBlindsMaintenanceSensor(entry, data))
     entities.extend(SmartPlaceWindAlarmSensor(entry, data, zone_id) for zone_id in sorted(state.wind_alarms))
-    # Scenes only surface when both the name (SceneConfig) and a state
-    # (SZENEN<N>) are present — without a name we'd ship an unlabeled
-    # "Scene 9" entity, which isn't useful.
-    entities.extend(
-        SmartPlaceSceneSensor(entry, data, scene_id)
-        for scene_id in sorted(state.scene_states)
-        if scene_id in state.scenes
-    )
     entities.extend(SmartPlaceAnyLightOnSensor(entry, data, group_id) for group_id in sorted(state.lights_central))
     entities.extend(SmartPlaceAnyBlindClosedSensor(entry, data, group_id) for group_id in sorted(state.blinds_central))
 
@@ -126,8 +127,8 @@ class SmartPlaceConnectionSensor(_SmartPlaceBinarySensorBase):
 class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
     """Rain alarm — on iff the SPA reports a non-zero REGEN code."""
 
-    _attr_name = "Rain"
-    _attr_device_class = BinarySensorDeviceClass.MOISTURE
+    _attr_name = "Rain alarm"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -143,7 +144,7 @@ class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
 class SmartPlaceHailSensor(_SmartPlaceBinarySensorBase):
     """Hail alarm — on iff the SPA reports a non-zero HAGEL code."""
 
-    _attr_name = "Hail"
+    _attr_name = "Hail alarm"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -176,7 +177,13 @@ class SmartPlaceBlindsMaintenanceSensor(_SmartPlaceBinarySensorBase):
 
 
 class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
-    """Per-zone wind alarm — on iff WINDALARM<N> reports a non-zero code."""
+    """Per-zone wind alarm — on iff WINDALARM<N> reports a non-zero code.
+
+    The zone suffix only appears when more than one zone has been
+    discovered — with a single zone, "Wind alarm 1" is just noise.
+    A second zone surfacing later goes through an HA reload anyway
+    (observation-based discovery), which re-derives the names.
+    """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
@@ -184,40 +191,14 @@ class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
         """Wire the per-zone name + unique_id."""
         super().__init__(entry, data)
         self._zone_id = zone_id
-        self._attr_name = f"Wind alarm {zone_id}"
+        suffix = f" {zone_id}" if len(data.state.wind_alarms) > 1 else ""
+        self._attr_name = f"Wind alarm{suffix}"
         self._attr_unique_id = f"{entry.entry_id}_wind_alarm_{zone_id}"
 
     @property
     def is_on(self) -> bool | None:
         """Return True iff the zone's wind alarm is currently active."""
         return self._data.state.wind_alarms.get(self._zone_id)
-
-
-class SmartPlaceSceneSensor(_SmartPlaceBinarySensorBase):
-    """Per-scene "currently active" indicator.
-
-    The display name is read from ``SceneConfig`` via the ``name``
-    property on each state write — so a late-arriving ``SceneConfig``
-    swaps in the proper label without an HA reload.
-    """
-
-    _attr_icon = "mdi:palette"
-
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, scene_id: int) -> None:
-        """Wire the per-scene unique_id; name is computed dynamically."""
-        super().__init__(entry, data)
-        self._scene_id = scene_id
-        self._attr_unique_id = f"{entry.entry_id}_scene_{scene_id}"
-
-    @property
-    def name(self) -> str:
-        """Return the scene's display name from ``SceneConfig``."""
-        return self._data.state.scenes.get(self._scene_id) or f"Scene {self._scene_id}"
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return True iff the scene is currently active (``SZENEN<N>:01``)."""
-        return self._data.state.scene_states.get(self._scene_id)
 
 
 class SmartPlaceAnyLightOnSensor(_SmartPlaceBinarySensorBase):
