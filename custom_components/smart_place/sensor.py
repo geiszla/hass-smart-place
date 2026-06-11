@@ -615,6 +615,7 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
     """
 
     _attr_icon = "mdi:lock-open-variant"
+
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped name + unique_id."""
         super().__init__(entry, data)
@@ -694,6 +695,7 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     """
 
     _attr_icon = "mdi:phone-incoming"
+
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, intercom_id: int) -> None:
         """Wire the per-intercom name + unique_id."""
         super().__init__(entry, data)
@@ -733,6 +735,7 @@ class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
 
     _attr_name = "Infoboard"
     _attr_icon = "mdi:message-text"
+
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
@@ -763,6 +766,7 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
 
     _attr_name = "Personal info"
     _attr_icon = "mdi:account-alert"
+
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
