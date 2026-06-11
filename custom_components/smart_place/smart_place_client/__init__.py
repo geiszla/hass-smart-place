@@ -16,6 +16,7 @@ from .client import (
 from .commands import KNOWN_COMMANDS, CommandDefinition, Commands
 from .messages import KNOWN_MESSAGES, parse_frame
 from .protocol import (
+    DISCOVERY_ORIGIN,
     GlobalConfig,
     GoToLinkSSL,
     MessageDefinition,
@@ -37,6 +38,7 @@ from .protocol import (
 from .state import ChartReading, SmartPlaceState, chart_target_status
 
 __all__ = [
+    "DISCOVERY_ORIGIN",
     "KNOWN_COMMANDS",
     "KNOWN_MESSAGES",
     "CapturedFrame",
