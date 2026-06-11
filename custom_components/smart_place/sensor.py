@@ -15,6 +15,13 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   ``target`` / ``target_percent`` / ``target_status`` (green /
   orange / red — same thresholds the SPA uses) when a
   ``CHARTZIEL<id>`` value has been observed.
+- For each chart with a daily target, two companion entities surface
+  the SPA's traffic-light system as first-class state: ``<Chart>
+  target use`` (today's consumption as % of target — feeds gauge
+  cards with severity thresholds 60/90 and ``numeric_state``
+  triggers) and ``<Chart> target status`` (a ``green`` / ``orange``
+  / ``red`` enum for state-trigger automations and logbook history).
+  Both follow the parent chart's enabled-by-default rule.
 - One ``Package delivery PIN`` sensor — the unlock PIN for a waiting
   parcel, extracted from the ``PERSINFO`` delivery banner; ``None``
   (HA ``unknown``) when no delivery is waiting. The SPA carries the
@@ -178,6 +185,7 @@ async def async_setup_entry(
         if mapped is None:
             continue
         device_class, native_unit = mapped
+        enabled_default = chart_id not in summed_chart_ids
         entities.append(
             SmartPlaceChartSensor(
                 entry,
@@ -185,9 +193,16 @@ async def async_setup_entry(
                 chart_id,
                 device_class,
                 native_unit,
-                enabled_default=chart_id not in summed_chart_ids,
+                enabled_default=enabled_default,
             ),
         )
+        # Target companions only exist where the SPA sets a daily goal
+        # (verified live 2026-06-11: targets on the four user-facing
+        # charts, none on PV). CHARTZIEL arrives in the same bootstrap
+        # as the chart definitions, so gating at setup time is safe.
+        if chart_id in state.chart_targets:
+            entities.append(SmartPlaceChartTargetPercentSensor(entry, data, chart_id, enabled_default=enabled_default))
+            entities.append(SmartPlaceChartTargetStatusSensor(entry, data, chart_id, enabled_default=enabled_default))
 
     async_add_entities(entities)
 
@@ -367,7 +382,60 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
         return None if value == _PLACEHOLDER_READING else value
 
 
-class SmartPlaceChartSensor(_SmartPlaceSensorBase):
+class _SmartPlaceChartScopedSensor(_SmartPlaceSensorBase):
+    """Shared wiring for chart-scoped sensors: label, daily reading, target.
+
+    The display name is read from ``ChartDefinition.label`` via the
+    ``name`` property on each state write, so a late-arriving
+    ``ChartDefinition`` swaps the fallback label for the real one
+    (e.g. ``Electricity``) without an HA reload. Subclasses set
+    ``_name_suffix`` to distinguish themselves under the same label.
+    """
+
+    _name_suffix: str = ""
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        data: SmartPlaceData,
+        chart_id: int,
+        *,
+        enabled_default: bool = True,
+    ) -> None:
+        """Wire the per-chart id, fallback label, and enabled-default flag."""
+        super().__init__(entry, data)
+        self._chart_id = chart_id
+        self._attr_entity_registry_enabled_default = enabled_default
+        self._fallback_name = f"Chart {chart_id}"
+
+    @property
+    def name(self) -> str:
+        """Return the chart's English label plus this sensor's suffix."""
+        chart = self._data.state.charts.get(self._chart_id)
+        label = chart.label if chart and chart.label else self._fallback_name
+        return f"{label} {self._name_suffix}"
+
+    def _daily_reading(self) -> float | None:
+        """Return today's STAND1 reading, or None if not yet seen."""
+        chart = self._data.state.charts.get(self._chart_id)
+        if chart is None:
+            return None
+        return _safe_float(chart.stands.get(_DAILY_SERIES))
+
+    def _target(self) -> float | None:
+        """Return the latest CHARTZIEL daily target, or None if never pushed."""
+        return self._data.state.chart_targets.get(self._chart_id)
+
+    def _target_percent(self) -> float | None:
+        """Return today's reading as a percentage of the daily target."""
+        target = self._target()
+        current = self._daily_reading()
+        if not target or current is None:
+            return None
+        return round(current / target * 100, 1)
+
+
+class SmartPlaceChartSensor(_SmartPlaceChartScopedSensor):
     """Daily consumption (electricity, heating, water) refreshed by polling.
 
     The state is the daily ``STAND1`` reading (today's consumption
@@ -377,14 +445,12 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
     series surface as named attributes (``this_week`` / ``this_month``
     / ``this_year`` / ``lifetime`` — see ``_STAND_SERIES_NAMES``).
 
-    The display name is read from ``ChartDefinition.label`` via the
-    ``name`` property on each state write, so a late-arriving
-    ``ChartDefinition`` swaps the fallback ``Electricity chart 49``
-    for ``Electricity`` without an HA reload. ``(today)`` is appended
-    so nobody mistakes the daily reading for a lifetime total.
+    ``(today)`` is appended to the name so nobody mistakes the daily
+    reading for a lifetime total.
     """
 
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _name_suffix = "(today)"
 
     def __init__(
         self,
@@ -397,29 +463,17 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         enabled_default: bool = True,
     ) -> None:
         """Wire the per-chart device class, unit, fallback label, and unique_id."""
-        super().__init__(entry, data)
-        self._chart_id = chart_id
+        super().__init__(entry, data, chart_id, enabled_default=enabled_default)
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = native_unit
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}"
-        self._attr_entity_registry_enabled_default = enabled_default
         kind = "Electricity" if device_class is SensorDeviceClass.ENERGY else "Water"
         self._fallback_name = f"{kind} chart {chart_id}"
 
     @property
-    def name(self) -> str:
-        """Return the chart's English label plus ``(today)``, or the fallback."""
-        chart = self._data.state.charts.get(self._chart_id)
-        label = chart.label if chart and chart.label else self._fallback_name
-        return f"{label} (today)"
-
-    @property
     def native_value(self) -> float | None:
         """Return the daily STAND1 reading, or None if not yet seen."""
-        chart = self._data.state.charts.get(self._chart_id)
-        if chart is None:
-            return None
-        return _safe_float(chart.stands.get(_DAILY_SERIES))
+        return self._daily_reading()
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float | None]:
@@ -435,7 +489,11 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         percentage; and ``target_status`` (``green`` / ``orange`` /
         ``red``) mirrors the SPA's own traffic-light thresholds
         (<60% / 60-90% / ≥90%). All three are ``None`` until both the
-        STAND1 reading and the target value have been observed.
+        STAND1 reading and the target value have been observed. The
+        latter two are also first-class entities (see
+        ``SmartPlaceChartTargetPercentSensor`` /
+        ``SmartPlaceChartTargetStatusSensor``); the attributes stay
+        for template users.
         """
         chart = self._data.state.charts.get(self._chart_id)
         if chart is None:
@@ -445,12 +503,88 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
             for series, value in sorted(chart.stands.items())
             if series != _DAILY_SERIES and value != ""
         }
-        target = self._data.state.chart_targets.get(self._chart_id)
-        current = _safe_float(chart.stands.get(_DAILY_SERIES))
-        attrs["target"] = target
-        attrs["target_percent"] = round(current / target * 100, 1) if (target and current is not None) else None
-        attrs["target_status"] = chart_target_status(current, target)
+        attrs["target"] = self._target()
+        attrs["target_percent"] = self._target_percent()
+        attrs["target_status"] = chart_target_status(self._daily_reading(), self._target())
         return attrs
+
+
+class SmartPlaceChartTargetPercentSensor(_SmartPlaceChartScopedSensor):
+    """Today's consumption as a percentage of the chart's daily target.
+
+    Backs "colour meter" dashboards: a gauge card with ``severity``
+    thresholds at 60 (orange) and 90 (red) reproduces the SPA's
+    traffic light exactly, and ``numeric_state`` automation triggers
+    can fire at any custom level (e.g. warn at 75%, before the status
+    sensor flips to red). Values above 100 are real — consumption past
+    the target — so no upper clamp is applied.
+
+    Resets to 0 with the STAND1 reading at midnight; ``None`` (HA
+    ``unknown``) until both today's reading and the ``CHARTZIEL``
+    target have been observed.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:gauge"
+    _name_suffix = "target use"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        data: SmartPlaceData,
+        chart_id: int,
+        *,
+        enabled_default: bool = True,
+    ) -> None:
+        """Wire the per-chart unique_id."""
+        super().__init__(entry, data, chart_id, enabled_default=enabled_default)
+        self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_target_percent"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return today's reading as % of target, or None before both are seen."""
+        return self._target_percent()
+
+
+class SmartPlaceChartTargetStatusSensor(_SmartPlaceChartScopedSensor):
+    """The SPA's traffic-light rating of today's consumption.
+
+    An enum over ``green`` / ``orange`` / ``red`` using the SPA's own
+    breakpoints: <60% of the daily target is green, 60-90% orange,
+    ≥90% red — note red starts *before* the target is crossed. As
+    first-class state it gives clean automation triggers ("changed to
+    red → notify") and a logbook trail of every transition, and keeps
+    the thresholds inside the integration (``chart_target_status``)
+    instead of hardcoded in user automations.
+
+    Falls back to green at midnight when STAND1 resets, which re-arms
+    a "changed to red" notification daily for free. ``None`` (HA
+    ``unknown``) until both the reading and the target are observed.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_translation_key = "chart_target_status"
+    _attr_icon = "mdi:traffic-light"
+    _name_suffix = "target status"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        data: SmartPlaceData,
+        chart_id: int,
+        *,
+        enabled_default: bool = True,
+    ) -> None:
+        """Wire the per-chart unique_id + enum options."""
+        super().__init__(entry, data, chart_id, enabled_default=enabled_default)
+        self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_target_status"
+        self._attr_options = ["green", "orange", "red"]
+
+    @property
+    def native_value(self) -> str | None:
+        """Return green/orange/red, or None before reading + target are seen."""
+        return chart_target_status(self._daily_reading(), self._target())
 
 
 class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):

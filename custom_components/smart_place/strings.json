@@ -35,6 +35,13 @@
           "wind": "Wind",
           "multiple": "Multiple"
         }
+      },
+      "chart_target_status": {
+        "state": {
+          "green": "Green",
+          "orange": "Orange",
+          "red": "Red"
+        }
       }
     }
   }
