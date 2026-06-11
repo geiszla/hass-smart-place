@@ -675,7 +675,9 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     entrance``) while ``SPRECHEN<n>`` is ``ring``; ``None`` otherwise.
     The raw ``ringing`` flag and the last-seen ``caller`` (even when
     idle) surface as attributes so automations can distinguish
-    "rang from X" from "idle".
+    "rang from X" from "idle". Suffixed by id only when more than one
+    intercom is discovered — with a single unit, "Intercom 1" is just
+    noise (same rule as the wind alarms).
     """
 
     _attr_icon = "mdi:phone-incoming"
@@ -684,7 +686,9 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
         """Wire the per-intercom name + unique_id."""
         super().__init__(entry, data)
         self._intercom_id = intercom_id
-        self._attr_name = f"Intercom {intercom_id}"
+        intercom_count = len(set(data.state.intercom_ringing) | set(data.state.intercom_callers))
+        suffix = f" {intercom_id}" if intercom_count > 1 else ""
+        self._attr_name = f"Intercom{suffix}"
         self._attr_unique_id = f"{entry.entry_id}_intercom_{intercom_id}"
 
     @property
