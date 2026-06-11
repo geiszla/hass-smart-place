@@ -403,14 +403,22 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="LightsCentral",
-        description="Push: aggregate state for light group N. Format: LEUCHTENZENTRAL<n>:<code>.",
+        description=(
+            "Push: state of the SPA's lights 'All' master button N (NOT an "
+            "any-light-on aggregate — verified live 2026-06-11: read 00 while "
+            "two leuchte<n> loads were at 255). Format: LEUCHTENZENTRAL<n>:<code>."
+        ),
         pattern=re.compile(r"^LEUCHTENZENTRAL\d+:"),
         parse=_indexed_value_parser("LightsCentral", "LEUCHTENZENTRAL"),
         example="LEUCHTENZENTRAL1:00",
     ),
     MessageDefinition(
         name="BlindsCentral",
-        description="Push: aggregate state for blind group N. Format: JALZENTRAL<n>:<code> (may be empty).",
+        description=(
+            "Push: state of the SPA's blinds 'All' master button N (same "
+            "mechanism as LEUCHTENZENTRAL — not an aggregate; never observed "
+            "as a broadcast live). Format: JALZENTRAL<n>:<code> (may be empty)."
+        ),
         pattern=re.compile(r"^JALZENTRAL\d+:"),
         parse=_indexed_value_parser("BlindsCentral", "JALZENTRAL"),
         example="JALZENTRAL1:",
