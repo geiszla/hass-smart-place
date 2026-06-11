@@ -115,14 +115,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name=f"smart_place_ws_{entry.entry_id}",
     )
 
-    # Scenes were exposed as binary sensors until 2026-06 and then
-    # dropped (the server reports several "active" at once, so on/off
-    # carries no usable meaning — see binary_sensor.py). Their registry
-    # entries would otherwise linger forever as dead "restored"
-    # entities, so prune them here.
+    # Entity families exposed until 2026-06 and then dropped — scenes
+    # (the server reports several "active" at once, so on/off carries
+    # no usable meaning) and the LEUCHTENZENTRAL "any light on" rollup
+    # (actually the SPA's "All" master-button state, not an aggregate);
+    # see binary_sensor.py for both. Their registry entries would
+    # otherwise linger forever as dead "restored" entities, so prune
+    # them here.
+    retired_unique_id_prefixes = (
+        f"{entry.entry_id}_scene_",
+        f"{entry.entry_id}_lights_central_",
+    )
     registry = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if reg_entry.unique_id.startswith(f"{entry.entry_id}_scene_"):
+        if reg_entry.unique_id.startswith(retired_unique_id_prefixes):
             registry.async_remove(reg_entry.entity_id)
 
     # Wait for the bootstrap + a brief observation window so the initial

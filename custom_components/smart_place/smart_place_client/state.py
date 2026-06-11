@@ -39,8 +39,12 @@ _CHART_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
     "Kaltwasser": "Cold water",
     "Warmwasser": "Hot water",
     "PV Anteil Elektro": "PV electricity",
-    "SUMME Kaltwasser": "Cold water total",
-    "SUMME Warmwasser": "Hot water total",
+    # SUMME charts drop the "total" qualifier: their per-meter
+    # constituents are disabled by default in HA, so the aggregate
+    # IS the cold/hot water reading users see — and "total" misreads
+    # as "lifetime" next to a daily state.
+    "SUMME Kaltwasser": "Cold water",
+    "SUMME Warmwasser": "Hot water",
 }
 
 # ClimateConfig values look like "Bedroom heating" — for sensor naming
@@ -71,6 +75,12 @@ _CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
 # these three breakpoints, so we collapse to three statuses.
 _CHART_ORANGE_THRESHOLD: float = 0.6
 _CHART_RED_THRESHOLD: float = 0.9
+
+# SUMME chart definitions reference the per-meter charts they
+# aggregate, e.g. ``>SummeForDiagramm-336>SummeForDiagramm-335>``.
+# Extracted so the sensor platform can disable the constituent
+# meters by default in favour of the aggregate.
+_SUMME_CONSTITUENT_RE = re.compile(r"SummeForDiagramm-(\d+)")
 
 # Parcel-box unlock PIN, extracted from the free-text ``PERSINFO``
 # banner. Empirically a real delivery does NOT set ``PACKETBOX<N>:<code>``
@@ -144,12 +154,16 @@ class ChartReading:
     raw SPA category (``"Wasser"`` / ``"Energie"`` / ``"Elektro"`` /
     ``"Summe"`` — the last one marks an aggregated SUMME chart).
     Both are ``""`` until ``ChartDefinition`` arrives.
+    ``summed_chart_ids`` lists the per-meter charts a SUMME chart
+    aggregates (empty for non-SUMME charts) — the sensor platform
+    disables those constituents by default.
     """
 
     unit: str
     stands: dict[int, str] = field(default_factory=dict)
     label: str = ""
     category: str = ""
+    summed_chart_ids: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)
@@ -191,9 +205,6 @@ class SmartPlaceState:
     # Whether scene N is currently active, from ``SZENEN<N>``
     # broadcasts (``"01"`` = active).
     scene_states: dict[int, bool] = field(default_factory=dict)
-    # Aggregate ``any light on`` flag per ``LEUCHTENZENTRAL<N>``
-    # group. ``"00"`` = none on; anything else = at least one on.
-    lights_central: dict[int, bool] = field(default_factory=dict)
     # Aggregate ``any blind closed`` flag per ``JALZENTRAL<N>``
     # group. Best-effort: empty / ``"00"`` = none closed, anything
     # else = at least one closed. The SPA's semantics here aren't
@@ -283,8 +294,12 @@ class SmartPlaceState:
             self._apply_chart_definition(frame.index, frame.value)
         elif name == "SceneState" and frame.index is not None:
             self.scene_states[frame.index] = _alarm_on(frame.value)
-        elif name == "LightsCentral" and frame.index is not None:
-            self.lights_central[frame.index] = _alarm_on(frame.value)
+        # ``LightsCentral`` (LEUCHTENZENTRAL<N>) is deliberately NOT
+        # folded: it is the state of the SPA's "All" master button,
+        # not an any-light-on aggregate (verified live 2026-06-11 —
+        # it read 00 while two ``leuchte<n>`` loads were at 255).
+        # Per-light ``LightState`` frames are the truthful source;
+        # fold those instead when light support lands.
         elif name == "BlindsCentral" and frame.index is not None:
             self.blinds_central[frame.index] = _alarm_on(frame.value)
         elif name == "Humidity" and frame.index is not None:
@@ -340,7 +355,9 @@ class SmartPlaceState:
         Sets ``label`` (cleaned English) and ``category`` (raw SPA tag)
         on the chart. The 14th and 15th ``;``-fields hold category and
         unit when present; we tolerate shorter payloads silently
-        because the server occasionally truncates these.
+        because the server occasionally truncates these. SUMME charts
+        carry ``SummeForDiagramm-<id>`` references to their constituent
+        meters — extracted into ``summed_chart_ids``.
         """
         fields = payload.split(";")
         if not fields or not fields[0]:
@@ -351,6 +368,7 @@ class SmartPlaceState:
             chart.category = fields[13]
         if len(fields) > 14 and fields[14] and not chart.unit:
             chart.unit = fields[14]
+        chart.summed_chart_ids = tuple(int(m) for m in _SUMME_CONSTITUENT_RE.findall(payload))
 
 
 def _parse_stand_series(series_raw: str) -> int | None:

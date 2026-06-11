@@ -148,12 +148,21 @@ def test_apply_chart_definition_translates_mojibake_waerme() -> None:
 
 
 def test_apply_chart_definition_marks_summe_charts() -> None:
-    """SUMME charts get ``category == 'Summe'`` so the platform can filter them."""
+    """SUMME charts carry their constituent meter ids and drop the "total" tag."""
     raw = "SUMME Kaltwasser HH77-14-01;Area;Zeit;Verbrauch in l;SUMME Kaltwasser=337=rgba=rgba;===;===;===;;CHF;0.002;;2021018;Summe;l;>SummeForDiagramm-336>SummeForDiagramm-335>;250;SUMME Kaltwasser"
     state = SmartPlaceState()
     state.apply(NamedValue(name="ChartDefinition", value=raw, index=337))
     assert state.charts[337].category == "Summe"
-    assert state.charts[337].label == "Cold water total"
+    assert state.charts[337].label == "Cold water"
+    assert state.charts[337].summed_chart_ids == (336, 335)
+
+
+def test_apply_chart_definition_non_summe_has_no_constituents() -> None:
+    """Per-meter charts carry no ``SummeForDiagramm`` references."""
+    raw = "Kaltwasser I HH77-14-01;Area;Zeit;Verbrauch in l;Kaltwasser I=335=rgba=rgba;===;===;===;;CHF;0.002;;2021018;Wasser;l;smartPLACE_Wasser;91;HH77-14-01"
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="ChartDefinition", value=raw, index=335))
+    assert state.charts[335].summed_chart_ids == ()
 
 
 def test_apply_chart_stand_snapshot_from_main_menu() -> None:
@@ -184,15 +193,19 @@ def test_apply_scene_state_and_config_fold_separately() -> None:
     assert state.scenes == {9: "Afternoon sun", 10: "Evening"}
 
 
-def test_apply_lights_central_and_blinds_central_track_groups() -> None:
-    """LEUCHTENZENTRAL/JALZENTRAL fold into per-group booleans (00 / "" = off)."""
+def test_apply_blinds_central_tracks_groups_and_lights_central_is_ignored() -> None:
+    """JALZENTRAL folds into per-group booleans; LEUCHTENZENTRAL is not folded.
+
+    LEUCHTENZENTRAL is the SPA's "All" master-button state, not an
+    any-light-on aggregate (verified live 2026-06-11), so the snapshot
+    deliberately drops it — the frame must still parse without error.
+    """
     state = SmartPlaceState()
-    state.apply(NamedValue(name="LightsCentral", value="00", index=1))
-    state.apply(NamedValue(name="LightsCentral", value="01", index=2))
+    state.apply(NamedValue(name="LightsCentral", value="01", index=1))
     state.apply(NamedValue(name="BlindsCentral", value="", index=1))
     state.apply(NamedValue(name="BlindsCentral", value="03", index=2))
-    assert state.lights_central == {1: False, 2: True}
     assert state.blinds_central == {1: False, 2: True}
+    assert not hasattr(state, "lights_central")
 
 
 def test_apply_humidity_records_per_zone_value() -> None:

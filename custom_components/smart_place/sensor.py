@@ -6,10 +6,10 @@ Exposes the read-only metrics surfaced by the WS dispatch:
 - Wind speed (WINDGESCHWINDIGKEIT)
 - One consumption sensor per discovered chart, named from
   ``ChartDefinition.label`` plus a ``(today)`` suffix (e.g.
-  ``Electricity (today)``, ``Cold water total (today)``). Both
-  per-meter and the aggregated SUMME charts surface — they expose
-  the same data at different aggregation levels and consumers can
-  pick whichever fits. The sensor state is the daily ``STAND1``
+  ``Electricity (today)``, ``Cold water (today)``). Per-meter charts
+  that roll up into a SUMME aggregate (``Cold water I`` / ``II``)
+  are registered disabled by default — the aggregate carries the
+  reading users care about. The sensor state is the daily ``STAND1``
   reading; the other STAND series surface as ``this_week`` /
   ``this_month`` / ``this_year`` / ``lifetime`` attributes, plus
   ``target`` / ``target_percent`` / ``target_status`` (green /
@@ -148,6 +148,11 @@ async def async_setup_entry(
         entities.append(SmartPlaceInfoboardSensor(entry, data))
     if state.person_info is not None:
         entities.append(SmartPlacePersonInfoSensor(entry, data))
+    # Per-meter charts that roll up into a SUMME aggregate (e.g.
+    # ``Cold water I`` / ``II`` under ``Cold water``) are registered
+    # disabled — the aggregate is the reading users care about, and
+    # the constituents stay one UI toggle away.
+    summed_chart_ids = {cid for chart in state.charts.values() for cid in chart.summed_chart_ids}
     for chart_id in sorted(state.charts):
         chart = state.charts[chart_id]
         unit = chart.unit or data.client.state.chart_units.get(chart_id, "")
@@ -156,7 +161,14 @@ async def async_setup_entry(
             continue
         device_class, native_unit = mapped
         entities.append(
-            SmartPlaceChartSensor(entry, data, chart_id, device_class, native_unit),
+            SmartPlaceChartSensor(
+                entry,
+                data,
+                chart_id,
+                device_class,
+                native_unit,
+                enabled_default=chart_id not in summed_chart_ids,
+            ),
         )
 
     async_add_entities(entities)
@@ -339,9 +351,7 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
     ``name`` property on each state write, so a late-arriving
     ``ChartDefinition`` swaps the fallback ``Electricity chart 49``
     for ``Electricity`` without an HA reload. ``(today)`` is appended
-    so nobody mistakes the daily reading for a lifetime total —
-    especially on the SUMME charts, where the label's own "total"
-    means "sum of meters I + II".
+    so nobody mistakes the daily reading for a lifetime total.
     """
 
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -353,6 +363,8 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         chart_id: int,
         device_class: SensorDeviceClass,
         native_unit: str,
+        *,
+        enabled_default: bool = True,
     ) -> None:
         """Wire the per-chart device class, unit, fallback label, and unique_id."""
         super().__init__(entry, data)
@@ -360,6 +372,7 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = native_unit
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}"
+        self._attr_entity_registry_enabled_default = enabled_default
         kind = "Electricity" if device_class is SensorDeviceClass.ENERGY else "Water"
         self._fallback_name = f"{kind} chart {chart_id}"
 
