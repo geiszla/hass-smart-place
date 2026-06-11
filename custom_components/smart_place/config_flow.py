@@ -18,7 +18,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import voluptuous as vol
 
 from .const import CONF_TOKEN, CONFIG_FLOW_TIMEOUT, DOMAIN
-from .smart_place_client import SmartPlaceAuthError, SmartPlaceClient, SmartPlaceOfflineError
+from .smart_place_client import DISCOVERY_ORIGIN, SmartPlaceAuthError, SmartPlaceClient, SmartPlaceOfflineError
 
 
 def _token_fingerprint(token: str) -> str:
@@ -67,6 +67,9 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
             errors=errors,
+            # hassfest forbids literal URLs in strings.json; the example
+            # URL is injected here instead (strings reference it as {url}).
+            description_placeholders={"url": f"{DISCOVERY_ORIGIN}/Start5?..."},
         )
 
     async def async_step_reauth(self, _entry_data: Mapping[str, Any]) -> ConfigFlowResult:
