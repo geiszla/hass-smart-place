@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up Smart Place",
-        "description": "Paste the long secret URL token from your Smart Place app URL. The token is everything after the `?` in `https://spr1.smartplace.ch:8770/Start5?...`.",
+        "description": "Paste the long secret URL token from your Smart Place app URL. The token is everything after the `?` in the Start5 address you use to open the Smart Place app.",
         "data": {
           "token": "Smart Place URL token"
         }
