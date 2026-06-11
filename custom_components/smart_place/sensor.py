@@ -16,8 +16,8 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   orange / red — same thresholds the SPA uses) when a
   ``CHARTZIEL<id>`` value has been observed.
 - One ``Package delivery PIN`` sensor — the unlock PIN for a waiting
-  parcel, extracted from the ``PERSINFO`` delivery banner;
-  ``No delivery`` when nothing is waiting. The SPA carries the
+  parcel, extracted from the ``PERSINFO`` delivery banner; ``None``
+  (HA ``unknown``) when no delivery is waiting. The SPA carries the
   PIN as free text in PERSINFO, *not* in ``PACKETBOX<N>`` (which only
   ever reported ``Frei`` in practice) — see ``state.py``.
 - One indoor temperature sensor + one humidity sensor per climate
@@ -32,11 +32,11 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   ringing, ``None`` while idle. The raw ``ringing`` flag and the
   last-seen ``caller`` surface as attributes.
 - One aggregated ``Infoboard`` sensor — state is the first
-  non-``Read`` slot body in slot-id order; ``No messages`` when
-  every slot is cleared. Per-slot bodies surface as ``slot<n>``
+  non-``Read`` slot body in slot-id order; ``None`` when every
+  slot is cleared. Per-slot bodies surface as ``slot<n>``
   attributes.
 - One ``Personal info`` text sensor for ``PERSINFO`` (same
-  ``Read`` → ``No messages`` convention).
+  ``Read`` → ``None`` convention).
 - An aggregated ``Weather alarm`` enum rollup — ``none`` / ``rain``
   / ``hail`` / ``wind`` / ``multiple``, computed from the shared
   snapshot. HA's built-in ``group`` integration is for user-defined
@@ -461,10 +461,11 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
     ``PERSINFO`` banner that contains the PIN, e.g. "Sie haben eine
     Lieferung in der Paketbox. Bitte verwenden Sie den PIN:4489 um diese
     rauszuholen." This sensor surfaces just the digits as a clean code,
-    or ``No delivery`` when nothing is waiting — a deliberate idle
-    *state* rather than HA ``unknown``, which reads like a sensor
-    failure. The full banner text is also available verbatim on the
-    separate ``Personal info`` sensor — duplication is intentional.
+    or ``None`` (HA ``unknown``) when no delivery is waiting — HA has
+    no presentable "empty" state for free-text sensors, so the
+    standard ``unknown`` it is. The full banner text is also available
+    verbatim on the separate ``Personal info`` sensor — duplication is
+    intentional.
 
     No polling needed: ``PERSINFO`` is a broadcast, so the entity only
     updates when the server pushes a fresh banner.
@@ -479,9 +480,9 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
         self._attr_unique_id = f"{entry.entry_id}_package_delivery_pin"
 
     @property
-    def native_value(self) -> str:
-        """Return the parcel unlock PIN, or ``No delivery`` when idle."""
-        return self._data.state.package_delivery_pin or "No delivery"
+    def native_value(self) -> str | None:
+        """Return the parcel unlock PIN, or None when no delivery is waiting."""
+        return self._data.state.package_delivery_pin
 
 
 class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):
@@ -578,11 +579,10 @@ class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
     """Aggregated infoboard view across every ``INFOBOARD<n>INHALT`` slot.
 
     State is the first non-``Read`` slot's body text in slot-id
-    order (so users see "any active message"); ``No messages`` when
-    every slot is acknowledged — a deliberate idle *state* rather
-    than HA ``unknown``, which reads like a sensor failure. Per-slot
-    bodies surface as ``slot<n>`` attributes so finer-grained
-    dashboards can still address them individually.
+    order (so users see "any active message"); ``None`` (HA
+    ``unknown``) when every slot is acknowledged. Per-slot bodies
+    surface as ``slot<n>`` attributes so finer-grained dashboards can
+    still address them individually.
     """
 
     _attr_name = "Infoboard"
@@ -594,12 +594,12 @@ class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
         self._attr_unique_id = f"{entry.entry_id}_infoboard"
 
     @property
-    def native_value(self) -> str:
-        """Return the first non-``Read`` slot's body, or ``No messages`` when idle."""
+    def native_value(self) -> str | None:
+        """Return the first non-``Read`` slot's body, or None when all are cleared."""
         for _slot_id, body in sorted(self._data.state.infoboard_contents.items()):
             if body is not None:
                 return body
-        return "No messages"
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, str | None]:
@@ -625,9 +625,9 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
         self._attr_unique_id = f"{entry.entry_id}_person_info"
 
     @property
-    def native_value(self) -> str:
-        """Return the latest PERSINFO text, or ``No messages`` when cleared."""
-        return self._data.state.person_info or "No messages"
+    def native_value(self) -> str | None:
+        """Return the latest PERSINFO text, or None when cleared."""
+        return self._data.state.person_info
 
 
 def _safe_float(raw: str | None) -> float | None:
