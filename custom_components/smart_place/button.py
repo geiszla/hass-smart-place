@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.button import ButtonEntity
 
-from . import SmartPlaceData, main_device_info
+from . import SmartPlaceData, category_device_info
 from .const import DOMAIN
 from .smart_place_client import CommandDefinition, Commands
 
@@ -77,7 +77,7 @@ class SmartPlaceDoorButton(ButtonEntity):
         self._door = door
         self._attr_name = door.name
         self._attr_unique_id = f"{entry.entry_id}_door_{door.key}"
-        self._attr_device_info = main_device_info(entry)
+        self._attr_device_info = category_device_info(entry, "Doors")
 
     @property
     def available(self) -> bool:

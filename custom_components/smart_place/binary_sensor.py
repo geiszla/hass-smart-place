@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from . import SmartPlaceData, main_device_info
+from . import SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
 
 if TYPE_CHECKING:
@@ -77,15 +77,23 @@ async def async_setup_entry(
 
 
 class _SmartPlaceBinarySensorBase(BinarySensorEntity):
-    """Common wiring: shared device + push-update subscription."""
+    """Common wiring: shared device + push-update subscription.
+
+    Subclasses set ``_category`` to land on a category sub-device
+    (its own dashboard card); the default ``None`` keeps the entity on
+    the main Smart Place device.
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _category: str | None = None
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
-        self._attr_device_info = main_device_info(entry)
+        self._attr_device_info = (
+            category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
+        )
 
     @property
     def available(self) -> bool:
@@ -130,6 +138,7 @@ class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
 
     _attr_name = "Rain alarm"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -147,6 +156,7 @@ class SmartPlaceHailSensor(_SmartPlaceBinarySensorBase):
 
     _attr_name = "Hail alarm"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -165,6 +175,7 @@ class SmartPlaceBlindsMaintenanceSensor(_SmartPlaceBinarySensorBase):
     _attr_name = "Blinds maintenance"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -187,6 +198,7 @@ class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, zone_id: int) -> None:
         """Wire the per-zone name + unique_id."""

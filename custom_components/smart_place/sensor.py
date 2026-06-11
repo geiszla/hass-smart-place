@@ -65,7 +65,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from . import SmartPlaceData, main_device_info
+from . import SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
 from .smart_place_client import chart_target_status
 
@@ -226,15 +226,25 @@ def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> De
 
 
 class _SmartPlaceSensorBase(SensorEntity):
-    """Common wiring: device_info, push-update subscription."""
+    """Common wiring: device_info, push-update subscription.
+
+    Subclasses set ``_category`` to land on a category sub-device (its
+    own dashboard card); the default ``None`` keeps the entity on the
+    main Smart Place device. Subclasses that need a bespoke device (the
+    per-zone climate sensors) override ``_attr_device_info`` after
+    ``super().__init__``.
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _category: str | None = None
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
-        self._attr_device_info = main_device_info(entry)
+        self._attr_device_info = (
+            category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
+        )
 
     @property
     def available(self) -> bool:
@@ -262,6 +272,7 @@ class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
     _attr_name = "Outdoor temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id + server-hinted unit."""
@@ -289,6 +300,7 @@ class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
     _attr_name = "Wind speed"
     _attr_device_class = SensorDeviceClass.WIND_SPEED
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id + server-hinted unit."""
@@ -389,6 +401,7 @@ class _SmartPlaceChartScopedSensor(_SmartPlaceSensorBase):
     """
 
     _name_suffix: str = ""
+    _category = "Energy"
 
     def __init__(
         self,
@@ -602,6 +615,7 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
     """
 
     _attr_icon = "mdi:lock-open-variant"
+    _category = "Intercom"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped name + unique_id."""
@@ -629,6 +643,7 @@ class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):
     _attr_icon = "mdi:weather-cloudy-alert"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "weather_alarm"
+    _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -681,6 +696,7 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     """
 
     _attr_icon = "mdi:phone-incoming"
+    _category = "Intercom"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, intercom_id: int) -> None:
         """Wire the per-intercom name + unique_id."""
@@ -721,6 +737,7 @@ class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
 
     _attr_name = "Infoboard"
     _attr_icon = "mdi:message-text"
+    _category = "Intercom"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
@@ -752,6 +769,7 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
 
     _attr_name = "Personal info"
     _attr_icon = "mdi:account-alert"
+    _category = "Intercom"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
