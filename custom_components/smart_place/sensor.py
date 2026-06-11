@@ -5,12 +5,13 @@ Exposes the read-only metrics surfaced by the WS dispatch:
 - Outdoor temperature (TEMPOUT)
 - Wind speed (WINDGESCHWINDIGKEIT)
 - One consumption sensor per discovered chart, named from
-  ``ChartDefinition.label`` (e.g. ``Electricity``, ``Heating``,
-  ``Cold water 1``, ``Cold water total``). Both per-meter and the
-  aggregated SUMME charts surface — they expose the same data at
-  different aggregation levels and consumers can pick whichever
-  fits. The sensor state is the daily ``STAND1`` reading; the
-  other STAND series surface as ``stand<N>`` attributes, plus
+  ``ChartDefinition.label`` plus a ``(today)`` suffix (e.g.
+  ``Electricity (today)``, ``Cold water total (today)``). Both
+  per-meter and the aggregated SUMME charts surface — they expose
+  the same data at different aggregation levels and consumers can
+  pick whichever fits. The sensor state is the daily ``STAND1``
+  reading; the other STAND series surface as ``this_week`` /
+  ``this_month`` / ``this_year`` / ``lifetime`` attributes, plus
   ``target`` / ``target_percent`` / ``target_status`` (green /
   orange / red — same thresholds the SPA uses) when a
   ``CHARTZIEL<id>`` value has been observed.
@@ -23,7 +24,9 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   zone, paired under a per-zone HA sub-device
   (``via_device=<entry>``) so they render together in the device
   card. The zone's room name labels the sub-device. Sensor IDs
-  without a matching ``Klimas<N>`` zone are skipped.
+  without a matching ``Klimas<N>`` zone are skipped. Humidity is
+  disabled by default — this building reports a constant 0.0 —
+  and both fold the 0.0 placeholder to ``unknown``.
 - One intercom sensor per id seen in ``SPRECHEN<N>`` /
   ``CALLINFO<N>`` — state is the translated caller location while
   ringing, ``None`` while idle. The raw ``ringing`` flag and the
@@ -34,11 +37,11 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   attributes.
 - One ``Personal info`` text sensor for ``PERSINFO`` (same
   ``Read`` → ``None`` convention).
-- An aggregated ``Weather alarm`` rollup — a single line summarising
-  which alarms are currently on, computed from the shared snapshot.
-  HA's built-in ``group`` integration is for user-defined helpers,
-  not integrations: the idiomatic pattern is just a normal sensor
-  whose ``native_value`` is computed from the shared snapshot.
+- An aggregated ``Weather alarm`` enum rollup — ``none`` / ``rain``
+  / ``hail`` / ``wind`` / ``multiple``, computed from the shared
+  snapshot. HA's built-in ``group`` integration is for user-defined
+  helpers, not integrations: the idiomatic pattern is just a normal
+  sensor whose ``native_value`` is computed from the shared snapshot.
 
 Discovery is observation-based: entities are created once during
 ``async_setup_entry`` from whatever the state snapshot holds at that
@@ -70,6 +73,30 @@ if TYPE_CHECKING:
 # state class (HA treats the value-drop as a period reset and
 # continues accumulating deltas in the Energy / Water dashboard).
 _DAILY_SERIES: int = 1
+
+# Friendly attribute names for the non-daily STAND series. Semantics
+# are empirical (live diff 2026-06-11): the week/month/year buckets fit
+# every water, heating, and electricity chart (e.g. Wärme reads
+# 0/0/1309 in June — heating off all summer, year carries the winter),
+# and 99 is unambiguously the lifetime meter reading. Series not
+# listed here (79/89/96-98, populated only for electricity) keep their
+# raw ``stand<N>`` key until their meaning is confirmed.
+_STAND_SERIES_NAMES: dict[int, str] = {
+    2: "this_week",
+    3: "this_month",
+    4: "this_year",
+    99: "lifetime",
+}
+
+# The server pushes a constant ``0.0`` for sensors the building does
+# not actually have (verified live 2026-06-11: every FEUCHTEIST zone
+# reads 0.0 around the clock). Indoor readings of exactly 0.0 are
+# physically implausible in an occupied building, so both the
+# humidity and indoor-temperature sensors fold 0.0 to ``None`` (HA
+# ``unknown``) rather than display a fake measurement. Outdoor
+# temperature and wind speed are exempt — 0.0 is a legitimate reading
+# there.
+_PLACEHOLDER_READING: float = 0.0
 
 
 # Chart units are emitted by the SPA as opaque tokens (``unit-KWh``,
@@ -253,8 +280,9 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
 
     @property
     def native_value(self) -> float | None:
-        """Return the latest reading for our TEMPIST<N> sensor."""
-        return self._data.state.indoor_temperatures.get(self._sensor_id)
+        """Return the latest reading, folding the 0.0 placeholder to unknown."""
+        value = self._data.state.indoor_temperatures.get(self._sensor_id)
+        return None if value == _PLACEHOLDER_READING else value
 
 
 class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
@@ -263,12 +291,19 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
     Shares the per-zone sub-device with the matching temperature
     sensor (1:1 by ``Klimas<N>`` id) so HA's device card renders
     both side by side.
+
+    Disabled by default: this building has no humidity measurement —
+    the server pushes a constant 0.0 for every zone (verified live
+    2026-06-11). The entity stays available to enable manually in
+    case a future installation does report real values; 0.0 folds to
+    ``unknown`` either way so a placeholder never reads as bone-dry air.
     """
 
     _attr_name = "Humidity"
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
@@ -285,8 +320,9 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
 
     @property
     def native_value(self) -> float | None:
-        """Return the latest humidity reading for our zone."""
-        return self._data.state.humidities.get(self._zone_id)
+        """Return the latest reading, folding the 0.0 placeholder to unknown."""
+        value = self._data.state.humidities.get(self._zone_id)
+        return None if value == _PLACEHOLDER_READING else value
 
 
 class SmartPlaceChartSensor(_SmartPlaceSensorBase):
@@ -295,13 +331,17 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
     The state is the daily ``STAND1`` reading (today's consumption
     so far). Resets to 0 at midnight, which HA treats as a period
     boundary under ``TOTAL_INCREASING`` and accumulates deltas
-    correctly in the Energy / Water dashboards. Other STAND series
-    (week / month / year) surface as ``stand<N>`` attributes.
+    correctly in the Energy / Water dashboards. The other STAND
+    series surface as named attributes (``this_week`` / ``this_month``
+    / ``this_year`` / ``lifetime`` — see ``_STAND_SERIES_NAMES``).
 
     The display name is read from ``ChartDefinition.label`` via the
     ``name`` property on each state write, so a late-arriving
     ``ChartDefinition`` swaps the fallback ``Electricity chart 49``
-    for ``Electricity`` without an HA reload.
+    for ``Electricity`` without an HA reload. ``(today)`` is appended
+    so nobody mistakes the daily reading for a lifetime total —
+    especially on the SUMME charts, where the label's own "total"
+    means "sum of meters I + II".
     """
 
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -325,11 +365,10 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
 
     @property
     def name(self) -> str:
-        """Return the chart's English label, or the generic fallback."""
+        """Return the chart's English label plus ``(today)``, or the fallback."""
         chart = self._data.state.charts.get(self._chart_id)
-        if chart and chart.label:
-            return chart.label
-        return self._fallback_name
+        label = chart.label if chart and chart.label else self._fallback_name
+        return f"{label} (today)"
 
     @property
     def native_value(self) -> float | None:
@@ -343,19 +382,25 @@ class SmartPlaceChartSensor(_SmartPlaceSensorBase):
     def extra_state_attributes(self) -> dict[str, str | float | None]:
         """Expose non-daily STAND series + chart-target attributes.
 
-        ``stand<N>`` carries each non-daily STAND series verbatim.
-        ``target`` is the latest ``CHARTZIEL`` value for the chart;
-        ``target_percent`` is current / target as a percentage; and
-        ``target_status`` (``green`` / ``orange`` / ``red``) mirrors
-        the SPA's own traffic-light thresholds (<60% / 60-90% /
-        ≥90%). All three are ``None`` until both the STAND1
-        reading and the target value have been observed.
+        Each non-daily STAND series surfaces under its friendly name
+        (``this_week`` / ``this_month`` / ``this_year`` /
+        ``lifetime``), falling back to the raw ``stand<N>`` key for
+        series whose meaning is unconfirmed. Series the server sends
+        empty are omitted entirely. ``target`` is the latest
+        ``CHARTZIEL`` value for the chart (a daily target, matching
+        the daily state); ``target_percent`` is current / target as a
+        percentage; and ``target_status`` (``green`` / ``orange`` /
+        ``red``) mirrors the SPA's own traffic-light thresholds
+        (<60% / 60-90% / ≥90%). All three are ``None`` until both the
+        STAND1 reading and the target value have been observed.
         """
         chart = self._data.state.charts.get(self._chart_id)
         if chart is None:
             return {}
         attrs: dict[str, str | float | None] = {
-            f"stand{series}": value for series, value in sorted(chart.stands.items()) if series != _DAILY_SERIES
+            _STAND_SERIES_NAMES.get(series, f"stand{series}"): value
+            for series, value in sorted(chart.stands.items())
+            if series != _DAILY_SERIES and value != ""
         }
         target = self._data.state.chart_targets.get(self._chart_id)
         current = _safe_float(chart.stands.get(_DAILY_SERIES))
@@ -396,36 +441,46 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
 
 
 class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):
-    """Aggregated view: which weather alarms are currently on.
+    """Aggregated view: which weather alarm is currently on.
 
-    Compacts ``Rain`` / ``Hail`` / per-zone ``WindAlarm<N>`` into a
-    single state line — empty when all clear. Per-alarm booleans
-    surface as attributes for finer-grained automations.
+    An enum over ``Rain`` / ``Hail`` / per-zone ``WindAlarm<N>``:
+    ``none`` when all clear (instead of an ``unknown`` that reads
+    like a failure), the alarm kind when exactly one is active, and
+    ``multiple`` when more than one fires at once — the per-alarm
+    attributes carry the breakdown for that case.
     """
 
     _attr_name = "Weather alarm"
     _attr_icon = "mdi:weather-cloudy-alert"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_translation_key = "weather_alarm"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_weather_alarm"
+        self._attr_options = ["none", "rain", "hail", "wind", "multiple"]
 
-    def _active_labels(self) -> list[str]:
+    def _active_kinds(self) -> list[str]:
         state = self._data.state
-        labels: list[str] = []
-        if state.hail_alarm:
-            labels.append("Hail")
+        kinds: list[str] = []
         if state.rain_alarm:
-            labels.append("Rain")
-        labels.extend(f"Wind alarm zone {zone}" for zone in sorted(state.wind_alarms) if state.wind_alarms[zone])
-        return labels
+            kinds.append("rain")
+        if state.hail_alarm:
+            kinds.append("hail")
+        if any(state.wind_alarms.values()):
+            kinds.append("wind")
+        return kinds
 
     @property
-    def native_value(self) -> str | None:
-        """Return a comma-joined alarm list, or None when nothing is active."""
-        labels = self._active_labels()
-        return ", ".join(labels) if labels else None
+    def native_value(self) -> str:
+        """Return ``none``, the single active alarm kind, or ``multiple``."""
+        kinds = self._active_kinds()
+        if not kinds:
+            return "none"
+        if len(kinds) == 1:
+            return kinds[0]
+        return "multiple"
 
     @property
     def extra_state_attributes(self) -> dict[str, bool | list[int]]:

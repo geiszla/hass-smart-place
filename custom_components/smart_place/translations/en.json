@@ -24,5 +24,18 @@
     "abort": {
       "already_configured": "This Smart Place installation is already configured."
     }
+  },
+  "entity": {
+    "sensor": {
+      "weather_alarm": {
+        "state": {
+          "none": "None",
+          "rain": "Rain",
+          "hail": "Hail",
+          "wind": "Wind",
+          "multiple": "Multiple"
+        }
+      }
+    }
   }
 }
