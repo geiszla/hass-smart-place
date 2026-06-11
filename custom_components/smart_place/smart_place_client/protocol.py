@@ -295,6 +295,26 @@ def parse_chart_references(status_entry_value: str) -> Iterator[tuple[int, int, 
         yield int(m.group(1)), int(m.group(2)), m.group(3)
 
 
+_STATUS_UNIT_HINT_RE = re.compile(
+    r">([A-Z][A-Z0-9]*)~SPDB-[A-Z0-9]+>unit-([^~]+)",
+)
+
+
+def parse_unit_hints(status_entry_value: str) -> Iterator[tuple[str, str]]:
+    """Yield ``(signal_name, unit)`` pairs from a StatusEntry value.
+
+    Unit-bearing status rows bind a broadcast signal name to its
+    display unit, e.g. ``>TEMPOUT~SPDB-REM>unit-°C~`` or
+    ``>WINDGESCHWINDIGKEIT~SPDB-REM>unit-km/h~`` (captured live
+    2026-06-11; the ``°C`` arrives double-encoded on the wire and is
+    normalised by :func:`repair_mojibake` before parsing). Chart rows
+    (``CHART<id>STAND<series>``) match too — harmless, but the chart
+    pipeline reads :func:`parse_chart_references` instead.
+    """
+    for m in _STATUS_UNIT_HINT_RE.finditer(status_entry_value):
+        yield m.group(1), m.group(2)
+
+
 @dataclass(frozen=True, slots=True)
 class MessageDefinition:
     r"""Declarative entry in :data:`KNOWN_MESSAGES`.
