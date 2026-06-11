@@ -1,6 +1,6 @@
 """Binary sensor platform for Smart Place.
 
-Three families of entities live here:
+Two families of entities live here:
 
 - ``SmartPlaceConnectionSensor`` — diagnostic; tracks WS health.
 - Alarm sensors derived from broadcast pushes (``Rain``, ``Hail``,
@@ -9,7 +9,6 @@ Three families of entities live here:
   (the ones that retract the blinds), not ambient weather readings,
   so a uniform Problem/OK reading fits all of them — including
   rain, which previously used ``MOISTURE`` and stuck out.
-- A per-group ``Any blind closed`` rollup (``JALZENTRAL<N>``).
 
 Scenes (``SceneConfig`` + ``SZENEN<N>``) are deliberately *not*
 exposed: the server reports several "active" at once (verified live
@@ -19,14 +18,15 @@ them in ``SmartPlaceState`` for future use; ``async_setup_entry``
 in ``__init__.py`` removes the previously-registered scene entities
 from the registry.
 
-``Any light on`` (``LEUCHTENZENTRAL<N>``) was likewise dropped: the
-flag is the state of the SPA's "All" master button, not an aggregate
-(verified live 2026-06-11 — it read 00 while two lights were on).
-A truthful replacement should fold the per-light ``LightState``
-(``leuchte<n>``) pushes instead; the message stays in the registry
-for that. The same suspicion applies to ``JALZENTRAL<N>`` above —
-it survives only because no frame for it has ever been observed
-live, so no entity materialises anyway.
+``Any light on`` (``LEUCHTENZENTRAL<N>``) and ``Any blind closed``
+(``JALZENTRAL<N>``) were likewise dropped: each flag is the state of
+the SPA's per-type "All" master button, not an aggregate (verified
+live 2026-06-11 — LEUCHTENZENTRAL1 read 00 while two lights were on;
+the blinds menu wires JALZENTRAL1 to the same button mechanism, and
+no JALZENTRAL broadcast has ever been observed). Truthful
+replacements should fold the per-device pushes — ``leuchte<n>``
+(``LightState``) and ``JALICO<n>`` — which stay in the message
+registry for that.
 
 Parcel deliveries are exposed as a ``sensor`` entity (not binary):
 the useful state is the unlock PIN (text), surfaced as the ``Package
@@ -73,7 +73,6 @@ async def async_setup_entry(
     if state.blinds_maintenance is not None:
         entities.append(SmartPlaceBlindsMaintenanceSensor(entry, data))
     entities.extend(SmartPlaceWindAlarmSensor(entry, data, zone_id) for zone_id in sorted(state.wind_alarms))
-    entities.extend(SmartPlaceAnyBlindClosedSensor(entry, data, group_id) for group_id in sorted(state.blinds_central))
 
     async_add_entities(entities)
 
@@ -206,29 +205,3 @@ class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
     def is_on(self) -> bool | None:
         """Return True iff the zone's wind alarm is currently active."""
         return self._data.state.wind_alarms.get(self._zone_id)
-
-
-class SmartPlaceAnyBlindClosedSensor(_SmartPlaceBinarySensorBase):
-    """Aggregate group flag: any blind closed for ``JALZENTRAL<N>``.
-
-    Best-effort: the SPA's ``JALZENTRAL<N>`` payload is often empty
-    or ``"00"`` when no blinds are closed, and something else when
-    at least one is. The exact semantics aren't fully documented;
-    treat the ``True`` side as "blinds appear to be in a non-neutral
-    state" rather than a strict closed/not-closed reading.
-    """
-
-    _attr_icon = "mdi:blinds-horizontal-closed"
-
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, group_id: int) -> None:
-        """Wire the per-group name + unique_id."""
-        super().__init__(entry, data)
-        self._group_id = group_id
-        suffix = f" (group {group_id})" if group_id > 1 else ""
-        self._attr_name = f"Any blind closed{suffix}"
-        self._attr_unique_id = f"{entry.entry_id}_blinds_central_{group_id}"
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return True iff at least one blind in the group appears closed."""
-        return self._data.state.blinds_central.get(self._group_id)

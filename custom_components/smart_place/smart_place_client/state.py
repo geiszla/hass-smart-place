@@ -205,11 +205,6 @@ class SmartPlaceState:
     # Whether scene N is currently active, from ``SZENEN<N>``
     # broadcasts (``"01"`` = active).
     scene_states: dict[int, bool] = field(default_factory=dict)
-    # Aggregate ``any blind closed`` flag per ``JALZENTRAL<N>``
-    # group. Best-effort: empty / ``"00"`` = none closed, anything
-    # else = at least one closed. The SPA's semantics here aren't
-    # fully documented; revisit if the user reports false positives.
-    blinds_central: dict[int, bool] = field(default_factory=dict)
     # ``FEUCHTEIST<N>`` indoor humidity in % per climate-zone id —
     # paired 1:1 with ``Klimas<N>`` zones the same way as
     # ``indoor_temperatures``.
@@ -294,14 +289,15 @@ class SmartPlaceState:
             self._apply_chart_definition(frame.index, frame.value)
         elif name == "SceneState" and frame.index is not None:
             self.scene_states[frame.index] = _alarm_on(frame.value)
-        # ``LightsCentral`` (LEUCHTENZENTRAL<N>) is deliberately NOT
-        # folded: it is the state of the SPA's "All" master button,
-        # not an any-light-on aggregate (verified live 2026-06-11 —
-        # it read 00 while two ``leuchte<n>`` loads were at 255).
-        # Per-light ``LightState`` frames are the truthful source;
-        # fold those instead when light support lands.
-        elif name == "BlindsCentral" and frame.index is not None:
-            self.blinds_central[frame.index] = _alarm_on(frame.value)
+        # ``LightsCentral`` (LEUCHTENZENTRAL<N>) and ``BlindsCentral``
+        # (JALZENTRAL<N>) are deliberately NOT folded: each is the
+        # state of the SPA's per-type "All" master button, not an
+        # aggregate (verified live 2026-06-11 — LEUCHTENZENTRAL1 read
+        # 00 while two ``leuchte<n>`` loads were at 255; the blinds
+        # menu wires JALZENTRAL1 to the same button mechanism). The
+        # truthful sources are the per-device pushes — ``leuchte<n>``
+        # (``LightState``) and ``JALICO<n>`` — fold those instead
+        # when light/blind support lands.
         elif name == "Humidity" and frame.index is not None:
             value = _safe_float(frame.value)
             if value is not None:

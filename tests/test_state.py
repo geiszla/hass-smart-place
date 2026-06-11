@@ -193,19 +193,18 @@ def test_apply_scene_state_and_config_fold_separately() -> None:
     assert state.scenes == {9: "Afternoon sun", 10: "Evening"}
 
 
-def test_apply_blinds_central_tracks_groups_and_lights_central_is_ignored() -> None:
-    """JALZENTRAL folds into per-group booleans; LEUCHTENZENTRAL is not folded.
+def test_apply_central_master_button_frames_are_ignored() -> None:
+    """LEUCHTENZENTRAL / JALZENTRAL are deliberately not folded.
 
-    LEUCHTENZENTRAL is the SPA's "All" master-button state, not an
-    any-light-on aggregate (verified live 2026-06-11), so the snapshot
-    deliberately drops it — the frame must still parse without error.
+    Each is the SPA's per-type "All" master-button state, not an
+    aggregate (verified live 2026-06-11), so the snapshot drops both —
+    the frames must still apply without error.
     """
     state = SmartPlaceState()
     state.apply(NamedValue(name="LightsCentral", value="01", index=1))
-    state.apply(NamedValue(name="BlindsCentral", value="", index=1))
-    state.apply(NamedValue(name="BlindsCentral", value="03", index=2))
-    assert state.blinds_central == {1: False, 2: True}
+    state.apply(NamedValue(name="BlindsCentral", value="03", index=1))
     assert not hasattr(state, "lights_central")
+    assert not hasattr(state, "blinds_central")
 
 
 def test_apply_humidity_records_per_zone_value() -> None:

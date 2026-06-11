@@ -117,14 +117,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Entity families exposed until 2026-06 and then dropped — scenes
     # (the server reports several "active" at once, so on/off carries
-    # no usable meaning) and the LEUCHTENZENTRAL "any light on" rollup
-    # (actually the SPA's "All" master-button state, not an aggregate);
+    # no usable meaning) and the LEUCHTENZENTRAL / JALZENTRAL rollups
+    # (actually the SPA's "All" master-button states, not aggregates);
     # see binary_sensor.py for both. Their registry entries would
     # otherwise linger forever as dead "restored" entities, so prune
     # them here.
     retired_unique_id_prefixes = (
         f"{entry.entry_id}_scene_",
         f"{entry.entry_id}_lights_central_",
+        f"{entry.entry_id}_blinds_central_",
     )
     registry = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
