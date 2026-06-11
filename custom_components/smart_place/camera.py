@@ -38,7 +38,7 @@ import aiohttp
 from homeassistant.components.camera import Camera
 from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_web, async_get_clientsession
 
-from . import SmartPlaceData, main_device_info
+from . import SmartPlaceData, category_device_info
 from .const import DOMAIN
 
 if TYPE_CHECKING:
@@ -59,6 +59,22 @@ _SNAPSHOT_MAX_BYTES: int = 4_000_000
 
 _JPEG_SOI: bytes = b"\xff\xd8"
 _JPEG_EOI: bytes = b"\xff\xd9"
+
+# The vendor's GlobalGsa door-opener labels do NOT line up with the
+# physical entrance cameras on this installation (verified 2026-06-12
+# against the live feeds — the opener ids are mailbox/garage-swapped
+# versus the camera ids, and id 4's opener reads "apartment entrance"
+# while the camera is the garage entrance). So camera names are pinned
+# here by GlobalGsa camera id — the same installation-specific approach
+# the door buttons take. Ids absent from this map fall back to the
+# vendor opener label (a reasonable default on other installations),
+# then to a bare "Camera N".
+_CAMERA_NAMES: dict[int, str] = {
+    1: "Ground floor entrance",
+    2: "Garage",
+    3: "Mailbox",
+    4: "Garage entrance",
+}
 
 
 async def async_setup_entry(
@@ -90,13 +106,12 @@ class SmartPlaceIntercomCamera(Camera):
         super().__init__()
         self._data = data
         self._link = link
-        # Name from the door-opener label that shares this camera's id
-        # (e.g. "Garage camera"); fall back to the bare id when the
-        # GlobalGsa frame carried no matching label.
-        label = data.state.gsa_door_labels.get(camera_id)
+        # Pinned name for this installation's cameras, falling back to
+        # the vendor opener label then the bare id (see _CAMERA_NAMES).
+        label = _CAMERA_NAMES.get(camera_id) or data.state.gsa_door_labels.get(camera_id)
         self._attr_name = f"{label} camera" if label else f"Camera {camera_id}"
         self._attr_unique_id = f"{entry.entry_id}_camera_{camera_id}"
-        self._attr_device_info = main_device_info(entry)
+        self._attr_device_info = category_device_info(entry, "Cameras")
 
     def _build_url(self) -> str | None:
         """Build the live MJPEG URL from the current route, or None if unrouted.
