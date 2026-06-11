@@ -43,10 +43,9 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 
-from . import SmartPlaceData
+from . import SmartPlaceData, main_device_info
 from .const import DOMAIN
 
 if TYPE_CHECKING:
@@ -86,11 +85,7 @@ class _SmartPlaceBinarySensorBase(BinarySensorEntity):
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Smart Place",
-            manufacturer="smart PLACE AG",
-        )
+        self._attr_device_info = main_device_info(entry)
 
     @property
     def available(self) -> bool:

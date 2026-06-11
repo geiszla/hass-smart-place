@@ -17,9 +17,11 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
 from .smart_place_client import (
+    DISCOVERY_ORIGIN,
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
@@ -50,6 +52,22 @@ HEALTHY_PHASES: frozenset[SessionPhase] = frozenset(
         SessionPhase.READY,
     },
 )
+
+
+def main_device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Registry info for the main Smart Place device, shared by all platforms.
+
+    ``configuration_url`` deep-links to the vendor SPA with the entry's
+    current token so automations can template it via
+    ``device_attr(..., 'configuration_url')`` instead of hardcoding the
+    token — a re-auth refreshes the URL on the post-reauth reload.
+    """
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Smart Place",
+        manufacturer="smart PLACE AG",
+        configuration_url=f"{DISCOVERY_ORIGIN}/Start5?{entry.data[CONF_TOKEN]}",
+    )
 
 
 @dataclass(slots=True)
