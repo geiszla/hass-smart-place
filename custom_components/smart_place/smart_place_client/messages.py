@@ -31,6 +31,7 @@ from .protocol import (
     _parse_go_to_link_ssl,
     _parse_temperature,
     _raw_value_parser,
+    repair_mojibake,
 )
 
 
@@ -620,7 +621,13 @@ def parse_frame(text: str) -> ServerFrame:
     :class:`~smart_place_client.protocol.UnknownFrame` so the dispatch
     layer can log + skip + record for later analysis rather than
     crashing.
+
+    The raw text is passed through :func:`repair_mojibake` first — the
+    server double-encodes UTF-8 in German labels, and repairing here
+    (the single choke point between the wire and every consumer) keeps
+    captures raw while every parsed frame sees clean text.
     """
+    text = repair_mojibake(text)
     for defn in KNOWN_MESSAGES:
         if defn.pattern.match(text):
             return defn.parse(text)

@@ -31,6 +31,7 @@ from .protocol import (
     UnknownFrame,
     encode_frame,
     parse_chart_references,
+    repair_mojibake,
 )
 from .state import ChartReading, SmartPlaceState, chart_target_status
 
@@ -65,4 +66,5 @@ __all__ = [
     "install_token_redaction_filter",
     "parse_chart_references",
     "parse_frame",
+    "repair_mojibake",
 ]

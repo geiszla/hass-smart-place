@@ -7,7 +7,15 @@ exactly this kind of test.
 
 from __future__ import annotations
 
-from smart_place_client import NamedFields, NamedValue, SmartPlaceState, Temperature, UnknownFrame, chart_target_status
+from smart_place_client import (
+    NamedFields,
+    NamedValue,
+    SmartPlaceState,
+    Temperature,
+    UnknownFrame,
+    chart_target_status,
+    parse_frame,
+)
 
 
 def test_apply_outdoor_temperature_parses_float() -> None:
@@ -122,6 +130,21 @@ def test_apply_chart_definition_translates_german_kaltwasser() -> None:
     state.apply(NamedValue(name="ChartDefinition", value=raw, index=335))
     assert state.charts[335].label == "Cold water I"
     assert state.charts[335].category == "Wasser"
+
+
+def test_apply_chart_definition_translates_mojibake_waerme() -> None:
+    """A double-encoded ``WÃ¤rme`` wire frame ends up as the English ``Heating``.
+
+    Exercises the full path: ``parse_frame`` repairs the mojibake the
+    live server sends (captured 2026-06-11), then the German→English
+    chart-label map — which the mojibake used to silently defeat —
+    matches ``Wärme``.
+    """
+    raw = "SingelDiagramm144:WÃ¤rme HH77-14-01;Area;Zeit;Verbrauch in Kw/h;WÃ¤rme=144=rgba=rgba;===;===;===;;CHF;0.9;;2021018;Energie;kWh;smartPLACE_Energie_W;53;HH77-14-01 DG 11U3"
+    state = SmartPlaceState()
+    state.apply(parse_frame(raw))
+    assert state.charts[144].label == "Heating"
+    assert state.charts[144].unit == "kWh"
 
 
 def test_apply_chart_definition_marks_summe_charts() -> None:

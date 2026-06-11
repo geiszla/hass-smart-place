@@ -32,6 +32,7 @@ from smart_place_client.protocol import (
     discovery_ws_url,
     encode_frame,
     parse_chart_references,
+    repair_mojibake,
 )
 
 # ---------------------------- parse_frame ----------------------------
@@ -359,6 +360,27 @@ def test_parse_chart_references_returns_empty_when_no_chart() -> None:
     """A non-chart row (TEMPOUT label) yields nothing."""
     raw = "SPtext390>TEMPOUT~SPDB-REM>unit-C~>LinkOff"
     assert list(parse_chart_references(raw)) == []
+
+
+def test_repair_mojibake_undoes_double_encoded_utf8() -> None:
+    """The server's double-encoded German labels decode back to the intended text."""
+    assert repair_mojibake("WÃ¤rme HH77-14-01") == "Wärme HH77-14-01"
+    assert repair_mojibake("LÃ¼ftung Stufe 1") == "Lüftung Stufe 1"
+
+
+def test_repair_mojibake_passes_through_ascii_and_clean_utf8() -> None:
+    """ASCII and correctly-encoded text are returned unchanged."""
+    assert repair_mojibake("TEMPIST1:24.2") == "TEMPIST1:24.2"
+    assert repair_mojibake("Wärme") == "Wärme"
+
+
+def test_parse_frame_repairs_mojibake_in_payload() -> None:
+    """parse_frame feeds repaired text to the matched parser."""
+    frame = parse_frame("SingelDiagramm144:WÃ¤rme HH77-14-01;Area;Zeit")
+    assert isinstance(frame, NamedValue)
+    assert frame.name == "ChartDefinition"
+    assert frame.index == 144
+    assert frame.value.startswith("Wärme ")
 
 
 def test_known_messages_examples_round_trip_through_parse_frame() -> None:

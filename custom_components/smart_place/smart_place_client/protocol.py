@@ -171,6 +171,27 @@ ServerFrame = GoToLinkSSL | HostNotOnline | GlobalConfig | Temperature | NamedVa
 """Any frame the server may emit, post-parsing."""
 
 
+def repair_mojibake(text: str) -> str:
+    """Undo the server's double-encoded UTF-8 (``WÃ¤rme`` → ``Wärme``).
+
+    The Smart Place server UTF-8-encodes German labels twice (verified
+    on the wire 2026-06-11: the WS text frame itself carries the
+    mojibake), which garbles names and defeats the German→English
+    translation tables downstream. A double-encoded string round-trips
+    ``encode("latin-1")`` / ``decode("utf-8")`` cleanly back to the
+    intended text; correctly-encoded non-ASCII text fails one of the
+    two steps and passes through unchanged. The theoretical false
+    positive — a label that *intentionally* spells out mojibake-like
+    sequences such as ``Ã¼`` — does not occur in this protocol.
+    """
+    if text.isascii():
+        return text
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 def _parse_fields_after_prefix(text: str, prefix: str) -> tuple[str, ...]:
     """Return the ``>``-delimited fields trailing ``prefix`` in ``text``.
 
