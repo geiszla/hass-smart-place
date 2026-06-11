@@ -88,6 +88,20 @@ class Commands:
         encode=_static("GiveMeMainmenu"),
         example="GiveMeMainmenu",
     )
+    GlobalGsa = CommandDefinition(
+        name="GlobalGsa",
+        description=(
+            "Bootstrap read (wire: ``GiveMeGlobalGsa``): ask for the "
+            "door-intercom (GSA) config. Server replies with one "
+            "``GsaConfig`` frame (wire: ``GlobalGsa>...``) carrying the "
+            "SIP/Yealink gateway flag, LAN IP, volumes, the intercom "
+            "camera array (``id^/linkmap<n>``) and the door-opener labels. "
+            "The SPA issues it after ``GiveMeMainMenuFinished``; the camera "
+            "platform needs the camera array to enumerate entities."
+        ),
+        encode=_static("GiveMeGlobalGsa"),
+        example="GiveMeGlobalGsa",
+    )
     SocketConnected = CommandDefinition(
         name="SocketConnected",
         description=(

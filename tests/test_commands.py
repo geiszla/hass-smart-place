@@ -31,6 +31,7 @@ def test_static_commands_encode_matches_example() -> None:
     static_names = {
         "StatusContent",
         "Mainmenu",
+        "GlobalGsa",
         "Ping",
         "OpenGroundFloorEntrance",
         "OpenMailbox",
