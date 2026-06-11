@@ -132,6 +132,14 @@ def test_apply_chart_definition_translates_german_kaltwasser() -> None:
     assert state.charts[335].category == "Wasser"
 
 
+def test_apply_status_entry_folds_unit_hints_with_mojibake_repair() -> None:
+    """A raw TEMPOUT status row (mojibake ``Â°C`` as sent live) folds to a clean hint."""
+    raw = "StatusInhaltListe_1_1_SPtext390>TEMPOUT~SPDB-REM>unit-Â°C~>LinkOff"
+    state = SmartPlaceState()
+    state.apply(parse_frame(raw))
+    assert state.unit_hints == {"TEMPOUT": "°C"}
+
+
 def test_apply_chart_definition_translates_mojibake_waerme() -> None:
     """A double-encoded ``WÃ¤rme`` wire frame ends up as the English ``Heating``.
 

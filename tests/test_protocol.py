@@ -32,6 +32,7 @@ from smart_place_client.protocol import (
     discovery_ws_url,
     encode_frame,
     parse_chart_references,
+    parse_unit_hints,
     repair_mojibake,
 )
 
@@ -360,6 +361,20 @@ def test_parse_chart_references_returns_empty_when_no_chart() -> None:
     """A non-chart row (TEMPOUT label) yields nothing."""
     raw = "SPtext390>TEMPOUT~SPDB-REM>unit-C~>LinkOff"
     assert list(parse_chart_references(raw)) == []
+
+
+def test_parse_unit_hints_extracts_singleton_units() -> None:
+    """Unit-bearing rows yield ``(signal_name, unit)`` pairs (live shapes, 2026-06-11)."""
+    assert list(parse_unit_hints("1_1_SPtext390>TEMPOUT~SPDB-REM>unit-°C~>LinkOff")) == [("TEMPOUT", "°C")]
+    assert list(parse_unit_hints("1_4_SPtext393>WINDGESCHWINDIGKEIT~SPDB-REM>unit-km/h~>LinkOff")) == [
+        ("WINDGESCHWINDIGKEIT", "km/h"),
+    ]
+
+
+def test_parse_unit_hints_skips_icon_rows() -> None:
+    """Icon-bearing rows (REGEN / HAGEL) carry no unit and yield nothing."""
+    raw = "1_2_SPtext391>REGEN~SPDB-REM>icon-regen~>LinkOff<SPtext402>HAGEL~SPDB-REM>icon-hagel~>LinkOff"
+    assert list(parse_unit_hints(raw)) == []
 
 
 def test_repair_mojibake_undoes_double_encoded_utf8() -> None:

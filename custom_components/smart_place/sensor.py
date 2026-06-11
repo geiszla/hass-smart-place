@@ -109,6 +109,24 @@ _CHART_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
     "L": (SensorDeviceClass.WATER, UnitOfVolume.LITERS),
 }
 
+# Unit tokens from the unit-bearing StatusEntry rows (``unit-°C`` on
+# TEMPOUT, ``unit-km/h`` on WINDGESCHWINDIGKEIT — see
+# ``parse_unit_hints``), mapped to proper HA units. HA validates
+# ``native_unit_of_measurement`` against the device class, so the
+# server token can't pass through verbatim; unknown or absent tokens
+# fall back to the units this installation is known to use.
+_TEMPERATURE_UNIT_MAP: dict[str, str] = {
+    "°C": UnitOfTemperature.CELSIUS,
+    "C": UnitOfTemperature.CELSIUS,
+    "°F": UnitOfTemperature.FAHRENHEIT,
+    "F": UnitOfTemperature.FAHRENHEIT,
+}
+_WIND_SPEED_UNIT_MAP: dict[str, str] = {
+    "km/h": UnitOfSpeed.KILOMETERS_PER_HOUR,
+    "m/s": UnitOfSpeed.METERS_PER_SECOND,
+    "mph": UnitOfSpeed.MILES_PER_HOUR,
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -223,17 +241,23 @@ class _SmartPlaceSensorBase(SensorEntity):
 
 
 class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
-    """Outdoor temperature reading from the TEMPOUT broadcast."""
+    """Outdoor temperature reading from the TEMPOUT broadcast.
+
+    The unit comes from the bootstrap's TEMPOUT status-row hint
+    (``unit-°C`` on this installation), falling back to Celsius when
+    the hint is missing or unrecognised.
+    """
 
     _attr_name = "Outdoor temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
-        """Wire the entry-scoped unique_id."""
+        """Wire the entry-scoped unique_id + server-hinted unit."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_outdoor_temperature"
+        hint = data.state.unit_hints.get("TEMPOUT", "")
+        self._attr_native_unit_of_measurement = _TEMPERATURE_UNIT_MAP.get(hint, UnitOfTemperature.CELSIUS)
 
     @property
     def native_value(self) -> float | None:
@@ -244,25 +268,23 @@ class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
 class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
     """Wind speed reading from the WINDGESCHWINDIGKEIT broadcast.
 
-    Unit confirmed two ways: the SPA's web UI renders it as ``km/h``,
-    and the bootstrap StatusEntry for this frame embeds the hint
-    explicitly — ``StatusInhaltListe_1_4_SPtext393>WINDGESCHWINDIGKEIT~
-    SPDB-REM>unit-km/h~>LinkOff`` (captured 2026-05-28). We could pull
-    that hint dynamically the way ``parse_chart_references`` does for
-    charts, but with only two unit-bearing singletons (wind + outdoor
-    temperature, both stable across installations) hard-coding stays
-    simpler.
+    The unit comes from the bootstrap's WINDGESCHWINDIGKEIT status-row
+    hint — ``StatusInhaltListe_1_4_SPtext393>WINDGESCHWINDIGKEIT~
+    SPDB-REM>unit-km/h~>LinkOff`` (captured 2026-05-28, re-verified
+    2026-06-11) — falling back to ``km/h`` (what the SPA's web UI
+    renders) when the hint is missing or unrecognised.
     """
 
     _attr_name = "Wind speed"
     _attr_device_class = SensorDeviceClass.WIND_SPEED
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfSpeed.KILOMETERS_PER_HOUR
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
-        """Wire the entry-scoped unique_id."""
+        """Wire the entry-scoped unique_id + server-hinted unit."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_wind_speed"
+        hint = data.state.unit_hints.get("WINDGESCHWINDIGKEIT", "")
+        self._attr_native_unit_of_measurement = _WIND_SPEED_UNIT_MAP.get(hint, UnitOfSpeed.KILOMETERS_PER_HOUR)
 
     @property
     def native_value(self) -> float | None:

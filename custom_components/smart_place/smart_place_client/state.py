@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING
 
-from .protocol import NamedFields, NamedValue, Temperature
+from .protocol import NamedFields, NamedValue, Temperature, parse_unit_hints
 
 if TYPE_CHECKING:
     from .protocol import ServerFrame
@@ -230,6 +230,12 @@ class SmartPlaceState:
     # float. Paired with the chart's STAND1 reading to compute the
     # traffic-light status (see :func:`chart_target_status`).
     chart_targets: dict[int, float] = field(default_factory=dict)
+    # Display-unit hints by broadcast signal name, from the
+    # unit-bearing ``StatusEntry`` rows of the bootstrap (e.g.
+    # ``{"TEMPOUT": "°C", "WINDGESCHWINDIGKEIT": "km/h"}``). The HA
+    # layer maps these to proper HA units instead of hardcoding,
+    # falling back to the units observed on this installation.
+    unit_hints: dict[str, str] = field(default_factory=dict)
 
     def apply(self, frame: ServerFrame) -> None:
         """Fold one frame into the snapshot — best-effort, never raises."""
@@ -314,6 +320,8 @@ class SmartPlaceState:
             value = _safe_float(frame.value)
             if value is not None:
                 self.chart_targets[frame.index] = value
+        elif name == "StatusEntry":
+            self.unit_hints.update(parse_unit_hints(frame.value))
 
     def _apply_named_fields(self, frame: NamedFields) -> None:
         if frame.name == "ClimateConfig" and frame.index is not None and frame.fields:
