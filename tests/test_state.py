@@ -201,6 +201,49 @@ def test_apply_scene_state_and_config_fold_separately() -> None:
     assert state.scenes == {9: "Afternoon sun", 10: "Evening"}
 
 
+def test_apply_gsa_config_extracts_cameras_and_labels() -> None:
+    """The full GlobalGsa wire frame folds into cameras + English door labels.
+
+    Exercises the whole path: ``parse_frame`` classifies the
+    ``GlobalGsa>...`` text as a ``GsaConfig`` ``NamedFields``, then the
+    fold splits field [3] (camera id^link) and field [4] (opener
+    id^label) and translates the labels. Wire is the 2026-05-28 capture
+    with the LAN IP swapped for a placeholder.
+    """
+    raw = (
+        "GlobalGsa>YEALINKOFF>10.0.0.1>60"
+        ">1^/linkmap1<2^/linkmap2<3^/linkmap3<4^/linkmap4"
+        ">1^Eingang EG<2^Briefkasten<3^Garage<4^Eingang WHG>70>"
+    )
+    state = SmartPlaceState()
+    state.apply(parse_frame(raw))
+    assert state.gsa_cameras == {1: "/linkmap1", 2: "/linkmap2", 3: "/linkmap3", 4: "/linkmap4"}
+    assert state.gsa_door_labels == {
+        1: "Ground floor entrance",
+        2: "Mailbox",
+        3: "Garage",
+        4: "Apartment entrance",
+    }
+
+
+def test_apply_gsa_config_tolerates_leer_and_unknown_labels() -> None:
+    """``LEER`` cameras yield no entities; unknown opener labels pass through raw."""
+    raw = "GlobalGsa>YEALINKOFF>10.0.0.1>60>LEER>1^Seiteneingang>70>"
+    state = SmartPlaceState()
+    state.apply(parse_frame(raw))
+    assert state.gsa_cameras == {}
+    # Unknown German label has no translation entry → kept verbatim.
+    assert state.gsa_door_labels == {1: "Seiteneingang"}
+
+
+def test_apply_gsa_config_tolerates_truncated_frame() -> None:
+    """A GlobalGsa frame cut off before the camera field leaves the maps empty."""
+    state = SmartPlaceState()
+    state.apply(parse_frame("GlobalGsa>YEALINKOFF>10.0.0.1>60>"))
+    assert state.gsa_cameras == {}
+    assert state.gsa_door_labels == {}
+
+
 def test_apply_central_master_button_frames_are_ignored() -> None:
     """LEUCHTENZENTRAL / JALZENTRAL are deliberately not folded.
 

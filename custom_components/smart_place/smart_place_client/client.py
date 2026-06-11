@@ -704,8 +704,16 @@ class SmartPlaceClient:
             # server doesn't require it — verified 2026-05-29.
             # GiveMeGlobalConfig is sent first by the SPA but the
             # server doesn't require it — verified 2026-05-28.
+            #   4. Commands.GlobalGsa -> the door-intercom (GSA) config:
+            #      SIP gateway flag, LAN IP, volumes, the intercom
+            #      camera array (id^/linkmap<n>) and door-opener labels,
+            #      as a single GsaConfig frame. The SPA issues it after
+            #      MainMenuFinished; we fold it in right after Mainmenu so
+            #      the camera platform sees gsa_cameras within the setup
+            #      observation window.
             await self.send(Commands.StatusContent.encode())
             await self.send(Commands.Mainmenu.encode())
+            await self.send(Commands.GlobalGsa.encode())
             await self.send(Commands.SocketConnected.encode())
 
             self._chart_poll_task = asyncio.create_task(
