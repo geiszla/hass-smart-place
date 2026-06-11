@@ -71,6 +71,25 @@ def main_device_info(entry: ConfigEntry) -> DeviceInfo:
     )
 
 
+def category_device_info(entry: ConfigEntry, category: str) -> DeviceInfo:
+    """Sub-device grouping one family of entities under its own dashboard card.
+
+    ``category`` is both the human label (rendered as ``Smart Place
+    <category>``) and, lower-cased, the identifier suffix. Hung off the
+    main device via ``via_device`` so HA's auto dashboard renders it as a
+    separate card while the Devices page still nests it under Smart Place —
+    the same pattern the per-room climate sub-devices use (sensor.py).
+    Splitting the entities across these keeps the integration from
+    rendering as one giant 40-entity card.
+    """
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")},
+        name=f"Smart Place {category}",
+        manufacturer="smart PLACE AG",
+        via_device=(DOMAIN, entry.entry_id),
+    )
+
+
 @dataclass(slots=True)
 class SmartPlaceData:
     """Per-config-entry runtime data stored on hass.data[DOMAIN][entry_id]."""
