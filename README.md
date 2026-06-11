@@ -19,7 +19,7 @@ smart_place_client/             # Standalone async library (no HA dependency)
   client.py                     # SmartPlaceClient.live(...) / .replay(...) + Click CLI
 custom_components/smart_place/  # Home Assistant integration (thin wrapper)
 tests/                          # pytest + fixtures
-scripts/                        # setup / lint / lint-check / test
+scripts/                        # setup / lint / lint-check / test / ha-live
 ```
 
 ## Quick start
@@ -43,6 +43,33 @@ uv run sp-cli --replay tests/fixtures/session.ndjson       # offline replay, no 
 You can still override the token per-invocation: `SMART_PLACE_TOKEN=... uv run sp-cli --live`.
 An exported / explicit env var always wins over `.env`. See DESIGN.md §4
 for the full secret-storage rationale.
+
+### Inspecting the deployed integration (`ha-live`)
+
+`sp-cli` talks to the **Smart Place server** — the raw frames *before* the
+integration processes them. `./scripts/ha-live` talks to a running **Home
+Assistant** instance over its REST + WebSocket APIs and shows the *result*:
+the devices, entities, states, categories, and units the integration
+actually produced. The two sit at opposite ends of the pipeline and don't
+overlap — use `ha-live` to verify that a code change landed correctly on the
+live box.
+
+```bash
+# Put HASS_TOKEN=<long-lived token> into .env (HA UI → your user →
+# Security → Long-lived access tokens). HASS_URL overrides the default
+# (http://homeassistant.local:8123).
+./scripts/ha-live status              # HA version + Smart Place config entries
+./scripts/ha-live entities            # entities with their current state values
+./scripts/ha-live state sensor.smart_place_electricity_today  # full state object
+./scripts/ha-live watch               # stream live state changes
+./scripts/ha-live logs                # smart_place log entries + tracebacks
+./scripts/ha-live reload              # reload the config entry (re-runs setup)
+./scripts/ha-live ws <command> [json] # arbitrary frontend WS command
+```
+
+The registry/log WebSocket commands use HA's frontend-internal API; if a
+command breaks after an HA upgrade, re-check the names against
+`homeassistant/components/config/` in home-assistant/core.
 
 Run lint and tests:
 
