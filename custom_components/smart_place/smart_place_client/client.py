@@ -110,6 +110,16 @@ def _interpret_discovery_frame(frame: ServerFrame) -> GoToLinkSSL:
     return frame
 
 
+def _camera_url(route: GoToLinkSSL, link: str) -> str:
+    """Build the MJPEG proxy URL for a camera ``link`` from a route.
+
+    The camera proxy listens on the routed connection's HTTP port,
+    ``routed_port - 1``; the link path (e.g. ``/linkmap1``) already
+    starts with ``/``.
+    """
+    return f"https://{route.host}:{route.port - 1}{link}"
+
+
 def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
     """Install a log filter that scrubs URL tokens from emitted records.
 
@@ -281,6 +291,14 @@ class SmartPlaceClient:
     _chart_poll_task: asyncio.Task[None] | None = None
     _heartbeat_task: asyncio.Task[None] | None = None
     _last_pong: float = 0.0
+    # Camera MJPEG proxy route, managed independently of the app WS.
+    # Seeded for free from the WS route on each (re)connect, then
+    # re-minted on demand when a camera fetch finds the routed port's
+    # lease has lapsed while the WS itself stayed up. See
+    # ``camera_base_url`` / ``refresh_camera_route``.
+    _camera_route: GoToLinkSSL | None = None
+    _camera_route_minted_at: float = 0.0
+    _camera_route_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # ------------------------- constructors -------------------------
 
@@ -554,6 +572,133 @@ class SmartPlaceClient:
         """
         await self._bootstrap_done.wait()
 
+    async def camera_base_url(self, link: str) -> str | None:
+        """Return a live MJPEG URL for an intercom camera path, or None.
+
+        ``link`` is the per-camera path from the GsaConfig reply (e.g.
+        ``/linkmap1``). The URL is built from the managed *camera* route
+        rather than the long-lived app-WS route: the app WS survives for
+        hours on its already-established connection, but a fresh GET to
+        that session's camera proxy stops working once the routed port's
+        lease lapses, so the WS route goes stale for cameras while the WS
+        stays healthy (see :meth:`refresh_camera_route`).
+
+        The route is seeded for free from the WS route on each connect,
+        so this usually returns immediately. It only mints a route here
+        if none has been seeded yet. Returns None in replay mode or if
+        discovery fails — the camera entity then renders unavailable.
+        """
+        route = self._camera_route
+        if route is None:
+            route = await self.refresh_camera_route("initial")
+        if route is None:
+            return None
+        return _camera_url(route, link)
+
+    async def refresh_camera_route(self, reason: str) -> GoToLinkSSL | None:
+        """Re-mint the camera route via a throwaway discovery handshake.
+
+        Called on demand when a camera fetch fails: the routed port's
+        lease for new connections has lapsed even though the app WS is
+        still up, so we run a fresh discovery to obtain a port whose
+        proxy is freshly leased. Logs the lapsed route's age and the
+        trigger at INFO so the (unknown) expiry interval is learnable
+        from the HA logs over time. Returns the fresh route, or None in
+        replay mode / on discovery failure.
+
+        Concurrency-safe: when several cameras on one card fail at once
+        they all call this, but only the first re-discovers — the rest
+        observe the route already changed and reuse it.
+        """
+        if self._live is None:
+            return None  # replay mode has no live server to route to
+        stale = self._camera_route
+        async with self._camera_route_lock:
+            # Another caller may have refreshed while we waited for the
+            # lock; don't pile on a second discovery for the same failure.
+            if self._camera_route is not None and self._camera_route is not stale:
+                return self._camera_route
+            loop = asyncio.get_running_loop()
+            prev_age = None if self._camera_route is None else loop.time() - self._camera_route_minted_at
+            try:
+                route = await self._discover_camera_route()
+            except (
+                SmartPlaceOfflineError,
+                SmartPlaceAuthError,
+                ProtocolError,
+                aiohttp.ClientError,
+                TimeoutError,
+            ) as err:
+                _LOGGER.warning("Smart Place camera route refresh (%s) failed: %s", reason, err)
+                return None
+            self._camera_route = route
+            self._camera_route_minted_at = loop.time()
+            if prev_age is None:
+                _LOGGER.info("Smart Place camera route minted (%s)", reason)
+            else:
+                _LOGGER.info(
+                    "Smart Place camera route refreshed (%s) — previous route lasted %.0fs before going stale",
+                    reason,
+                    prev_age,
+                )
+            return route
+
+    def _seed_camera_route(self, route: GoToLinkSSL | None) -> None:
+        """Adopt a freshly-routed link as the camera route (free on connect).
+
+        The routed port we just opened the app WS on has a fresh lease,
+        so its camera proxy (port − 1) is valid right now. Reusing it
+        spares the first camera access an otherwise-redundant discovery.
+        """
+        if route is None:
+            return
+        self._camera_route = route
+        self._camera_route_minted_at = asyncio.get_running_loop().time()
+
+    async def _discover_camera_route(self) -> GoToLinkSSL:
+        """Throwaway discovery handshake to mint a fresh camera route.
+
+        A deliberately side-effect-free twin of the discovery steps in
+        :meth:`_run_live_once`: it touches neither ``self.state`` nor
+        ``self._ws`` (those track the live app session) — it only needs a
+        routing frame so cameras can reach a freshly-leased port. The
+        routed-page GET mirrors what the SPA does before loading the
+        camera tiles. No app WS is opened; verified 2026-06-25 that the
+        camera proxy serves from a discovery + routed-page handshake
+        alone, no app WS required.
+        """
+        assert self._live is not None
+        if self._live.session is None:
+            self._live.session = aiohttp.ClientSession()
+        session = self._live.session
+        headers = {"User-Agent": USER_AGENT, "Origin": DISCOVERY_ORIGIN}
+        async with (
+            asyncio.timeout(DISCOVERY_STEP_TIMEOUT),
+            session.ws_connect(
+                discovery_ws_url(self._live.token),
+                headers=headers,
+                heartbeat=self._live.heartbeat,
+            ) as ws,
+        ):
+            first_msg = await ws.receive()
+            if first_msg.type is not aiohttp.WSMsgType.TEXT:
+                raise ProtocolError(f"discovery WS first frame had unexpected type {first_msg.type!r}")
+            route = _interpret_discovery_frame(parse_frame(str(first_msg.data)))
+        # Prime the routed page the way the SPA does before loading camera
+        # tiles. Best-effort: the proxy is port-gated, not cookie-gated,
+        # so a hiccup here shouldn't doom the camera fetch — don't raise.
+        with contextlib.suppress(aiohttp.ClientError, TimeoutError):
+            async with (
+                asyncio.timeout(DISCOVERY_STEP_TIMEOUT),
+                session.get(
+                    route.routed_https_url,
+                    headers={"User-Agent": USER_AGENT, "Referer": DISCOVERY_ORIGIN},
+                ) as resp,
+            ):
+                await resp.read()
+        _LOGGER.debug("camera route discovered: %s:%s", route.host, route.port)
+        return route
+
     async def connect_and_bootstrap(self) -> None:
         """One-shot discovery → app WS → bootstrap, with no retries.
 
@@ -671,6 +816,11 @@ class SmartPlaceClient:
         try:
             self._ws = app_ws
             self.state.on_app_open()
+            # The routed port we just opened has a fresh lease, so its
+            # camera proxy is good right now — adopt it as the camera
+            # route for free. It only needs an independent refresh once
+            # this lease lapses while the WS stays up (see camera.py).
+            self._seed_camera_route(route)
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
 
             # Bootstrap reads (DESIGN §10):

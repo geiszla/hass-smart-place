@@ -756,3 +756,87 @@ def test_unknown_frame_dispatched_without_state_advance() -> None:
     seen = asyncio.run(main())
     unknown = [f for f in seen if isinstance(f, UnknownFrame)]
     assert unknown == [UnknownFrame(raw="MysteryFrameXYZ:opaque")]
+
+
+# --------------------- camera route management ---------------------
+
+
+async def test_camera_base_url_built_from_seeded_route() -> None:
+    """A seeded camera route yields the proxy URL on port-1 with the link path."""
+    client = SmartPlaceClient.live(token="t")
+    client._camera_route = GoToLinkSSL(host="cam.example", port=33405, path="/Start1", token2="Leer")
+    url = await client.camera_base_url("/linkmap1")
+    assert url == "https://cam.example:33404/linkmap1"
+
+
+async def test_camera_base_url_mints_when_unseeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no seeded route, the first access mints one via discovery."""
+    minted = GoToLinkSSL(host="fresh.example", port=40001, path="/Start1", token2="Leer")
+
+    async def fake_discover(self_: SmartPlaceClient) -> GoToLinkSSL:
+        return minted
+
+    monkeypatch.setattr(SmartPlaceClient, "_discover_camera_route", fake_discover)
+    client = SmartPlaceClient.live(token="t")
+    url = await client.camera_base_url("/linkmap2")
+    assert url == "https://fresh.example:40000/linkmap2"
+    assert client._camera_route is minted
+
+
+async def test_camera_base_url_returns_none_in_replay() -> None:
+    """Replay mode has no live server to route to — cameras are unavailable."""
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    assert await client.camera_base_url("/linkmap1") is None
+
+
+async def test_refresh_camera_route_rediscovers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refresh replaces a stale route with a freshly-discovered one."""
+    stale = GoToLinkSSL(host="old.example", port=100, path="/Start1", token2="Leer")
+    fresh = GoToLinkSSL(host="new.example", port=200, path="/Start1", token2="Leer")
+
+    async def fake_discover(self_: SmartPlaceClient) -> GoToLinkSSL:
+        return fresh
+
+    monkeypatch.setattr(SmartPlaceClient, "_discover_camera_route", fake_discover)
+    client = SmartPlaceClient.live(token="t")
+    client._camera_route = stale
+    assert await client.refresh_camera_route("snapshot:test") is fresh
+    assert await client.camera_base_url("/linkmap1") == "https://new.example:199/linkmap1"
+
+
+async def test_refresh_camera_route_coalesces_concurrent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Several cameras failing at once trigger a single re-discovery."""
+    calls: list[int] = []
+    fresh = GoToLinkSSL(host="new.example", port=200, path="/Start1", token2="Leer")
+
+    async def fake_discover(self_: SmartPlaceClient) -> GoToLinkSSL:
+        calls.append(1)
+        await asyncio.sleep(0)  # let the other waiter queue on the lock
+        return fresh
+
+    monkeypatch.setattr(SmartPlaceClient, "_discover_camera_route", fake_discover)
+    client = SmartPlaceClient.live(token="t")
+    client._camera_route = GoToLinkSSL(host="old.example", port=100, path="/Start1", token2="Leer")
+    results = await asyncio.gather(
+        client.refresh_camera_route("stream:a"),
+        client.refresh_camera_route("stream:b"),
+    )
+    assert results == [fresh, fresh]
+    assert len(calls) == 1
+
+
+async def test_refresh_camera_route_discovery_failure_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A discovery failure during refresh is swallowed and surfaces as None."""
+
+    async def fake_discover(self_: SmartPlaceClient) -> GoToLinkSSL:
+        raise SmartPlaceOfflineError("offline")
+
+    monkeypatch.setattr(SmartPlaceClient, "_discover_camera_route", fake_discover)
+    client = SmartPlaceClient.live(token="t")
+    assert await client.refresh_camera_route("initial") is None
+
+
+async def test_refresh_camera_route_returns_none_in_replay() -> None:
+    """Replay clients never re-discover (no live server)."""
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    assert await client.refresh_camera_route("snapshot:test") is None
