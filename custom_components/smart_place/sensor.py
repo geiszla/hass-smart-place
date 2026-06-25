@@ -171,8 +171,11 @@ async def async_setup_entry(
     entities.extend(SmartPlaceIntercomSensor(entry, data, idx) for idx in intercom_ids)
     if state.infoboard_contents:
         entities.append(SmartPlaceInfoboardSensor(entry, data))
-    if state.person_info is not None:
-        entities.append(SmartPlacePersonInfoSensor(entry, data))
+    # Always created (not observation-gated): the idle banner is
+    # ``PERSINFO:Read`` which folds to ``None``, so gating on presence
+    # would usually skip the sensor at setup and a later banner could
+    # never surface (discovery is one-shot). Reads ``unknown`` when clear.
+    entities.append(SmartPlacePersonInfoSensor(entry, data))
     # Per-meter charts that roll up into a SUMME aggregate (e.g.
     # ``Cold water I`` / ``II`` under ``Cold water``) are registered
     # disabled — the aggregate is the reading users care about, and
@@ -588,6 +591,10 @@ class SmartPlaceChartTargetStatusSensor(_SmartPlaceChartScopedSensor):
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "chart_target_status"
     _attr_icon = "mdi:traffic-light"
+    # Hidden by default: the traffic-light status is a derived convenience
+    # for automations; the percent + daily-reading sensors carry the data
+    # users watch, so it stays out of the default UI.
+    _attr_entity_registry_visible_default = False
     _name_suffix = "target status"
 
     def __init__(
@@ -699,15 +706,15 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     """Per-intercom combined ringing + caller view.
 
     State is the translated caller location (e.g. ``Apartment
-    entrance``) while the intercom is ringing; ``None`` otherwise.
-    Ringing is the ``SOUND<n>`` doorbell chime (see state.py /
-    messages.py), auto-cleared a few seconds later by the HA layer
-    (``INTERCOM_RING_TIMEOUT``) since the server sends no "stopped"
-    frame. The raw ``ringing`` flag and the last-seen ``caller`` (even
-    when idle) surface as attributes so automations can distinguish
-    "rang from X" from "idle". Suffixed by id only when more than one
-    intercom is discovered — with a single unit, "Intercom 1" is just
-    noise (same rule as the wind alarms).
+    entrance``) while ``SPRECHEN<n>`` is ``ring``; ``None`` otherwise.
+    The raw ``ringing`` flag and the last-seen ``caller`` (even when
+    idle) surface as attributes so automations can distinguish
+    "rang from X" from "idle". KNOWN LIMITATION: ``SPRECHEN<n>:ring`` is
+    a sticky server latch — it never clears on the WS (the live ring +
+    clear are SIP-only; see IMPLEMENT.md), so this can read "ringing"
+    long after the call. Suffixed by id only when more than one intercom
+    is discovered — with a single unit, "Intercom 1" is just noise (same
+    rule as the wind alarms).
     """
 
     _attr_icon = "mdi:phone-incoming"
@@ -782,6 +789,10 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
 
     _attr_name = "Personal info"
     _attr_icon = "mdi:account-alert"
+    # Hidden by default: a diagnostic raw-banner feed that's ``unknown``
+    # most of the time. Always registered (see async_setup_entry) so a
+    # late banner can surface, but kept out of the default UI.
+    _attr_entity_registry_visible_default = False
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""

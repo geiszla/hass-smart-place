@@ -124,6 +124,10 @@ class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
 
     _attr_name = "Rain alarm"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    # Hidden by default: the per-source alarms roll up into the
+    # ``Weather alarm`` enum, which stays visible — these stay one UI
+    # toggle away for anyone who wants the individual flags.
+    _attr_entity_registry_visible_default = False
     _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -142,6 +146,8 @@ class SmartPlaceHailSensor(_SmartPlaceBinarySensorBase):
 
     _attr_name = "Hail alarm"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    # Hidden by default — rolled up into the visible ``Weather alarm`` enum.
+    _attr_entity_registry_visible_default = False
     _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -184,6 +190,8 @@ class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    # Hidden by default — rolled up into the visible ``Weather alarm`` enum.
+    _attr_entity_registry_visible_default = False
     _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, zone_id: int) -> None:

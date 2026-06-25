@@ -512,44 +512,75 @@ them; the full text is in the Supervisor core journal
 (`./scripts/ha-live get /api/hassio/core/logs`) — `/api/error_log` was
 removed in 2026.x and 404s.
 
-## Post-implementation: intercom ringing from the chime, not SPRECHEN
+## Post-implementation: intercom ringing is NOT detectable over the app WS
 
 Symptom (reported 2026-06-25): `sensor.smart_place_intercom` stayed
 `"Front door"` with `ringing: true` indefinitely — it showed the last
-place that rang, never clearing. Diagnosed across three sources: a live
-observe-only capture, HA history, and the vendor `javallg.js`.
+place that rang, never clearing.
 
-Root cause — the old model derived ringing from `SPRECHEN<n>:ring`
-(`DoorIntercom`), which has two fatal flaws on this `YEALINKOFF`
-building: (1) the server **replays** `SPRECHEN1:ring` + `CALLINFO1` on
-every bootstrap (a stale latch — confirmed live, identical values an
-hour apart), and (2) there is **no "stopped" frame on the WS** — the
-SPA's only `SPRECHEN:ring` consumer is `YEALINKON`-only, and it clears
-the bell purely from SIP signalling (`CANCEL`/`BYE`/`487`/`480`/`603`
-on the separate `wss://…/asterisk/ws`) that we don't consume.
+Root cause: `intercom_ringing` derives from `SPRECHEN<n>:ring`
+(`DoorIntercom`), and on this `YEALINKOFF` building that frame is a
+**sticky latch** — the server sets `SPRECHEN1:ring` once, replays it
+(plus `CALLINFO1`) on every bootstrap, and never clears it on the WS.
 
-Fix — model ringing on the audible chime instead. The SPA plays the
-ring via `SOUND1.play()` on a `SOUND<n>:<name>` frame (any value but
-`AUS` = off); that frame fires only at the real ring and is **not**
-replayed on bootstrap (verified: a full connect capture had zero
-`SOUND1` frames while the latched SPRECHEN/CALLINFO were present). So:
-- `messages.py`: new `Sound` (`SOUND<n>:<value>`); `DoorIntercom`
-  demoted to parsed-but-unused (kept only so the bootstrap replay
-  doesn't spam `unknown_frames`).
-- `state.py`: `intercom_ringing[n]` is set by `Sound` (`!= "AUS"`), no
-  longer by `SPRECHEN`.
-- `__init__.py`: since the chime is a momentary edge with no WS "stop",
-  the HA layer auto-clears the ring `INTERCOM_RING_TIMEOUT` (3 s, new in
-  `const.py`) after the last chime; a repeat chime re-arms the window.
-  Timers are cancelled on unload.
+Investigation (three sources + a live browser drive):
+- **Live observe-only capture** of the integration's own WS: the only
+  intercom frames were the bootstrap replay; nothing on a repeat ring.
+- **`javallg.js`**: the SPA clears its bell from **SIP** signalling
+  (`CANCEL`/`BYE`/`487`/`480`/`603` on
+  `wss://<GSASERVER>:<port>/asterisk/ws`), not from a WS frame; the WS
+  `SPRECHEN` handler is `YEALINKON`-only (this building is `YEALINKOFF`).
+- **Driving the real SPA in a headless browser** (Playwright, hooking
+  `window.WebSocket` on both the main `/Start1` and mediacenter sockets)
+  while the user physically rang the front door:
+  - A repeat ring of the already-latched door produced **zero** app-WS
+    frames and **no** new WebSocket — on *both* connections.
+  - The browser still got every normal device change live (`MUTE1`,
+    `TEMPIST`, `leuchte`, scenes, wind), so this is **not** a
+    primary/secondary visibility gap — there simply is no ring frame.
+  - `GiveMeAllStatesNew` re-pulls `MUTE1` etc. but **not** `SPRECHEN`/
+    `CALLINFO`; a fresh bootstrap after muting the ringer still showed
+    `SPRECHEN1:ring` + `MUTE1:01`, so `ring` is a separate sticky latch,
+    unaffected by the ringer mute.
+  - **No `SOUND` frame ever appeared** — the briefly-held "ring = SOUND1
+    chime" hypothesis is disproven. The panel rings audibly because it's
+    a registered **SIP endpoint**; the browser never opened `/asterisk/ws`
+    so it stayed silent. `CALLINFO1` is a display-only label on the GSA
+    intercom screen (hidden on the dashboard).
 
-`SmartPlaceIntercomSensor` is unchanged in shape — it still reads
-`intercom_ringing` + `intercom_callers` — so the two live HA automations
-("Intercom Ringing", "… – Action") keep working, but stop false-firing
-on every reconnect.
+Conclusion: **a WS-only client cannot detect a live doorbell ring on
+this building.** The app WS carries only the sticky `SPRECHEN1:ring`
+latch + `CALLINFO1` label. The SOUND1 experiment was reverted: the
+`Sound` message stays in `KNOWN_MESSAGES` (parsed-but-unused, like
+`PackageBox`); `intercom_ringing` is `SPRECHEN:ring` again; the chime
+timer + `INTERCOM_RING_TIMEOUT` are removed. The sensor's "ringing" is
+documented as best-effort/latched (state.py / sensor.py).
 
-Caveat (not yet verified live): we have not captured a real ring, so the
-exact `SOUND1` value isn't known and we don't filter on it (any non-`AUS`
-counts, matching the SPA's `"AUS"!=m` check). If `SOUND1` turns out to
-double as a non-doorbell notification sound, add a name filter once a
-real ring is captured.
+### SIP path — the only way to get real rings (future feature)
+
+From `StartWebPhone()` in `javallg.js` (JsSIP):
+- **Endpoint:** `wss://<GSASERVER>:<port>/asterisk/ws`, where `GSASERVER`
+  = `GlobalGsa` field [2] (this building: **`172.16.140.10`** — a LAN IP)
+  and `port` = `8089` for an on-LAN/panel client (or routed-port + 2 for
+  a remote one). **LAN-scoped** — reachable from the HA Pi (on the
+  building LAN), *not* from the internet (which is why the remote browser
+  never connected).
+- **Auth (JsSIP, `register:true` by default):** SIP URI
+  `sip:<WebPhoneUser>@<GSASERVER>`, password `<SPID>webphonepw77<SPID>`,
+  no separate `authorization_user`/`realm`. `WebPhoneUser` = `<SPID>-<n>`
+  (panel) or `10004` (remote). So it is **not** open — registering needs
+  valid SIP credentials.
+- `SPID` and the concrete `GSASERVER`/port/index are injected into the
+  page at runtime (NOT in the JS bundle) — read them from the live SPA
+  globals or the `GlobalGsa` push.
+- The INVITE's From-header user part encodes the door (`<SPID>-<door>`,
+  split on `-`) — that's how to label which door rang.
+- Registering as the panel's *exact* extension risks evicting it
+  (Asterisk `max_contacts=1`) or forking to both (`>1`). Safer: a
+  dedicated sibling extension the dialplan also rings.
+
+Feasibility verdict: **plausible from the on-LAN Pi** (LAN-reachable,
+credential scheme derivable) but needs `SPID` + an Asterisk-side
+extension/`max_contacts` decision; it is a real SIP client (aiosip/
+similar over the asterisk WSS), not a pure WS add-on. Reachability to
+`172.16.140.10:8089` can only be tested from the Pi (no SSH today).

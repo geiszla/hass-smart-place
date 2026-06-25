@@ -46,20 +46,28 @@ class SmartPlacePushEntity(Entity):
         ``None`` stands for the unavailable state (HA writes ``unavailable``
         and drops the normal attributes then). When available, the resolved
         state plus the entity-supplied attributes capture every value or
-        attribute change the subclasses expose.
+        attribute change the subclasses expose. ``name`` is included because
+        a few entities rename dynamically (e.g. a chart sensor when its
+        ``ChartDefinition`` label arrives late) without any state change.
         """
         if not self.available:
             return None
-        return (self.state, repr(self.extra_state_attributes))
+        return (self.name, self.state, repr(self.extra_state_attributes))
 
     @callback
     def _handle_frame_update(self) -> None:
-        """Write to HA only when the reported state actually changed."""
+        """Write to HA only when the reported state actually changed.
+
+        The signature is recorded *after* a successful write: if
+        ``async_write_ha_state`` raises (caught + logged by the fan-out in
+        ``__init__.py``), the unchanged signature means the next
+        notification retries instead of skipping the value forever.
+        """
         signature = self._report_signature()
         if signature == self._sp_last_signature:
             return
-        self._sp_last_signature = signature
         self.async_write_ha_state()
+        self._sp_last_signature = signature
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to the frame fan-out (HA writes the initial state itself)."""

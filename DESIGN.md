@@ -683,15 +683,18 @@ noted; per-id families collapse with a `\d+` regex):
   `Volume`, `InfoboardSlot`, `PackageBox`, `ChartTarget`, `WindAlarm`,
   `LightsCentral`, `BlindsCentral`, `SpeakersCentral`, `Mute`,
   `DoorIntercom`, `CallInfo`, `Sound`.
-  - Intercom ringing is modelled on `Sound` (`SOUND<n>` — the audible
-    doorbell chime), **not** `DoorIntercom` (`SPRECHEN<n>:ring`). On this
-    `YEALINKOFF` building `SPRECHEN:ring` drives nothing in the SPA (its
-    one consumer is `YEALINKON`-only) and is replayed stale on every
-    bootstrap; `SOUND<n>` is pushed only at the real ring and never
-    replayed. There is no "stopped" frame on the WS (the SPA learns
-    end-of-call from SIP only), so the HA layer auto-clears the ring
-    `INTERCOM_RING_TIMEOUT` (3 s) after the chime. `DoorIntercom` is
-    parsed-but-unused. (Verified live 2026-06-25 + from `javallg.js`.)
+  - Intercom ringing is `DoorIntercom` (`SPRECHEN<n>:ring`). KNOWN
+    LIMITATION (live-verified 2026-06-25): there is **no live ring signal
+    on the app WS**. `SPRECHEN<n>:ring` is a sticky latch — set once and
+    replayed on every bootstrap, never clearing; a repeat ring of the
+    same door emits nothing (confirmed by driving the real SPA in a
+    browser on both the main and mediacenter sockets). The live ring +
+    caller are delivered over **SIP** (a JsSIP INVITE on
+    `wss://<GSASERVER>:<port>/asterisk/ws`), which the WS-only client
+    doesn't join. `Sound` (`SOUND<n>`) is a notification-sound frame,
+    parsed-but-unused — it is **not** the doorbell (no `SOUND` was ever
+    seen for a ring). So the intercom sensor's "ringing" is best-effort
+    only; a real doorbell entity needs a SIP client (see IMPLEMENT.md).
 - *Per-id comma configs* (`prefix<N>:f1,f2,...`): `LightConfig`,
   `BlindConfig`, `ClimateConfig`, `SceneConfig`, `MediacenterConfig`,
   `MediaPanelConfig`, `VolumeConfig`, `LightSubMenu`, `BlindSubMenu`,

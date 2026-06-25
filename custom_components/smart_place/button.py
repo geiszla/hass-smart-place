@@ -18,6 +18,7 @@ from homeassistant.components.button import ButtonEntity
 
 from . import SmartPlaceData, category_device_info
 from .const import DOMAIN
+from .entity import SmartPlacePushEntity
 from .smart_place_client import CommandDefinition, Commands
 
 if TYPE_CHECKING:
@@ -60,11 +61,17 @@ async def async_setup_entry(
     async_add_entities(SmartPlaceDoorButton(entry, data, door) for door in _DOORS)
 
 
-class SmartPlaceDoorButton(ButtonEntity):
-    """One-shot button that sends an OEFFNER<n> command to the SPA."""
+class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
+    """One-shot button that sends an OEFFNER<n> command to the SPA.
+
+    Availability (``is_healthy``) and its push subscription come from
+    ``SmartPlacePushEntity`` — without subscribing, the button would never
+    learn the WS dropped (or recovered) and could show stale availability.
+    The dedup collapses the broadcast stream to connect/disconnect edges,
+    since a button has no frame-driven state of its own.
+    """
 
     _attr_has_entity_name = True
-    _attr_should_poll = False
     # Disabled by default — pressing one of these opens a real physical
     # door, mailbox, or garage. Users can enable per-button in the HA
     # entity registry once they've confirmed the label matches the
@@ -78,11 +85,6 @@ class SmartPlaceDoorButton(ButtonEntity):
         self._attr_name = door.name
         self._attr_unique_id = f"{entry.entry_id}_door_{door.key}"
         self._attr_device_info = category_device_info(entry, "Doors")
-
-    @property
-    def available(self) -> bool:
-        """Gray out the button while the WS isn't connected (press would no-op)."""
-        return self._data.is_healthy
 
     async def async_press(self) -> None:
         """Send the door's OEFFNER command on the live WS.

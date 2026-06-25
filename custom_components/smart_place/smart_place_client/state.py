@@ -17,12 +17,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from .protocol import NamedFields, NamedValue, Temperature, parse_unit_hints
 
 if TYPE_CHECKING:
     from .protocol import ServerFrame
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 
 # Strip the trailing site code the SPA appends to chart titles, e.g.
@@ -261,16 +264,17 @@ class SmartPlaceState:
     scene_states: dict[int, bool] = field(default_factory=dict)
     # ``FEUCHTEIST<N>`` indoor humidity in % per climate-zone id —
     # paired 1:1 with ``Klimas<N>`` zones the same way as
-    # ``indoor_temperatures``.
-    humidities: dict[int, float] = field(default_factory=dict)
-    # Door-intercom ring state, keyed by intercom id. Set ``True`` by the
-    # ``SOUND<N>`` chime frame (the audible doorbell — the only ring
-    # signal on the WS; see ``Sound`` in messages.py) and back to
-    # ``False`` by ``SOUND<N>:AUS``. The doorbell sends no reliable
-    # "stopped" frame, so the HA layer also auto-clears this after
-    # ``INTERCOM_RING_TIMEOUT`` (const.py). Not driven by ``SPRECHEN``:
-    # that frame is replayed stale on every bootstrap and its ``ring``
-    # value is YEALINKON-only in the SPA (this building is YEALINKOFF).
+    # ``indoor_temperatures``. ``None`` once an invalid payload (e.g.
+    # ``--``) clears a previously-good reading, mirroring how
+    # ``outdoor_temperature`` / ``wind_speed`` fall back to ``None``.
+    humidities: dict[int, float | None] = field(default_factory=dict)
+    # ``SPRECHEN<N>`` door-intercom ring state. ``True`` while the
+    # SPA-side value is ``"ring"`` (incoming call); any other value reads
+    # as idle. KNOWN LIMITATION: a sticky latch, not a live signal — the
+    # server sets ``SPRECHEN<n>:ring`` once and replays it on every
+    # bootstrap, never clearing it on the WS (the real ring + clear are
+    # SIP-only; verified 2026-06-25 — see IMPLEMENT.md), so it can read
+    # ``True`` indefinitely after a call.
     intercom_ringing: dict[int, bool] = field(default_factory=dict)
     # ``CALLINFO<N>`` caller location label (translated to English
     # via ``_CALLER_INFO_GERMAN_TO_ENGLISH``).
@@ -307,17 +311,28 @@ class SmartPlaceState:
     # from the matching label.
     gsa_door_labels: dict[int, str] = field(default_factory=dict)
 
-    def apply(self, frame: ServerFrame) -> None:
-        """Fold one frame into the snapshot — best-effort, never raises."""
+    def apply(self, frame: ServerFrame) -> bool:
+        """Fold one frame into the snapshot; return whether anything changed.
+
+        The change flag lets callers skip work on the server's constant
+        re-broadcast of unchanged values — it streams the full sensor set
+        ~2-3x/s even when nothing changes (see the integration's fan-out
+        gate in ``__init__.py``). Best-effort, never raises.
+        """
         if isinstance(frame, Temperature):
-            self.indoor_temperatures[frame.sensor] = frame.value
-            return
+            return _set_key(self.indoor_temperatures, frame.sensor, frame.value)
         if isinstance(frame, NamedValue):
-            self._apply_named_value(frame)
-            return
+            return self._apply_named_value(frame)
         if isinstance(frame, NamedFields):
-            self._apply_named_fields(frame)
-            return
+            return self._apply_named_fields(frame)
+        return False
+
+    def _set_attr(self, name: str, value: object) -> bool:
+        """Assign attribute ``name``, returning whether the stored value changed."""
+        if getattr(self, name) == value:
+            return False
+        setattr(self, name, value)
+        return True
 
     def chart_target_status(self, chart_id: int) -> str | None:
         """Return ``green``/``orange``/``red`` for chart ``chart_id``'s STAND1 vs target."""
@@ -343,28 +358,28 @@ class SmartPlaceState:
         match = _PERSINFO_PIN_RE.search(self.person_info)
         return match.group(1) if match else None
 
-    def _apply_named_value(self, frame: NamedValue) -> None:
+    def _apply_named_value(self, frame: NamedValue) -> bool:
         name = frame.name
         if name == "OutdoorTemperature":
-            self.outdoor_temperature = _safe_float(frame.value)
-        elif name == "WindSpeed":
-            self.wind_speed = _safe_float(frame.value)
-        elif name == "Rain":
-            self.rain_alarm = _alarm_on(frame.value)
-        elif name == "Hail":
-            self.hail_alarm = _alarm_on(frame.value)
-        elif name == "BlindsMaintenance":
-            self.blinds_maintenance = _alarm_on(frame.value)
-        elif name == "WindAlarm" and frame.index is not None:
-            self.wind_alarms[frame.index] = _alarm_on(frame.value)
-        elif name == "ChartPointUpdate" and frame.index is not None:
-            self._apply_chart_point(frame.index, frame.value)
-        elif name == "ChartStand":
-            self._apply_chart_stand(frame.value)
-        elif name == "ChartDefinition" and frame.index is not None:
-            self._apply_chart_definition(frame.index, frame.value)
-        elif name == "SceneState" and frame.index is not None:
-            self.scene_states[frame.index] = _alarm_on(frame.value)
+            return self._set_attr("outdoor_temperature", _safe_float(frame.value))
+        if name == "WindSpeed":
+            return self._set_attr("wind_speed", _safe_float(frame.value))
+        if name == "Rain":
+            return self._set_attr("rain_alarm", _alarm_on(frame.value))
+        if name == "Hail":
+            return self._set_attr("hail_alarm", _alarm_on(frame.value))
+        if name == "BlindsMaintenance":
+            return self._set_attr("blinds_maintenance", _alarm_on(frame.value))
+        if name == "WindAlarm" and frame.index is not None:
+            return _set_key(self.wind_alarms, frame.index, _alarm_on(frame.value))
+        if name == "ChartPointUpdate" and frame.index is not None:
+            return self._apply_chart_point(frame.index, frame.value)
+        if name == "ChartStand":
+            return self._apply_chart_stand(frame.value)
+        if name == "ChartDefinition" and frame.index is not None:
+            return self._apply_chart_definition(frame.index, frame.value)
+        if name == "SceneState" and frame.index is not None:
+            return _set_key(self.scene_states, frame.index, _alarm_on(frame.value))
         # ``LightsCentral`` (LEUCHTENZENTRAL<N>) and ``BlindsCentral``
         # (JALZENTRAL<N>) are deliberately NOT folded: each is the
         # state of the SPA's per-type "All" master button, not an
@@ -374,38 +389,46 @@ class SmartPlaceState:
         # truthful sources are the per-device pushes — ``leuchte<n>``
         # (``LightState``) and ``JALICO<n>`` — fold those instead
         # when light/blind support lands.
-        elif name == "Humidity" and frame.index is not None:
+        if name == "Humidity" and frame.index is not None:
+            # Clear a known zone to ``None`` on an invalid payload so its
+            # reading goes ``unknown`` instead of stale — but don't surface a
+            # zone whose very first reading is invalid. Mirrors how
+            # OutdoorTemperature is gated at setup yet clears once seen.
             value = _safe_float(frame.value)
-            if value is not None:
-                self.humidities[frame.index] = value
-        elif name == "Sound" and frame.index is not None:
-            # The chime is the ring edge: any sound name means "ringing",
-            # ``AUS`` ('off') means silence. The HA layer adds the
-            # timeout-based auto-clear. ``DoorIntercom`` (SPRECHEN) is
-            # deliberately not folded — see the ``intercom_ringing`` field.
-            self.intercom_ringing[frame.index] = frame.value != "AUS"
-        elif name == "CallInfo" and frame.index is not None:
-            self.intercom_callers[frame.index] = _translate_caller_label(frame.value)
-        elif name == "InfoboardContent" and frame.index is not None:
-            self.infoboard_contents[frame.index] = None if frame.value == "Read" else frame.value
-        elif name == "PersonInfo":
-            self.person_info = None if frame.value == "Read" else frame.value
-        elif name == "ChartTarget" and frame.index is not None:
+            if value is None and frame.index not in self.humidities:
+                return False
+            return _set_key(self.humidities, frame.index, value)
+        if name == "DoorIntercom" and frame.index is not None:
+            return _set_key(self.intercom_ringing, frame.index, frame.value == "ring")
+        if name == "CallInfo" and frame.index is not None:
+            return _set_key(self.intercom_callers, frame.index, _translate_caller_label(frame.value))
+        if name == "InfoboardContent" and frame.index is not None:
+            return _set_key(self.infoboard_contents, frame.index, None if frame.value == "Read" else frame.value)
+        if name == "PersonInfo":
+            return self._set_attr("person_info", None if frame.value == "Read" else frame.value)
+        if name == "ChartTarget" and frame.index is not None:
             value = _safe_float(frame.value)
-            if value is not None:
-                self.chart_targets[frame.index] = value
-        elif name == "StatusEntry":
-            self.unit_hints.update(parse_unit_hints(frame.value))
+            return value is not None and _set_key(self.chart_targets, frame.index, value)
+        if name == "StatusEntry":
+            # ``parse_unit_hints`` is a one-shot iterator — materialise it
+            # so we can both diff against the current hints and apply them.
+            hints = dict(parse_unit_hints(frame.value))
+            if all(self.unit_hints.get(key) == val for key, val in hints.items()):
+                return False
+            self.unit_hints.update(hints)
+            return True
+        return False
 
-    def _apply_named_fields(self, frame: NamedFields) -> None:
+    def _apply_named_fields(self, frame: NamedFields) -> bool:
         if frame.name == "ClimateConfig" and frame.index is not None and frame.fields:
-            self.climate_zones[frame.index] = _climate_zone_room(frame.fields[0])
-        elif frame.name == "SceneConfig" and frame.index is not None and frame.fields:
-            self.scenes[frame.index] = frame.fields[0]
-        elif frame.name == "GsaConfig":
-            self._apply_gsa_config(frame)
+            return _set_key(self.climate_zones, frame.index, _climate_zone_room(frame.fields[0]))
+        if frame.name == "SceneConfig" and frame.index is not None and frame.fields:
+            return _set_key(self.scenes, frame.index, frame.fields[0])
+        if frame.name == "GsaConfig":
+            return self._apply_gsa_config(frame)
+        return False
 
-    def _apply_gsa_config(self, frame: NamedFields) -> None:
+    def _apply_gsa_config(self, frame: NamedFields) -> bool:
         """Fold the ``GlobalGsa`` reply: intercom cameras + door labels.
 
         Replaces (not merges) both maps so a re-issued ``GiveMeGlobalGsa``
@@ -414,39 +437,47 @@ class SmartPlaceState:
         the missing map untouched.
         """
         fields = frame.fields
+        changed = False
         if len(fields) > _GSA_CAMERA_FIELD:
-            self.gsa_cameras = _parse_gsa_pairs(fields[_GSA_CAMERA_FIELD])
+            cameras = _parse_gsa_pairs(fields[_GSA_CAMERA_FIELD])
+            if cameras != self.gsa_cameras:
+                self.gsa_cameras = cameras
+                changed = True
         if len(fields) > _GSA_OPENER_FIELD:
-            self.gsa_door_labels = {
+            labels = {
                 opener_id: _translate_gsa_label(label)
                 for opener_id, label in _parse_gsa_pairs(fields[_GSA_OPENER_FIELD]).items()
             }
+            if labels != self.gsa_door_labels:
+                self.gsa_door_labels = labels
+                changed = True
+        return changed
 
-    def _apply_chart_point(self, chart_id: int, payload: str) -> None:
+    def _apply_chart_point(self, chart_id: int, payload: str) -> bool:
         """Fold a ``StandsSingelChartUpdate<id>:STAND<series>:<reading>`` payload."""
         series_raw, _, reading = payload.partition(":")
         series = _parse_stand_series(series_raw)
         if series is None:
-            return
-        self.charts.setdefault(chart_id, ChartReading(unit="")).stands[series] = reading
+            return False
+        return _set_key(self.charts.setdefault(chart_id, ChartReading(unit="")).stands, series, reading)
 
-    def _apply_chart_stand(self, payload: str) -> None:
+    def _apply_chart_stand(self, payload: str) -> bool:
         """Fold a ``CHART<id>STAND<series>:<reading>`` STAND1 snapshot from GiveMeMainmenu."""
         chart_raw, _, rest = payload.partition("STAND")
         if not chart_raw or not rest:
-            return
+            return False
         try:
             chart_id = int(chart_raw)
         except ValueError:
-            return
+            return False
         series_raw, _, reading = rest.partition(":")
         try:
             series = int(series_raw)
         except ValueError:
-            return
-        self.charts.setdefault(chart_id, ChartReading(unit="")).stands[series] = reading
+            return False
+        return _set_key(self.charts.setdefault(chart_id, ChartReading(unit="")).stands, series, reading)
 
-    def _apply_chart_definition(self, chart_id: int, payload: str) -> None:
+    def _apply_chart_definition(self, chart_id: int, payload: str) -> bool:
         """Fold ``SingelDiagramm<id>:<title>;<...>;<category>;<unit>;...``.
 
         Sets ``label`` (cleaned English) and ``category`` (raw SPA tag)
@@ -458,14 +489,32 @@ class SmartPlaceState:
         """
         fields = payload.split(";")
         if not fields or not fields[0]:
-            return
+            return False
         chart = self.charts.setdefault(chart_id, ChartReading(unit=""))
-        chart.label = _clean_chart_label(fields[0])
-        if len(fields) > 13:
+        changed = False
+        label = _clean_chart_label(fields[0])
+        if chart.label != label:
+            chart.label = label
+            changed = True
+        if len(fields) > 13 and chart.category != fields[13]:
             chart.category = fields[13]
+            changed = True
         if len(fields) > 14 and fields[14] and not chart.unit:
             chart.unit = fields[14]
-        chart.summed_chart_ids = tuple(int(m) for m in _SUMME_CONSTITUENT_RE.findall(payload))
+            changed = True
+        summed = tuple(int(m) for m in _SUMME_CONSTITUENT_RE.findall(payload))
+        if chart.summed_chart_ids != summed:
+            chart.summed_chart_ids = summed
+            changed = True
+        return changed
+
+
+def _set_key(mapping: dict[_K, _V], key: _K, value: _V) -> bool:
+    """Assign ``mapping[key] = value``, returning whether the stored value changed."""
+    if key in mapping and mapping[key] == value:
+        return False
+    mapping[key] = value
+    return True
 
 
 def _parse_stand_series(series_raw: str) -> int | None:

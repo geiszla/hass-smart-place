@@ -60,3 +60,6 @@ coverage.xml
 
 # sp-cli default output directory (unknown-frame log + ad-hoc captures)
 output/
+
+# Playwright MCP scratch (may contain the SPA token)
+.playwright-mcp/
