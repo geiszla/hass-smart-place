@@ -490,3 +490,24 @@ always reports alive — detection needs a *new* connection), and a
 periodic synthetic probe would add avoidable ZoneMinder traffic. The
 SPA itself has no stream-reconnect — it just rebuilds the URL on each
 GSA-screen open and reloads the page on disconnect (`javallg.js`).
+
+## Post-implementation: command audit trail
+
+Every outgoing command now flows through `client.issue(command, *args)`
+(the single chokepoint over the low-level `send(text)`), which logs an
+INFO "command issued: <name> (<wire>)" line for commands flagged
+`audit=True`. `CommandDefinition.audit` defaults to `True` so new
+commands are recorded by default (fail safe to visibility); the
+high-frequency machinery (bootstrap reads, heartbeat `Ping`, chart
+polling) is `audit=False` so it stays at DEBUG and doesn't drown the
+trail. Currently the only audited commands are the four door openers,
+issued from `button.py`'s `async_press`.
+
+Note: the live box logs at WARNING by default (verified 2026-06-25:
+0 INFO lines in the core journal), so the audit lines (and the camera
+route-refresh INFO lines) only surface once `smart_place_client` is
+raised to `info` in HA's `logger:` config. `./scripts/ha-live logs`
+reads the `system_log` ring buffer (WARNING+ only) so it never shows
+them; the full text is in the Supervisor core journal
+(`./scripts/ha-live get /api/hassio/core/logs`) — `/api/error_log` was
+removed in 2026.x and 404s.

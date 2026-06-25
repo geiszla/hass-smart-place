@@ -16,6 +16,7 @@ import pytest
 
 from smart_place_client import (
     CapturedFrame,
+    Commands,
     GlobalConfig,
     GoToLinkSSL,
     NamedFields,
@@ -840,3 +841,31 @@ async def test_refresh_camera_route_returns_none_in_replay() -> None:
     """Replay clients never re-discover (no live server)."""
     client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
     assert await client.refresh_camera_route("snapshot:test") is None
+
+
+# --------------------- command audit trail -------------------------
+
+
+async def test_issue_audited_command_sends_and_logs(caplog: pytest.LogCaptureFixture) -> None:
+    """An audited command (door opener) is sent and recorded in the trail at INFO."""
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    with caplog.at_level(logging.INFO, logger="smart_place_client"):
+        await client.issue(Commands.OpenFrontDoor)
+    assert any("OEFFNER4" in frame.text for frame in client.sent_log)
+    assert any("command issued: OpenFrontDoor" in rec.message for rec in caplog.records)
+
+
+async def test_issue_machinery_command_sends_without_audit(caplog: pytest.LogCaptureFixture) -> None:
+    """Machinery (heartbeat Ping) is sent but stays out of the INFO trail."""
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    with caplog.at_level(logging.INFO, logger="smart_place_client"):
+        await client.issue(Commands.Ping)
+    assert any("Ping" in frame.text for frame in client.sent_log)
+    assert not any("command issued" in rec.message for rec in caplog.records)
+
+
+async def test_issue_parameterized_command_forwards_args() -> None:
+    """issue() forwards extra args to the command encoder."""
+    client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
+    await client.issue(Commands.ChartStands, 49)
+    assert any("GiveMeChartStandsManuell49" in frame.text for frame in client.sent_log)

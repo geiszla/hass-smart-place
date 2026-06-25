@@ -85,9 +85,13 @@ class SmartPlaceDoorButton(ButtonEntity):
         return self._data.is_healthy
 
     async def async_press(self) -> None:
-        """Send the door's OEFFNER command on the live WS."""
+        """Send the door's OEFFNER command on the live WS.
+
+        Issued via ``client.issue`` so the actuation lands in the audit
+        trail (door openers are ``audit=True``).
+        """
         try:
-            await self._data.client.send(self._door.command.encode())
+            await self._data.client.issue(self._door.command)
         except RuntimeError:
             # send() raises RuntimeError before the WS opens — log it
             # so the user sees the press happened but the connection

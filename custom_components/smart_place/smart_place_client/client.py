@@ -35,7 +35,7 @@ from typing import Any, Final, Literal, Self
 
 import aiohttp
 
-from .commands import Commands
+from .commands import CommandDefinition, Commands
 from .messages import parse_frame
 from .protocol import (
     APP_WS_PATH,
@@ -497,13 +497,40 @@ class SmartPlaceClient:
             self.backoff.reset()
         return self.backoff.next()
 
+    async def issue(self, command: CommandDefinition, *args: object) -> None:
+        """Issue a registered command, recording it to the audit trail.
+
+        The entry point callers should use to send a command: it encodes
+        ``command`` with ``args``, sends it via :meth:`send`, and — for
+        commands with ``audit=True`` (the default; the door openers and
+        any future control/actuation command) — logs an INFO line so
+        every command we put on the wire is traceable. High-frequency
+        machinery (bootstrap reads, heartbeat ``Ping``, chart polling)
+        sets ``audit=False`` so it stays at DEBUG and doesn't drown the
+        trail. New commands are audited by default — the trail fails
+        safe to *more* visibility.
+
+        The audit line is INFO; the box defaults to WARNING, so raise
+        ``smart_place_client`` to ``info`` in HA's ``logger:`` config to
+        see it. The log goes through the same token-redaction filter as
+        every other line, so a token-bearing payload is scrubbed.
+        """
+        wire = command.encode(*args)
+        # Send first: if the WS isn't open ``send`` raises and we must
+        # NOT claim the command was issued (the door press didn't fire).
+        await self.send(wire)
+        if command.audit:
+            _LOGGER.info("command issued: %s (%s)", command.name, wire)
+
     async def send(self, text: str) -> None:
         """Send a text frame to the server (live) or log it (replay).
 
-        Per the ``smart-place-observe-only`` memory: live mode has no
-        software gate. If you don't want to issue commands, don't call
-        ``send()``. Replay mode appends to an in-memory log instead of
-        contacting the network.
+        Low-level transport: prefer :meth:`issue` for registered
+        commands so they reach the audit trail. Per the
+        ``smart-place-observe-only`` memory: live mode has no software
+        gate. If you don't want to issue commands, don't call ``send()``.
+        Replay mode appends to an in-memory log instead of contacting the
+        network.
         """
         frame = encode_frame(text)
         captured = CapturedFrame(
@@ -861,10 +888,10 @@ class SmartPlaceClient:
             #      MainMenuFinished; we fold it in right after Mainmenu so
             #      the camera platform sees gsa_cameras within the setup
             #      observation window.
-            await self.send(Commands.StatusContent.encode())
-            await self.send(Commands.Mainmenu.encode())
-            await self.send(Commands.GlobalGsa.encode())
-            await self.send(Commands.SocketConnected.encode())
+            await self.issue(Commands.StatusContent)
+            await self.issue(Commands.Mainmenu)
+            await self.issue(Commands.GlobalGsa)
+            await self.issue(Commands.SocketConnected)
 
             self._chart_poll_task = asyncio.create_task(
                 self._poll_charts(),
@@ -953,7 +980,7 @@ class SmartPlaceClient:
                 self.state.chart_units[frame.index] = fields[14]
         elif isinstance(frame, NamedFields) and frame.name in ("StatusContentFinished", "MainMenuFinished"):
             for cid in sorted(self.state.chart_ids):
-                await self.send(Commands.ChartStands.encode(cid))
+                await self.issue(Commands.ChartStands, cid)
 
     async def _heartbeat(self) -> None:
         """Application-level Ping/PongOK liveness probe.
@@ -989,7 +1016,7 @@ class SmartPlaceClient:
                     await self._ws.close()
                 return
             try:
-                await self.send(Commands.Ping.encode())
+                await self.issue(Commands.Ping)
             except (RuntimeError, ConnectionError) as err:
                 _LOGGER.debug("heartbeat send failed (%s); stopping", err)
                 return
@@ -1016,7 +1043,7 @@ class SmartPlaceClient:
                 if self._closing or self._ws is None or self._ws.closed:
                     return
                 try:
-                    await self.send(Commands.ChartStands.encode(cid))
+                    await self.issue(Commands.ChartStands, cid)
                 except (RuntimeError, ConnectionError) as err:
                     _LOGGER.debug("chart poll send failed (%s); stopping", err)
                     return

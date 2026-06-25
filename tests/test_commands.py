@@ -74,3 +74,32 @@ def test_open_doors_use_oeffner_ids() -> None:
     assert Commands.OpenMailbox.encode() == "OEFFNER2"
     assert Commands.OpenGarageEntrance.encode() == "OEFFNER3"
     assert Commands.OpenFrontDoor.encode() == "OEFFNER4"
+
+
+def test_door_openers_are_audited() -> None:
+    """Door openers (control/actuation) land in the audit trail."""
+    for defn in (
+        Commands.OpenGroundFloorEntrance,
+        Commands.OpenMailbox,
+        Commands.OpenGarageEntrance,
+        Commands.OpenFrontDoor,
+    ):
+        assert defn.audit is True, f"{defn.name} should be audited"
+
+
+def test_machinery_commands_are_not_audited() -> None:
+    """Bootstrap reads, heartbeat, and chart polling stay out of the trail."""
+    for defn in (
+        Commands.StatusContent,
+        Commands.Mainmenu,
+        Commands.GlobalGsa,
+        Commands.SocketConnected,
+        Commands.Ping,
+        Commands.ChartStands,
+    ):
+        assert defn.audit is False, f"{defn.name} should not be audited"
+
+
+def test_audit_defaults_to_true() -> None:
+    """New commands are audited by default — the trail fails safe to visibility."""
+    assert CommandDefinition(name="X", description="d", encode=lambda: "X", example="X").audit is True

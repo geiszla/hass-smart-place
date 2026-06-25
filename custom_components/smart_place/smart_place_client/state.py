@@ -56,9 +56,9 @@ _CLIMATE_ROOM_TAIL_RE = re.compile(r"\s+(?:heating|Heizung)\s*$", re.IGNORECASE)
 # call points (front door, mailbox, ...). Only tokens we've observed
 # live; unknown labels pass through unchanged.
 _CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
-    "Wohnungseingang": "Apartment entrance",
+    "Wohnungseingang": "Front door",
     "Haupteingang": "Main entrance",
-    "Hauseingang": "Building entrance",
+    "Hauseingang": "Ground floor entrance",
     "Eingang": "Entrance",
     "Briefkasten": "Mailbox",
     "Garageneingang": "Garage entrance",
@@ -75,13 +75,13 @@ _CALLER_INFO_GERMAN_TO_ENGLISH: dict[str, str] = {
 # Wohnung (apartment). Unknown labels pass through unchanged.
 _GSA_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
     "Eingang EG": "Ground floor entrance",
-    "Eingang WHG": "Apartment entrance",
+    "Eingang WHG": "Front door",
     "Briefkasten": "Mailbox",
     "Garage": "Garage",
     "Garageneingang": "Garage entrance",
     "Haupteingang": "Main entrance",
-    "Hauseingang": "Building entrance",
-    "Wohnungseingang": "Apartment entrance",
+    "Hauseingang": "Ground floor entrance",
+    "Wohnungseingang": "Front door",
 }
 
 # Field offsets within the ``GsaConfig`` frame's ``>``-split payload

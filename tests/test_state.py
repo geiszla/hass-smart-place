@@ -222,7 +222,7 @@ def test_apply_gsa_config_extracts_cameras_and_labels() -> None:
         1: "Ground floor entrance",
         2: "Mailbox",
         3: "Garage",
-        4: "Apartment entrance",
+        4: "Front door",
     }
 
 
@@ -286,7 +286,7 @@ def test_apply_call_info_translates_known_german_labels() -> None:
     state = SmartPlaceState()
     state.apply(NamedValue(name="CallInfo", value="Wohnungseingang", index=1))
     state.apply(NamedValue(name="CallInfo", value="Mystery Location", index=2))
-    assert state.intercom_callers == {1: "Apartment entrance", 2: "Mystery Location"}
+    assert state.intercom_callers == {1: "Front door", 2: "Mystery Location"}
 
 
 def test_apply_infoboard_content_read_becomes_none() -> None:
