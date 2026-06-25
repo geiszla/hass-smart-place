@@ -3,9 +3,10 @@
 A read-mostly CLI over the HA REST + WebSocket APIs, scoped to the
 ``smart_place`` integration. It fetches data — config entry status,
 devices, entities and their states, system logs, a live state stream —
-and leaves any judgement about health to the caller. The only mutating
-commands are ``reload`` and ``restart``, which affect the HA instance
-itself (never the building).
+and leaves any judgement about health to the caller. The mutating
+commands are ``reload``, ``restart``, and ``config-set``; all affect the
+HA instance only, never the building directly (``config-set`` writes
+automation/scene/script config — it cannot itself call a service).
 
 Authentication uses a long-lived access token from an admin HA user
 (HA UI → your user → Security → Long-lived access tokens). Put it in
@@ -27,7 +28,10 @@ import asyncio
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+import difflib
 import json
+from pathlib import Path
+import re
 import sys
 import time
 from typing import Any
@@ -38,6 +42,17 @@ from dotenv import load_dotenv
 
 DOMAIN = "smart_place"
 DEFAULT_URL = "http://homeassistant.local:8123"
+
+# Editable config types are exposed under /api/config/<domain>/config/<key> —
+# the same REST views the GUI editors drive. A POST validates the payload,
+# writes the YAML store, and reloads that domain, so the change goes live at
+# once; a POST to a new key creates a new item. In current HA the editable
+# domains are automation, scene, and script (automation/scene keys are the
+# numeric "id"; script keys are the object_id), but the path shape is generic,
+# so config-set takes the domain as an argument and lets HA reject unknown
+# ones rather than hardcoding a list. A bare-path-segment regex keeps the
+# domain/key from escaping into another endpoint.
+CONFIG_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 
 REST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 WS_TIMEOUT = 15.0
@@ -137,6 +152,32 @@ class HassApi:
 def _print_json(data: Any) -> None:
     """Pretty-print a JSON-serializable value."""
     print(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+
+
+def _print_config_diff(current: Any, new: Any) -> None:
+    """Print a unified diff between the stored config and the new payload.
+
+    Keys are sorted on both sides so the diff shows real value/structure
+    changes rather than incidental key reordering.
+    """
+    if current is None:
+        print("(no existing config at this key — this would create a new item)\n")
+    current_text = "" if current is None else json.dumps(current, indent=2, ensure_ascii=False, sort_keys=True)
+    new_text = json.dumps(new, indent=2, ensure_ascii=False, sort_keys=True)
+    diff = list(
+        difflib.unified_diff(
+            current_text.splitlines(),
+            new_text.splitlines(),
+            fromfile="current",
+            tofile="new",
+            lineterm="",
+        )
+    )
+    if not diff:
+        print("(no changes — the new config matches what is stored)")
+        return
+    for line in diff:
+        print(line)
 
 
 def _mentions_smart_place(entry: dict[str, Any]) -> bool:
@@ -536,6 +577,88 @@ def ws_cmd(obj: dict[str, str], command_type: str, payload: str | None) -> None:
     async def handler(api: HassApi) -> None:
         extra = json.loads(payload) if payload else {}
         _print_json(await api.ws_command(command_type, **extra))
+
+    _execute(obj, handler)
+
+
+@cli.command(name="config-set")
+@click.argument("config_domain", metavar="DOMAIN")
+@click.argument("config_key")
+@click.option("--file", "source", required=True, help="JSON file with the new config (or '-' to read stdin).")
+@click.option("--dry-run", is_flag=True, help="Fetch the current config and show the diff; write nothing.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the confirmation prompt (required when --file is '-').")
+@click.pass_obj
+def config_set(
+    obj: dict[str, str],
+    config_domain: str,
+    config_key: str,
+    source: str,
+    dry_run: bool,
+    assume_yes: bool,
+) -> None:
+    """Create or update an editable HA config item (automation/scene/script).
+
+    POSTs the JSON in --file to /api/config/DOMAIN/config/CONFIG_KEY — the same
+    endpoint the GUI editors use. DOMAIN is passed straight through (in current
+    HA the editable ones are automation, scene, and script; HA itself rejects
+    anything else), so this is not limited to a fixed list. HA validates the
+    payload, writes the YAML store, and reloads that domain, so the change is
+    live immediately; a CONFIG_KEY that does not exist yet creates a new item.
+    Read the current config back first with ``get`` and edit that, so the
+    round-trip stays in the server's schema:
+
+      ./scripts/ha-live get /api/config/automation/config/<id> > a.json
+      # ...edit a.json...
+      ./scripts/ha-live config-set automation <id> --file a.json --dry-run
+      ./scripts/ha-live config-set automation <id> --file a.json
+
+    CONFIG_KEY is the numeric ``id`` for automation/scene (the ``id`` attribute
+    on the entity) and the object_id (the part after ``script.``) for script.
+
+    This writes config only — it never calls a service, so it cannot itself
+    open a door. But an automation written here may press a door button the
+    next time it triggers, so review the payload (or --dry-run it) first.
+    """
+    for name, value in (("DOMAIN", config_domain), ("CONFIG_KEY", config_key)):
+        if not CONFIG_PATH_SEGMENT.fullmatch(value):
+            raise click.BadArgumentUsage(
+                f"{name} must be a bare config path segment (letters, digits, '_' or '-'); got {value!r}"
+            )
+
+    raw = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise click.BadParameter(f"--file is not valid JSON: {err}") from err
+    if not isinstance(payload, dict):
+        raise click.BadParameter("the config payload must be a JSON object")
+
+    path = f"/api/config/{config_domain}/config/{config_key}"
+
+    async def handler(api: HassApi) -> None:
+        if dry_run:
+            try:
+                current = await api.get(path)
+            except aiohttp.ClientResponseError as err:
+                if err.status != 404:
+                    raise
+                current = None
+            _print_config_diff(current, payload)
+            print("\n(dry run — nothing was written)")
+            return
+        await api.post(path, payload)
+        print(f"Wrote {config_domain} {config_key!r}; HA reloaded it. Stored config:")
+        _print_json(await api.get(path))
+
+    if not dry_run and not assume_yes:
+        if source == "-":
+            raise click.UsageError("pass --yes when reading the payload from stdin (--file -), or use a file.")
+        label = payload.get("alias") or payload.get("name") or config_key
+        click.confirm(
+            f"Write {config_domain} “{label}” ({config_key}) to {obj['url']}?\n"
+            "This changes the live building's Home Assistant config.",
+            abort=True,
+        )
 
     _execute(obj, handler)
 

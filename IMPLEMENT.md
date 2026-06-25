@@ -453,3 +453,40 @@ alternative.
 Verified end-to-end: `unset SMART_PLACE_TOKEN; uv run sp-cli --live`
 opens discovery WS, routes, opens app WS, and parses both bootstrap
 responses (token never appears in logs).
+
+## Post-implementation: intercom cameras + routed-port staleness fix
+
+The four entrance/intercom cameras (`camera.py`) are MJPEG streams the
+Smart Place server reverse-proxies from ZoneMinder on `porthttp =
+routed_port - 1`, at the `/linkmap<n>` paths in the `GlobalGsa` reply
+(`smart-place-camera-architecture` memory; DESIGN §11).
+
+**Bug (v0.0.3 and earlier): cameras break after a while.** The URL was
+built from the long-lived app-WS route (`client.state.route`). The app
+WS survives for hours on its already-established connection (heartbeat),
+but the routed port's lease only gates *new* connections — once it
+lapses, every fresh camera GET to `porthttp` fails while the WS keeps
+flowing, so the camera proxy 500s while the Connection sensor still
+reads `on`. An HA restart/reload (fresh discovery → fresh port) brought
+them back. Diagnosed 2026-06-25 on the live box; confirmed a throwaway
+discovery → routed-page GET (no app WS) yields a working `porthttp`.
+
+**Fix (v0.0.4): a camera route managed separately from the app WS.**
+- `client.camera_base_url(link)` builds the URL from a dedicated
+  `_camera_route`, seeded for free from the WS route on each connect
+  (`_seed_camera_route` at `on_app_open`).
+- `client.refresh_camera_route(reason)` re-mints it via a side-effect-free
+  discovery (`_discover_camera_route`, touches neither `state` nor `_ws`),
+  logging the lapsed route's age + trigger at INFO so the expiry interval
+  is learnable from HA logs.
+- `camera.py` retries once (re-discover) on any failed snapshot/stream,
+  and pre-flights the upstream status by proxying via
+  `async_aiohttp_proxy_stream` instead of `async_aiohttp_proxy_web`.
+
+Reactive only — no polling/TTL (deliberately deferred until on-access
+logs show whether the expiry is consistent enough to justify either).
+Rationale: a WS-side liveness check is impossible (the established WS
+always reports alive — detection needs a *new* connection), and a
+periodic synthetic probe would add avoidable ZoneMinder traffic. The
+SPA itself has no stream-reconnect — it just rebuilds the URL on each
+GSA-screen open and reloads the page on disconnect (`javallg.js`).

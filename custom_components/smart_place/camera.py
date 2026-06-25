@@ -8,8 +8,15 @@ HTTP port — ``porthttp = routed_port - 1`` — at the per-camera
 (``state.gsa_cameras``). Verified 2026-06-11 by driving a real browser
 straight to the endpoint: the proxy needs no per-request auth — a plain
 GET returns ``multipart/x-mixed-replace`` — so we can consume it with a
-plain HTTP fetch. The only twist is the routed port is per-session, so
-each entity rebuilds its URL from the live route on every request.
+plain HTTP fetch. The twist is the routed port is per-session *and* its
+lease for new connections lapses long before the app WS drops: the WS
+survives for hours on its already-established connection, but a fresh
+camera GET to that session's proxy starts failing once the lease lapses
+(diagnosed 2026-06-25 on the live box). So the URL is built from a
+*camera route* the client manages separately and re-mints on demand
+(``client.camera_base_url`` / ``client.refresh_camera_route``); when a
+fetch fails here we re-discover once and retry, so a ring during a
+stale window still shows a picture.
 
 Read-only by construction: fetching an image or stream issues an HTTP
 GET against the proxy, never an SPA command, so this is safe under the
@@ -17,10 +24,13 @@ GET against the proxy, never an SPA command, so this is safe under the
 nothing here can actuate a door.
 
 We deliberately implement a plain :class:`Camera` with the public
-``async_aiohttp_proxy_web`` helper rather than subclassing the ``mjpeg``
-integration's ``MjpegCamera`` — importing another integration's code
-would force a manifest dependency on ``mjpeg`` (hassfest), and the
-proxying primitive is small enough to use directly.
+``async_aiohttp_proxy_stream`` helper rather than subclassing the
+``mjpeg`` integration's ``MjpegCamera`` — importing another
+integration's code would force a manifest dependency on ``mjpeg``
+(hassfest), and the proxying primitive is small enough to use directly.
+Proxying the stream ourselves (rather than ``async_aiohttp_proxy_web``)
+also lets us pre-flight the upstream status so a stale route can be
+re-discovered before we hand the stream to the frontend.
 
 Discovery is observation-based: one camera entity per id present in
 ``state.gsa_cameras`` at setup time (see ``__init__.py``'s observation
@@ -36,7 +46,7 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 from homeassistant.components.camera import Camera
-from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_web, async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_stream, async_get_clientsession
 
 from . import SmartPlaceData, category_device_info
 from .const import DOMAIN
@@ -113,18 +123,6 @@ class SmartPlaceIntercomCamera(Camera):
         self._attr_unique_id = f"{entry.entry_id}_camera_{camera_id}"
         self._attr_device_info = category_device_info(entry, "Cameras")
 
-    def _build_url(self) -> str | None:
-        """Build the live MJPEG URL from the current route, or None if unrouted.
-
-        The camera proxy listens on ``routed_port - 1``; the link path
-        already starts with ``/``. The port is per-session, so this is
-        recomputed on every image/stream request rather than cached.
-        """
-        route = self._data.client.state.route
-        if route is None:
-            return None
-        return f"https://{route.host}:{route.port - 1}{self._link}"
-
     @property
     def available(self) -> bool:
         """Match the rest of the integration: unavailable while the WS is down."""
@@ -144,27 +142,65 @@ class SmartPlaceIntercomCamera(Camera):
 
         The proxy only serves the multipart stream (no single-shot URL),
         so we read it until the first complete JPEG frame and return that.
+        Tries the current camera route; if the fetch fails or yields no
+        frame, the routed port's lease has likely lapsed, so we
+        re-discover a fresh route once and retry.
         """
-        url = self._build_url()
-        if url is None:
-            return None
         websession = async_get_clientsession(self.hass)
-        try:
-            async with asyncio.timeout(_SNAPSHOT_TIMEOUT), websession.get(url) as response:
-                response.raise_for_status()
-                return await _read_first_jpeg(response)
-        except (TimeoutError, aiohttp.ClientError) as err:
-            _LOGGER.debug("Smart Place camera snapshot failed (%s): %s", self.entity_id, err)
-            return None
+        for attempt in range(2):
+            url = await self._data.client.camera_base_url(self._link)
+            if url is None:
+                return None
+            try:
+                async with asyncio.timeout(_SNAPSHOT_TIMEOUT), websession.get(url) as response:
+                    response.raise_for_status()
+                    jpeg = await _read_first_jpeg(response)
+                if jpeg is not None:
+                    return jpeg
+                _LOGGER.debug(
+                    "Smart Place camera snapshot yielded no frame (%s, attempt %d)", self.entity_id, attempt + 1
+                )
+            except (TimeoutError, aiohttp.ClientError) as err:
+                _LOGGER.debug(
+                    "Smart Place camera snapshot failed (%s, attempt %d): %s", self.entity_id, attempt + 1, err
+                )
+            if attempt == 0:
+                await self._data.client.refresh_camera_route(f"snapshot:{self.entity_id}")
+        return None
 
     async def handle_async_mjpeg_stream(self, request: web.Request) -> web.StreamResponse | None:
-        """Proxy the live MJPEG stream straight through to the HA frontend."""
-        url = self._build_url()
-        if url is None:
-            return None
+        """Proxy the live MJPEG stream straight through to the HA frontend.
+
+        Pre-flights the upstream GET so a stale routed port can be
+        re-discovered (once) before the stream is handed to the frontend,
+        rather than streaming a dead connection.
+        """
         websession = async_get_clientsession(self.hass)
-        stream_coro = websession.get(url)
-        return await async_aiohttp_proxy_web(self.hass, request, stream_coro)
+        for attempt in range(2):
+            url = await self._data.client.camera_base_url(self._link)
+            if url is None:
+                return None
+            try:
+                response = await websession.get(url)
+            except (TimeoutError, aiohttp.ClientError) as err:
+                _LOGGER.debug(
+                    "Smart Place camera stream open failed (%s, attempt %d): %s", self.entity_id, attempt + 1, err
+                )
+            else:
+                if response.status == 200:
+                    return await async_aiohttp_proxy_stream(
+                        self.hass,
+                        request,
+                        response.content,
+                        response.headers.get("Content-Type"),
+                    )
+                _LOGGER.debug(
+                    "Smart Place camera stream HTTP %d (%s, attempt %d)", response.status, self.entity_id, attempt + 1
+                )
+                response.close()
+            if attempt == 0:
+                await self._data.client.refresh_camera_route(f"stream:{self.entity_id}")
+        return None
 
 
 async def _read_first_jpeg(response: aiohttp.ClientResponse) -> bytes | None:
