@@ -40,7 +40,6 @@ window). A camera that first appears later needs an HA reload to surface.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -50,6 +49,7 @@ from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_stream, asy
 
 from . import SmartPlaceData, category_device_info
 from .const import DOMAIN
+from .entity import SmartPlacePushEntity
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -100,8 +100,14 @@ async def async_setup_entry(
     )
 
 
-class SmartPlaceIntercomCamera(Camera):
-    """One door-intercom entrance camera, served as a proxied MJPEG stream."""
+class SmartPlaceIntercomCamera(SmartPlacePushEntity, Camera):
+    """One door-intercom entrance camera, served as a proxied MJPEG stream.
+
+    Availability + the change-gated frame subscription live in
+    ``SmartPlacePushEntity``; for a camera the only frame-driven change is the
+    WS going up or down, so the dedup collapses the broadcast stream to those
+    edges.
+    """
 
     _attr_has_entity_name = True
 
@@ -122,20 +128,6 @@ class SmartPlaceIntercomCamera(Camera):
         self._attr_name = f"{label} camera" if label else f"Camera {camera_id}"
         self._attr_unique_id = f"{entry.entry_id}_camera_{camera_id}"
         self._attr_device_info = category_device_info(entry, "Cameras")
-
-    @property
-    def available(self) -> bool:
-        """Match the rest of the integration: unavailable while the WS is down."""
-        return self._data.is_healthy
-
-    async def async_added_to_hass(self) -> None:
-        """Push availability changes (WS up/down) to HA like the other entities."""
-        self._data.listeners.append(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Drop the push-update subscription on entity removal."""
-        with contextlib.suppress(ValueError):
-            self._data.listeners.remove(self.async_write_ha_state)
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return a single JPEG snapshot, sliced from the live MJPEG stream.

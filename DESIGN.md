@@ -682,7 +682,16 @@ noted; per-id families collapse with a `\d+` regex):
   `Humidity`, `ClimateInfo`, `SceneState`, `LightState`, `BlindState`,
   `Volume`, `InfoboardSlot`, `PackageBox`, `ChartTarget`, `WindAlarm`,
   `LightsCentral`, `BlindsCentral`, `SpeakersCentral`, `Mute`,
-  `DoorIntercom`, `CallInfo`.
+  `DoorIntercom`, `CallInfo`, `Sound`.
+  - Intercom ringing is modelled on `Sound` (`SOUND<n>` — the audible
+    doorbell chime), **not** `DoorIntercom` (`SPRECHEN<n>:ring`). On this
+    `YEALINKOFF` building `SPRECHEN:ring` drives nothing in the SPA (its
+    one consumer is `YEALINKON`-only) and is replayed stale on every
+    bootstrap; `SOUND<n>` is pushed only at the real ring and never
+    replayed. There is no "stopped" frame on the WS (the SPA learns
+    end-of-call from SIP only), so the HA layer auto-clears the ring
+    `INTERCOM_RING_TIMEOUT` (3 s) after the chime. `DoorIntercom` is
+    parsed-but-unused. (Verified live 2026-06-25 + from `javallg.js`.)
 - *Per-id comma configs* (`prefix<N>:f1,f2,...`): `LightConfig`,
   `BlindConfig`, `ClimateConfig`, `SceneConfig`, `MediacenterConfig`,
   `MediaPanelConfig`, `VolumeConfig`, `LightSubMenu`, `BlindSubMenu`,

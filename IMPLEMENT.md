@@ -511,3 +511,45 @@ reads the `system_log` ring buffer (WARNING+ only) so it never shows
 them; the full text is in the Supervisor core journal
 (`./scripts/ha-live get /api/hassio/core/logs`) — `/api/error_log` was
 removed in 2026.x and 404s.
+
+## Post-implementation: intercom ringing from the chime, not SPRECHEN
+
+Symptom (reported 2026-06-25): `sensor.smart_place_intercom` stayed
+`"Front door"` with `ringing: true` indefinitely — it showed the last
+place that rang, never clearing. Diagnosed across three sources: a live
+observe-only capture, HA history, and the vendor `javallg.js`.
+
+Root cause — the old model derived ringing from `SPRECHEN<n>:ring`
+(`DoorIntercom`), which has two fatal flaws on this `YEALINKOFF`
+building: (1) the server **replays** `SPRECHEN1:ring` + `CALLINFO1` on
+every bootstrap (a stale latch — confirmed live, identical values an
+hour apart), and (2) there is **no "stopped" frame on the WS** — the
+SPA's only `SPRECHEN:ring` consumer is `YEALINKON`-only, and it clears
+the bell purely from SIP signalling (`CANCEL`/`BYE`/`487`/`480`/`603`
+on the separate `wss://…/asterisk/ws`) that we don't consume.
+
+Fix — model ringing on the audible chime instead. The SPA plays the
+ring via `SOUND1.play()` on a `SOUND<n>:<name>` frame (any value but
+`AUS` = off); that frame fires only at the real ring and is **not**
+replayed on bootstrap (verified: a full connect capture had zero
+`SOUND1` frames while the latched SPRECHEN/CALLINFO were present). So:
+- `messages.py`: new `Sound` (`SOUND<n>:<value>`); `DoorIntercom`
+  demoted to parsed-but-unused (kept only so the bootstrap replay
+  doesn't spam `unknown_frames`).
+- `state.py`: `intercom_ringing[n]` is set by `Sound` (`!= "AUS"`), no
+  longer by `SPRECHEN`.
+- `__init__.py`: since the chime is a momentary edge with no WS "stop",
+  the HA layer auto-clears the ring `INTERCOM_RING_TIMEOUT` (3 s, new in
+  `const.py`) after the last chime; a repeat chime re-arms the window.
+  Timers are cancelled on unload.
+
+`SmartPlaceIntercomSensor` is unchanged in shape — it still reads
+`intercom_ringing` + `intercom_callers` — so the two live HA automations
+("Intercom Ringing", "… – Action") keep working, but stop false-firing
+on every reconnect.
+
+Caveat (not yet verified live): we have not captured a real ring, so the
+exact `SOUND1` value isn't known and we don't filter on it (any non-`AUS`
+counts, matching the SPA's `"AUS"!=m` check). If `SOUND1` turns out to
+double as a non-doorbell notification sound, add a name filter once a
+real ring is captured.

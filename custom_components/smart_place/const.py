@@ -22,3 +22,22 @@ SETUP_OBSERVATION_WINDOW: Final = 2.0
 # server doesn't push chart values, so we re-issue
 # ``GiveMeChartStandsManuell<id>`` every interval.
 CHART_POLL_INTERVAL: Final = 60.0
+
+# Diagnostic frame capture. When set to a path, the live client tees
+# EVERY frame (both directions, token-redacted) to this ndjson file —
+# the same mechanism the CLI exposes as ``--capture``. ``None`` disables
+# it (the normal state). Flip to a path to record real-world frames on
+# the deployed box (e.g. a doorbell press) for offline analysis, then set
+# back to ``None`` and redeploy: it appends forever and the broadcast
+# stream never stops, so the file grows unbounded if left on.
+CAPTURE_PATH: Final[str | None] = "/config/smart_place_capture.ndjson"
+
+# How long an intercom stays "ringing" after the doorbell chime.
+# A doorbell is a momentary event: the server pushes the ``SOUND<n>``
+# chime frame the moment it rings (modelled on the SPA, which calls
+# ``SOUND1.play()`` on that frame) but never a "stopped" frame on the
+# WebSocket — the SPA only learns the call ended from SIP signalling we
+# don't consume. So we treat the chime as an edge and auto-clear after
+# this timeout. Three seconds matches the chime length while keeping the
+# ring long enough for automations and notifications to fire once.
+INTERCOM_RING_TIMEOUT: Final = 3.0

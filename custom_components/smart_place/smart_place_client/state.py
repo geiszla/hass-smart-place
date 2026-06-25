@@ -263,9 +263,14 @@ class SmartPlaceState:
     # paired 1:1 with ``Klimas<N>`` zones the same way as
     # ``indoor_temperatures``.
     humidities: dict[int, float] = field(default_factory=dict)
-    # ``SPRECHEN<N>`` door-intercom ring state. ``True`` while the
-    # SPA-side value is ``"ring"`` (incoming call); any other value
-    # reads as idle.
+    # Door-intercom ring state, keyed by intercom id. Set ``True`` by the
+    # ``SOUND<N>`` chime frame (the audible doorbell — the only ring
+    # signal on the WS; see ``Sound`` in messages.py) and back to
+    # ``False`` by ``SOUND<N>:AUS``. The doorbell sends no reliable
+    # "stopped" frame, so the HA layer also auto-clears this after
+    # ``INTERCOM_RING_TIMEOUT`` (const.py). Not driven by ``SPRECHEN``:
+    # that frame is replayed stale on every bootstrap and its ``ring``
+    # value is YEALINKON-only in the SPA (this building is YEALINKOFF).
     intercom_ringing: dict[int, bool] = field(default_factory=dict)
     # ``CALLINFO<N>`` caller location label (translated to English
     # via ``_CALLER_INFO_GERMAN_TO_ENGLISH``).
@@ -373,8 +378,12 @@ class SmartPlaceState:
             value = _safe_float(frame.value)
             if value is not None:
                 self.humidities[frame.index] = value
-        elif name == "DoorIntercom" and frame.index is not None:
-            self.intercom_ringing[frame.index] = frame.value == "ring"
+        elif name == "Sound" and frame.index is not None:
+            # The chime is the ring edge: any sound name means "ringing",
+            # ``AUS`` ('off') means silence. The HA layer adds the
+            # timeout-based auto-clear. ``DoorIntercom`` (SPRECHEN) is
+            # deliberately not folded — see the ``intercom_ringing`` field.
+            self.intercom_ringing[frame.index] = frame.value != "AUS"
         elif name == "CallInfo" and frame.index is not None:
             self.intercom_callers[frame.index] = _translate_caller_label(frame.value)
         elif name == "InfoboardContent" and frame.index is not None:
