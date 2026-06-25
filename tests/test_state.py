@@ -267,24 +267,31 @@ def test_apply_humidity_records_per_zone_value() -> None:
 
 
 def test_apply_humidity_ignores_invalid_float() -> None:
-    """Non-numeric humidity values don't crash — they're dropped silently."""
+    """An invalid first reading is dropped — the zone isn't surfaced."""
     state = SmartPlaceState()
-    state.apply(NamedValue(name="Humidity", value="--", index=3))
+    assert state.apply(NamedValue(name="Humidity", value="--", index=3)) is False
     assert state.humidities == {}
 
 
-def test_apply_sound_chime_drives_ringing() -> None:
-    """``SOUND<N>`` chime is the ring edge; ``AUS`` clears it; SPRECHEN is ignored."""
+def test_apply_humidity_invalid_clears_known_zone() -> None:
+    """A later invalid payload clears a known zone to None (not stale)."""
     state = SmartPlaceState()
-    state.apply(NamedValue(name="Sound", value="klingel", index=1))
-    assert state.intercom_ringing == {1: True}
-    # ``AUS`` ('off') reads as not-ringing.
-    state.apply(NamedValue(name="Sound", value="AUS", index=1))
-    assert state.intercom_ringing == {1: False}
-    # ``SPRECHEN`` (DoorIntercom) is replayed stale on every bootstrap and
-    # no longer drives ringing — applying it must not flip the flag.
-    state.apply(NamedValue(name="DoorIntercom", value="ring", index=1))
-    assert state.intercom_ringing == {1: False}
+    assert state.apply(NamedValue(name="Humidity", value="42.5", index=3)) is True
+    # ``--`` is the SPA's no-reading marker: the prior 42.5 must not linger.
+    assert state.apply(NamedValue(name="Humidity", value="--", index=3)) is True
+    assert state.humidities == {3: None}
+    # Re-sending the invalid marker is now a no-op (already None).
+    assert state.apply(NamedValue(name="Humidity", value="--", index=3)) is False
+
+
+def test_apply_door_intercom_only_ring_means_on() -> None:
+    """``SPRECHEN<N>:ring`` flips the per-intercom ringing flag; other values are off."""
+    state = SmartPlaceState()
+    assert state.apply(NamedValue(name="DoorIntercom", value="ring", index=1)) is True
+    assert state.apply(NamedValue(name="DoorIntercom", value="idle", index=2)) is True
+    assert state.intercom_ringing == {1: True, 2: False}
+    # A re-sent identical value is a no-op for the fan-out gate.
+    assert state.apply(NamedValue(name="DoorIntercom", value="ring", index=1)) is False
 
 
 def test_apply_call_info_translates_known_german_labels() -> None:
@@ -387,3 +394,36 @@ def test_apply_unknown_frame_does_not_raise() -> None:
     # Nothing observed yet; the snapshot stays at its defaults.
     assert state.outdoor_temperature is None
     assert state.charts == {}
+
+
+def test_apply_returns_true_on_change_false_on_resend() -> None:
+    """``apply`` reports whether the snapshot changed — the fan-out gate.
+
+    The server re-broadcasts unchanged values ~2-3x/s; the HA layer skips
+    the per-entity fan-out when ``apply`` returns ``False``.
+    """
+    state = SmartPlaceState()
+    # First sighting of a value is a change.
+    assert state.apply(NamedValue(name="WindSpeed", value="7.9")) is True
+    # Re-sending the same value is a no-op.
+    assert state.apply(NamedValue(name="WindSpeed", value="7.9")) is False
+    # A new value is a change again.
+    assert state.apply(NamedValue(name="WindSpeed", value="8.0")) is True
+
+
+def test_apply_change_detection_across_frame_kinds() -> None:
+    """Indexed dicts, indoor temps, charts, and unknowns all gate correctly."""
+    state = SmartPlaceState()
+    # Indexed alarm dict.
+    assert state.apply(NamedValue(name="WindAlarm", value="01", index=2)) is True
+    assert state.apply(NamedValue(name="WindAlarm", value="01", index=2)) is False
+    # Indoor temperature (Temperature frame).
+    assert state.apply(Temperature(sensor=3, value=22.4)) is True
+    assert state.apply(Temperature(sensor=3, value=22.4)) is False
+    assert state.apply(Temperature(sensor=3, value=22.5)) is True
+    # Chart STAND series.
+    assert state.apply(NamedValue(name="ChartStand", value="49STAND1:5")) is True
+    assert state.apply(NamedValue(name="ChartStand", value="49STAND1:5")) is False
+    # Unknown / unhandled frames never count as a change.
+    assert state.apply(UnknownFrame(raw="ZZZ:unmapped")) is False
+    assert state.apply(NamedValue(name="LightsCentral", value="01", index=1)) is False

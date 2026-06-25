@@ -12,26 +12,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
+import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
-from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.event import async_call_later
 
-from .const import (
-    CAPTURE_PATH,
-    CHART_POLL_INTERVAL,
-    CONF_TOKEN,
-    DOMAIN,
-    INTERCOM_RING_TIMEOUT,
-    SETUP_OBSERVATION_WINDOW,
-)
+from .const import CAPTURE_PATH, CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
 from .smart_place_client import (
     DISCOVERY_ORIGIN,
-    NamedValue,
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
@@ -43,7 +34,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from homeassistant.config_entries import ConfigEntry
-    from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+    from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -107,9 +100,6 @@ class SmartPlaceData:
     client: SmartPlaceClient
     state: SmartPlaceState
     listeners: list[Callable[[], None]] = field(default_factory=list)
-    # Pending intercom ring auto-clear timers, keyed by intercom id —
-    # each cancels the prior one so a repeat chime re-arms the window.
-    ring_timeouts: dict[int, CALLBACK_TYPE] = field(default_factory=dict)
 
     @property
     def is_healthy(self) -> bool:
@@ -132,6 +122,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def trigger_reauth() -> None:
         entry.async_start_reauth(hass)
 
+    # Last health state propagated to entities. Drives the reconnect
+    # re-notify in ``_on_frame``: the server re-broadcasts unchanged
+    # values, so the first frames after a reconnect can be no-ops that the
+    # fan-out gate would skip — leaving entities stuck "unavailable" — so
+    # a health transition forces a fan-out regardless.
+    connection_healthy = False
+
     # ``data`` is bound below but the closures only fire after
     # ``client.run()`` starts — which happens after the binding —
     # so Python's call-time free-variable lookup resolves cleanly.
@@ -139,8 +136,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Push the WS drop to every entity so ``available`` flips False
         # for the whole reconnect-backoff gap (otherwise listeners only
         # wake on the next frame, which doesn't arrive until reconnect).
-        for listener in list(data.listeners):
-            listener()
+        nonlocal connection_healthy
+        connection_healthy = False
+        _notify_listeners()
 
     client = SmartPlaceClient.live(
         token=token,
@@ -155,39 +153,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
     def _notify_listeners() -> None:
+        # Isolate each entity: a raised listener (e.g. a bad native_value)
+        # must not stop the remaining entities from seeing this update.
         for listener in list(data.listeners):
-            listener()
-
-    @callback
-    def _arm_ring_timeout(frame: ServerFrame) -> None:
-        """Auto-clear the intercom ring a few seconds after the chime.
-
-        A ``SOUND<n>`` frame is the doorbell edge (``state.apply`` set
-        ``intercom_ringing`` from it); the server sends no reliable
-        "stopped" frame, so we schedule the clear ourselves. A repeat
-        chime cancels and re-arms the window. ``AUS`` already cleared the
-        ring in ``apply``, so it just cancels any pending timer.
-        """
-        if not (isinstance(frame, NamedValue) and frame.name == "Sound" and frame.index is not None):
-            return
-        intercom_id = frame.index
-        if (pending := data.ring_timeouts.pop(intercom_id, None)) is not None:
-            pending()
-        if frame.value == "AUS":
-            return
-
-        @callback
-        def _clear(_now: object) -> None:
-            data.ring_timeouts.pop(intercom_id, None)
-            data.state.intercom_ringing[intercom_id] = False
-            _notify_listeners()
-
-        data.ring_timeouts[intercom_id] = async_call_later(hass, INTERCOM_RING_TIMEOUT, _clear)
+            try:
+                listener()
+            except Exception:
+                _LOGGER.exception("Smart Place entity update listener raised; continuing")
 
     async def _on_frame(frame: ServerFrame) -> None:
-        data.state.apply(frame)
-        _arm_ring_timeout(frame)
-        _notify_listeners()
+        nonlocal connection_healthy
+        changed = data.state.apply(frame)
+        # Skip the per-entity fan-out when the snapshot didn't change — the
+        # server re-broadcasts the full sensor set ~2-3x/s even when nothing
+        # changes. Always fan out on a health transition so a reconnect
+        # restores availability even if its first frames are unchanged.
+        healthy = data.is_healthy
+        if changed or healthy != connection_healthy:
+            _notify_listeners()
+        connection_healthy = healthy
 
     client.subscribe(_on_frame)
 
@@ -233,8 +217,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Smart Place config entry — clean up the client and platforms."""
     data: SmartPlaceData | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if data is not None:
-        for cancel in data.ring_timeouts.values():
-            cancel()
-        data.ring_timeouts.clear()
         await data.client.aclose()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
