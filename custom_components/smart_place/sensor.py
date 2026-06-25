@@ -58,7 +58,6 @@ that first appears later needs an HA reload to surface.
 
 from __future__ import annotations
 
-import contextlib
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
@@ -67,6 +66,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from . import SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
+from .entity import SmartPlacePushEntity
 from .smart_place_client import chart_target_status
 
 if TYPE_CHECKING:
@@ -225,18 +225,18 @@ def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> De
     )
 
 
-class _SmartPlaceSensorBase(SensorEntity):
+class _SmartPlaceSensorBase(SmartPlacePushEntity, SensorEntity):
     """Common wiring: device_info, push-update subscription.
 
-    Subclasses set ``_category`` to land on a category sub-device (its
-    own dashboard card); the default ``None`` keeps the entity on the
-    main Smart Place device. Subclasses that need a bespoke device (the
-    per-zone climate sensors) override ``_attr_device_info`` after
+    Availability + the change-gated frame subscription live in
+    ``SmartPlacePushEntity``. Subclasses set ``_category`` to land on a
+    category sub-device (its own dashboard card); the default ``None`` keeps
+    the entity on the main Smart Place device. Subclasses that need a bespoke
+    device (the per-zone climate sensors) override ``_attr_device_info`` after
     ``super().__init__``.
     """
 
     _attr_has_entity_name = True
-    _attr_should_poll = False
     _category: str | None = None
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -245,20 +245,6 @@ class _SmartPlaceSensorBase(SensorEntity):
         self._attr_device_info = (
             category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
         )
-
-    @property
-    def available(self) -> bool:
-        """Mark the entity unavailable while the WS is disconnected."""
-        return self._data.is_healthy
-
-    async def async_added_to_hass(self) -> None:
-        """Push state updates to HA on every parsed WS frame."""
-        self._data.listeners.append(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Drop the push-update subscription on entity removal."""
-        with contextlib.suppress(ValueError):
-            self._data.listeners.remove(self.async_write_ha_state)
 
 
 class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
@@ -272,6 +258,15 @@ class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
     _attr_name = "Outdoor temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    # Round the *displayed* value — including the 5-minute statistics
+    # mean HA shows in the more-info detail view. HA's recorder averages
+    # the raw float states, and summing IEEE doubles (e.g. 21.3 stored as
+    # 21.299999999999997) leaks a long tail like ``21.300000000000004``
+    # into that aggregate. ``suggested_display_precision`` is the only
+    # lever that reaches the statistics display; rounding ``native_value``
+    # doesn't, because HA re-averages the rounded states. See the chart
+    # target-use sensor for the originally reported case.
+    _attr_suggested_display_precision = 1
     _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -300,6 +295,8 @@ class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
     _attr_name = "Wind speed"
     _attr_device_class = SensorDeviceClass.WIND_SPEED
     _attr_state_class = SensorStateClass.MEASUREMENT
+    # Keep the statistics mean clean — see SmartPlaceOutdoorTemperatureSensor.
+    _attr_suggested_display_precision = 1
     _category = "Weather"
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -329,6 +326,8 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    # Keep the statistics mean clean — see SmartPlaceOutdoorTemperatureSensor.
+    _attr_suggested_display_precision = 1
 
     def __init__(
         self,
@@ -368,6 +367,9 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
+    # Whole-percent display; also keeps the statistics mean clean — see
+    # SmartPlaceOutdoorTemperatureSensor.
+    _attr_suggested_display_precision = 0
     _attr_entity_registry_enabled_default = False
 
     def __init__(
@@ -475,6 +477,11 @@ class SmartPlaceChartSensor(_SmartPlaceChartScopedSensor):
         super().__init__(entry, data, chart_id, enabled_default=enabled_default)
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = native_unit
+        # Clean up the displayed consumption + its statistics deltas (see
+        # SmartPlaceOutdoorTemperatureSensor). Water meters report whole
+        # litres; energy (kWh) carries sub-watt-hour readings (PV runs as
+        # low as ~0.005 kWh/day), so it keeps three decimals.
+        self._attr_suggested_display_precision = 3 if device_class is SensorDeviceClass.ENERGY else 0
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}"
         kind = "Electricity" if device_class is SensorDeviceClass.ENERGY else "Water"
         self._fallback_name = f"{kind} chart {chart_id}"
@@ -536,6 +543,12 @@ class SmartPlaceChartTargetPercentSensor(_SmartPlaceChartScopedSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_icon = "mdi:gauge"
+    # The originally reported case: the more-info view showed a 5-minute
+    # mean like ``4.7000000001%``. ``native_value`` is already rounded to
+    # one decimal, but HA averages those states for the statistics graph
+    # and the average leaks a float tail; this rounds that display too.
+    # See SmartPlaceOutdoorTemperatureSensor.
+    _attr_suggested_display_precision = 1
     _name_suffix = "target use"
 
     def __init__(
@@ -686,9 +699,12 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     """Per-intercom combined ringing + caller view.
 
     State is the translated caller location (e.g. ``Apartment
-    entrance``) while ``SPRECHEN<n>`` is ``ring``; ``None`` otherwise.
-    The raw ``ringing`` flag and the last-seen ``caller`` (even when
-    idle) surface as attributes so automations can distinguish
+    entrance``) while the intercom is ringing; ``None`` otherwise.
+    Ringing is the ``SOUND<n>`` doorbell chime (see state.py /
+    messages.py), auto-cleared a few seconds later by the HA layer
+    (``INTERCOM_RING_TIMEOUT``) since the server sends no "stopped"
+    frame. The raw ``ringing`` flag and the last-seen ``caller`` (even
+    when idle) surface as attributes so automations can distinguish
     "rang from X" from "idle". Suffixed by id only when more than one
     intercom is discovered — with a single unit, "Intercom 1" is just
     noise (same rule as the wind alarms).

@@ -39,7 +39,6 @@ ringing flag surfaces as an attribute.
 
 from __future__ import annotations
 
-import contextlib
 from typing import TYPE_CHECKING
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -47,6 +46,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from . import SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
+from .entity import SmartPlacePushEntity
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -76,16 +76,16 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class _SmartPlaceBinarySensorBase(BinarySensorEntity):
+class _SmartPlaceBinarySensorBase(SmartPlacePushEntity, BinarySensorEntity):
     """Common wiring: shared device + push-update subscription.
 
-    Subclasses set ``_category`` to land on a category sub-device
-    (its own dashboard card); the default ``None`` keeps the entity on
-    the main Smart Place device.
+    Availability + the change-gated frame subscription live in
+    ``SmartPlacePushEntity``. Subclasses set ``_category`` to land on a
+    category sub-device (its own dashboard card); the default ``None`` keeps
+    the entity on the main Smart Place device.
     """
 
     _attr_has_entity_name = True
-    _attr_should_poll = False
     _category: str | None = None
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
@@ -94,20 +94,6 @@ class _SmartPlaceBinarySensorBase(BinarySensorEntity):
         self._attr_device_info = (
             category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
         )
-
-    @property
-    def available(self) -> bool:
-        """Mark the entity unavailable while the WS is disconnected."""
-        return self._data.is_healthy
-
-    async def async_added_to_hass(self) -> None:
-        """Push state updates to HA on every parsed WS frame."""
-        self._data.listeners.append(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Drop the push-update subscription on entity removal."""
-        with contextlib.suppress(ValueError):
-            self._data.listeners.remove(self.async_write_ha_state)
 
 
 class SmartPlaceConnectionSensor(_SmartPlaceBinarySensorBase):

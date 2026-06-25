@@ -65,7 +65,11 @@ real `friendly_name`/attributes with `state <entity_id>`.
   reload is not enough):
 
   ```bash
-  scp -r custom_components/smart_place root@homeassistant.local:/config/custom_components/
+  # NOTE: this box has NO SSH (port 22 refused — verified 2026-06-25), so
+  # the scp below does NOT work here. The user deploys the files via their
+  # own non-SSH channel (Samba / File editor / Studio Code Server); you
+  # then run the restart + checks over HTTP. See the ha-box-no-ssh memory.
+  scp -r custom_components/smart_place root@homeassistant.local:/config/custom_components/  # ✗ no sshd
   ./scripts/ha-live restart
   ./scripts/ha-live status
   ./scripts/ha-live logs
@@ -153,8 +157,11 @@ payload (`--dry-run` it) before writing, and never add or trigger a door
 - `logs` empty of ERROR entries. The system-log buffer is small and clears on
   every core restart, so check soon after reproducing; for full logs
   including startup (e.g. an `ImportError` that prevents the integration
-  loading at all), use the SSH add-on:
-  `ssh root@homeassistant.local "ha core logs"`.
+  loading at all), fetch the Supervisor core journal over HTTP:
+  `./scripts/ha-live get /api/hassio/core/logs`. (SSH is **not** enabled
+  on this box — port 22 is refused, verified 2026-06-25 — so
+  `ssh root@homeassistant.local "ha core logs"` does not work; see the
+  ha-box-no-ssh memory.)
 
 ## Safety
 

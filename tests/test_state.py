@@ -273,12 +273,18 @@ def test_apply_humidity_ignores_invalid_float() -> None:
     assert state.humidities == {}
 
 
-def test_apply_door_intercom_only_ring_means_on() -> None:
-    """``SPRECHEN<N>:ring`` flips the per-intercom ringing flag; other values are off."""
+def test_apply_sound_chime_drives_ringing() -> None:
+    """``SOUND<N>`` chime is the ring edge; ``AUS`` clears it; SPRECHEN is ignored."""
     state = SmartPlaceState()
+    state.apply(NamedValue(name="Sound", value="klingel", index=1))
+    assert state.intercom_ringing == {1: True}
+    # ``AUS`` ('off') reads as not-ringing.
+    state.apply(NamedValue(name="Sound", value="AUS", index=1))
+    assert state.intercom_ringing == {1: False}
+    # ``SPRECHEN`` (DoorIntercom) is replayed stale on every bootstrap and
+    # no longer drives ringing — applying it must not flip the flag.
     state.apply(NamedValue(name="DoorIntercom", value="ring", index=1))
-    state.apply(NamedValue(name="DoorIntercom", value="idle", index=2))
-    assert state.intercom_ringing == {1: True, 2: False}
+    assert state.intercom_ringing == {1: False}
 
 
 def test_apply_call_info_translates_known_german_labels() -> None:

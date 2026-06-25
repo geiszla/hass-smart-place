@@ -437,11 +437,18 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         parse=_indexed_value_parser("Mute", "MUTE"),
         example="MUTE1:00",
     ),
+    # Parsed so it doesn't fall through to unknown_frames (the server
+    # replays SPRECHEN1:ring on every bootstrap), but intentionally NOT
+    # mapped to any state/entity. The 'ring' value drives ringing only in
+    # the SPA's YEALINKON branch (one comparison in javallg.js); this
+    # building is YEALINKOFF, where the audible ring is the SOUND<n> chime
+    # and the bell animation/end-of-call are SIP-side — neither of which
+    # this frame carries. Ringing is modelled on ``Sound`` instead.
     MessageDefinition(
         name="DoorIntercom",
         description=(
             "Push: door intercom N state. Format: SPRECHEN<n>:<state> "
-            "('ring' on incoming call). 'Sprechen' = to speak/intercom."
+            "('ring' on incoming call). Parsed-but-unused — see ``Sound``."
         ),
         pattern=re.compile(r"^SPRECHEN\d+:"),
         parse=_indexed_value_parser("DoorIntercom", "SPRECHEN"),
@@ -453,6 +460,22 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         pattern=re.compile(r"^CALLINFO\d+:"),
         parse=_indexed_value_parser("CallInfo", "CALLINFO"),
         example="CALLINFO1:FrontDoor",
+    ),
+    MessageDefinition(
+        # The intercom's audible doorbell chime, and our "ringing now"
+        # edge. The SPA plays /sounds/<lang>/<value>.ogg on this frame
+        # (``SOUND1.play()`` in javallg.js) for any value except ``AUS``
+        # ('off'). Unlike SPRECHEN/CALLINFO it is NOT replayed on
+        # bootstrap, so it cleanly marks a real ring; the HA layer
+        # auto-clears the ring after ``INTERCOM_RING_TIMEOUT``.
+        name="Sound",
+        description=(
+            "Push: play the intercom chime for unit N. Format: SOUND<n>:<name> "
+            "(plays <name>.ogg; 'AUS' = silence). Doubles as the ring edge."
+        ),
+        pattern=re.compile(r"^SOUND\d+:"),
+        parse=_indexed_value_parser("Sound", "SOUND"),
+        example="SOUND1:AUS",
     ),
     # -- Per-id entity configuration (comma-delimited) ---------------------
     MessageDefinition(

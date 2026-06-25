@@ -15,13 +15,23 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
+from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.event import async_call_later
 
-from .const import CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
+from .const import (
+    CAPTURE_PATH,
+    CHART_POLL_INTERVAL,
+    CONF_TOKEN,
+    DOMAIN,
+    INTERCOM_RING_TIMEOUT,
+    SETUP_OBSERVATION_WINDOW,
+)
 from .smart_place_client import (
     DISCOVERY_ORIGIN,
+    NamedValue,
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
@@ -33,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from homeassistant.config_entries import ConfigEntry
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -97,6 +107,9 @@ class SmartPlaceData:
     client: SmartPlaceClient
     state: SmartPlaceState
     listeners: list[Callable[[], None]] = field(default_factory=list)
+    # Pending intercom ring auto-clear timers, keyed by intercom id —
+    # each cancels the prior one so a repeat chime re-arms the window.
+    ring_timeouts: dict[int, CALLBACK_TYPE] = field(default_factory=dict)
 
     @property
     def is_healthy(self) -> bool:
@@ -132,6 +145,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = SmartPlaceClient.live(
         token=token,
         session=session,
+        capture=CAPTURE_PATH,
         chart_poll_interval=CHART_POLL_INTERVAL,
         on_reauth=trigger_reauth,
         on_disconnect=trigger_disconnect_notify,
@@ -140,10 +154,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = SmartPlaceData(client=client, state=SmartPlaceState())
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
-    async def _on_frame(frame: ServerFrame) -> None:
-        data.state.apply(frame)
+    def _notify_listeners() -> None:
         for listener in list(data.listeners):
             listener()
+
+    @callback
+    def _arm_ring_timeout(frame: ServerFrame) -> None:
+        """Auto-clear the intercom ring a few seconds after the chime.
+
+        A ``SOUND<n>`` frame is the doorbell edge (``state.apply`` set
+        ``intercom_ringing`` from it); the server sends no reliable
+        "stopped" frame, so we schedule the clear ourselves. A repeat
+        chime cancels and re-arms the window. ``AUS`` already cleared the
+        ring in ``apply``, so it just cancels any pending timer.
+        """
+        if not (isinstance(frame, NamedValue) and frame.name == "Sound" and frame.index is not None):
+            return
+        intercom_id = frame.index
+        if (pending := data.ring_timeouts.pop(intercom_id, None)) is not None:
+            pending()
+        if frame.value == "AUS":
+            return
+
+        @callback
+        def _clear(_now: object) -> None:
+            data.ring_timeouts.pop(intercom_id, None)
+            data.state.intercom_ringing[intercom_id] = False
+            _notify_listeners()
+
+        data.ring_timeouts[intercom_id] = async_call_later(hass, INTERCOM_RING_TIMEOUT, _clear)
+
+    async def _on_frame(frame: ServerFrame) -> None:
+        data.state.apply(frame)
+        _arm_ring_timeout(frame)
+        _notify_listeners()
 
     client.subscribe(_on_frame)
 
@@ -189,5 +233,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Smart Place config entry — clean up the client and platforms."""
     data: SmartPlaceData | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if data is not None:
+        for cancel in data.ring_timeouts.values():
+            cancel()
+        data.ring_timeouts.clear()
         await data.client.aclose()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
