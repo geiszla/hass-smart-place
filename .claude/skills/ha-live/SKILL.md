@@ -49,6 +49,7 @@ echo 'HASS_URL=http://192.168.1.x:8123' >> .env
 | `restart` | Restart HA core, wait for it to come back, print entry state |
 | `get <path>` | Raw REST GET, e.g. `get /api/error_log`, `get /api/config` |
 | `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list` |
+| `config-set <domain> <key> --file <f>` | Create/update an automation, scene, or script (writes HA config; see below) |
 
 `status`, `devices`, `entities`, and `logs` accept `--json` for
 machine-readable output — prefer that when parsing programmatically.
@@ -84,6 +85,60 @@ real `friendly_name`/attributes with `state <entity_id>`.
   `ws config/entity_registry/list`, config entries
   `ws config_entries/get '{"domain": "smart_place"}'`.
 
+## Reading and editing automations / scenes / scripts
+
+These live in HA's config store, *not* in the Smart Place integration, so they
+have no `ha-live` listing command — reach them through the generic `get`
+escape hatch and the `config-set` write command. They share one REST shape,
+`/api/config/<domain>/config/<key>` (the views the GUI editors drive), and
+`config-set` passes `<domain>` straight through rather than enforcing a list —
+in current HA the editable domains are these three, and HA rejects any other:
+
+- **`automation`** / **`scene`** — `<key>` is the numeric `id` (also the `id`
+  attribute on the entity).
+- **`script`** — `<key>` is the object_id (the part after `script.`).
+
+**List them** (they are normal entities):
+
+```bash
+# every automation with its config id, on/off state, and last-triggered time
+./scripts/ha-live get /api/states \
+  | python3 -c 'import json,sys; [print(s["attributes"].get("id"), s["entity_id"], s["state"]) \
+      for s in json.load(sys.stdin) if s["entity_id"].startswith("automation.")]'
+```
+
+(`jq` is not installed in this repo's env — filter with `python3` as above.)
+
+**Read one** full config (triggers/conditions/actions):
+
+```bash
+./scripts/ha-live get /api/config/automation/config/1781254929024
+```
+
+**Edit one** — round-trip through a file so the payload stays in the server's
+schema, preview with `--dry-run`, then write:
+
+```bash
+./scripts/ha-live get /api/config/automation/config/<id> > a.json
+# ...edit a.json...
+./scripts/ha-live config-set automation <id> --file a.json --dry-run   # shows a diff, writes nothing
+./scripts/ha-live config-set automation <id> --file a.json             # prompts, then writes
+```
+
+A `config-set` POST validates the payload, writes the YAML store, **and
+reloads that domain**, so the change is live at once — no separate reload
+needed. A `<key>` that does not exist yet **creates** a new item. The command
+prompts for confirmation (skip with `--yes`; required when piping the payload
+via `--file -`) and prints the stored config back as confirmation.
+
+`config-set` writes **config only** — it cannot itself call a service, so it
+never opens a door directly (it does not break the "no service-calling
+command" rule below). But an automation you write here *can* press a door
+button the next time it triggers — e.g. the existing **Intercom Ringing –
+Action** automation calls `button.press` on the door buttons. Review every
+payload (`--dry-run` it) before writing, and never add or trigger a door
+`button.press` you did not intend.
+
 ## What healthy looks like
 
 - `status`: entry state `loaded`. `setup_retry`/`setup_error` with a reason
@@ -107,8 +162,12 @@ real `friendly_name`/attributes with `state <entity_id>`.
   entrance, Garage entrance, Mailbox) — they send `OEFFNER<n>` commands that
   open real doors in the building. `ha-live` deliberately has no
   service-calling command; do not work around that via `get`/`ws` or curl.
-- Everything is read-only except `reload`/`restart`, which affect only the HA
-  instance, never the building.
+- **Default to read-only.** Unless the user specifically asks for a change,
+  use only the read-only commands. The mutating operations — `reload`,
+  `restart`, `config-set`, and any entity-registry rename / helper creation /
+  dashboard edit done through the raw `ws`/`get` hatches — affect the HA
+  instance only, never the building directly, but run them only when explicitly
+  instructed.
 - `HASS_TOKEN` grants admin over HA: keep it in `.env`, never echo or commit
   it. The script never prints it.
 

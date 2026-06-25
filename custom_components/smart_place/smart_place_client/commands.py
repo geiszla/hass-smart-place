@@ -39,12 +39,20 @@ class CommandDefinition:
             parameterized commands (e.g. ``encode(chart_id)``).
         example: Concrete wire string used as documentation +
             verified by :func:`test_commands_encode_matches_example`.
+        audit: Whether issuing this command is logged at INFO as an
+            audit-trail line (``client.issue``). Defaults to ``True`` so
+            new commands are recorded by default — the audit log should
+            fail safe to *more* visibility. The high-frequency machinery
+            (bootstrap reads, heartbeat ``Ping``, chart polling) sets it
+            ``False`` so the trail isn't drowned out; control/actuation
+            commands (e.g. the door openers) keep the default.
     """
 
     name: str
     description: str
     encode: Callable[..., str]
     example: str
+    audit: bool = True
 
 
 def _static(wire: str) -> Callable[[], str]:
@@ -76,6 +84,7 @@ class Commands:
         ),
         encode=_static("StatusInhaltListe"),
         example="StatusInhaltListe",
+        audit=False,
     )
     Mainmenu = CommandDefinition(
         name="Mainmenu",
@@ -87,6 +96,7 @@ class Commands:
         ),
         encode=_static("GiveMeMainmenu"),
         example="GiveMeMainmenu",
+        audit=False,
     )
     GlobalGsa = CommandDefinition(
         name="GlobalGsa",
@@ -101,6 +111,7 @@ class Commands:
         ),
         encode=_static("GiveMeGlobalGsa"),
         example="GiveMeGlobalGsa",
+        audit=False,
     )
     SocketConnected = CommandDefinition(
         name="SocketConnected",
@@ -117,6 +128,7 @@ class Commands:
         ),
         encode=lambda n=1: f"SocketConnected:{n}",
         example="SocketConnected:1",
+        audit=False,
     )
     # -- Heartbeat ---------------------------------------------------------
     Ping = CommandDefinition(
@@ -130,6 +142,7 @@ class Commands:
         ),
         encode=_static("Ping"),
         example="Ping",
+        audit=False,
     )
     # -- Per-id chart fetch (parameterized) --------------------------------
     ChartStands = CommandDefinition(
@@ -142,6 +155,7 @@ class Commands:
         ),
         encode=lambda chart_id: f"GiveMeChartStandsManuell{chart_id}",
         example="GiveMeChartStandsManuell49",
+        audit=False,
     )
     # -- Door openers (write; observe-only by default — caller must opt in)
     OpenGroundFloorEntrance = CommandDefinition(
