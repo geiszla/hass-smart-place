@@ -111,6 +111,14 @@ _CHART_RED_THRESHOLD: float = 0.9
 # meters by default in favour of the aggregate.
 _SUMME_CONSTITUENT_RE = re.compile(r"SummeForDiagramm-(\d+)")
 
+# Series ids inside ``SingelStandUpdate<id>`` range replies (see
+# ``Commands.ChartStandRange``). Identified live 2026-07-13: a Sunday
+# range returns HT = 0, and the monthly buckets match the EWZ invoices'
+# Hochtarif/Niedertarif split.
+CHART_RANGE_SERIES_TOTAL: int = 98
+CHART_RANGE_SERIES_HIGH_TARIFF: int = 97
+CHART_RANGE_SERIES_LOW_TARIFF: int = 96
+
 # Parcel-box unlock PIN, extracted from the free-text ``PERSINFO``
 # banner. Empirically a real delivery does NOT set ``PACKETBOX<N>:<code>``
 # (the box keeps reporting ``Frei``); instead the SPA pushes a German
@@ -299,6 +307,15 @@ class SmartPlaceState:
     # layer maps these to proper HA units instead of hardcoding,
     # falling back to the units observed on this installation.
     unit_hints: dict[str, str] = field(default_factory=dict)
+    # ``SingelStandUpdate<id>`` range buckets for the *today* range the
+    # client polls every ``CHART_POLL_INTERVAL`` (see
+    # ``Commands.ChartStandRange``): chart id -> {series: kWh} with
+    # series 98 = today's total, 97 = high-tariff share, 96 = low-tariff
+    # share. These are the server's own tariff buckets — the same split
+    # the EWZ invoices bill — so no local register bookkeeping is needed.
+    # NOTE: the buckets are raw meter values *including* the ZEV solar
+    # allocation (billed cheaper); see ``tariff`` module docstring.
+    chart_today_buckets: dict[int, dict[int, float]] = field(default_factory=dict)
     # ``GlobalGsa`` field [3] (CamGsaArrNew): door-intercom camera id ->
     # proxy link path (e.g. ``{1: "/linkmap1"}``). The live MJPEG stream
     # is served at ``https://<routed-host>:<routed-port - 1><link>`` —
@@ -376,6 +393,8 @@ class SmartPlaceState:
             return self._apply_chart_point(frame.index, frame.value)
         if name == "ChartStand":
             return self._apply_chart_stand(frame.value)
+        if name == "ChartRangeStand" and frame.index is not None:
+            return self._apply_chart_range_stand(frame.index, frame.value)
         if name == "ChartDefinition" and frame.index is not None:
             return self._apply_chart_definition(frame.index, frame.value)
         if name == "SceneState" and frame.index is not None:
@@ -476,6 +495,23 @@ class SmartPlaceState:
         except ValueError:
             return False
         return _set_key(self.charts.setdefault(chart_id, ChartReading(unit="")).stands, series, reading)
+
+    def _apply_chart_range_stand(self, chart_id: int, payload: str) -> bool:
+        """Fold a ``SingelStandUpdate<id>:<series>:<kWh>::::`` range bucket.
+
+        Non-numeric readings (e.g. the PV chart's ``Keine Werte``) are
+        dropped rather than clearing a previous value — a poll gap should
+        not zero the cost sensors mid-day.
+        """
+        series_raw, _, rest = payload.partition(":")
+        try:
+            series = int(series_raw)
+        except ValueError:
+            return False
+        value = _safe_float(rest.split(":", 1)[0])
+        if value is None:
+            return False
+        return _set_key(self.chart_today_buckets.setdefault(chart_id, {}), series, value)
 
     def _apply_chart_definition(self, chart_id: int, payload: str) -> bool:
         """Fold ``SingelDiagramm<id>:<title>;<...>;<category>;<unit>;...``.

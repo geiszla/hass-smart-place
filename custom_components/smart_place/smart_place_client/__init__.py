@@ -35,12 +35,33 @@ from .protocol import (
     parse_unit_hints,
     repair_mojibake,
 )
-from .state import ChartReading, SmartPlaceState, chart_target_status
+from .state import (
+    CHART_RANGE_SERIES_HIGH_TARIFF,
+    CHART_RANGE_SERIES_LOW_TARIFF,
+    CHART_RANGE_SERIES_TOTAL,
+    ChartReading,
+    SmartPlaceState,
+    chart_target_status,
+)
+from .tariff import (
+    TARIFFS,
+    TariffYear,
+    energy_cost_chf,
+    is_high_tariff,
+    next_tariff_boundary,
+    price_chf_per_kwh,
+    rates_for,
+    today_range_epochs,
+)
 
 __all__ = [
+    "CHART_RANGE_SERIES_HIGH_TARIFF",
+    "CHART_RANGE_SERIES_LOW_TARIFF",
+    "CHART_RANGE_SERIES_TOTAL",
     "DISCOVERY_ORIGIN",
     "KNOWN_COMMANDS",
     "KNOWN_MESSAGES",
+    "TARIFFS",
     "CapturedFrame",
     "ChartReading",
     "CommandDefinition",
@@ -62,13 +83,20 @@ __all__ = [
     "SmartPlaceClient",
     "SmartPlaceOfflineError",
     "SmartPlaceState",
+    "TariffYear",
     "Temperature",
     "UnknownFrame",
     "chart_target_status",
     "encode_frame",
+    "energy_cost_chf",
     "install_token_redaction_filter",
+    "is_high_tariff",
+    "next_tariff_boundary",
     "parse_chart_references",
     "parse_frame",
     "parse_unit_hints",
+    "price_chf_per_kwh",
+    "rates_for",
     "repair_mojibake",
+    "today_range_epochs",
 ]

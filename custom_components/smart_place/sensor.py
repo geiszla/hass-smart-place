@@ -58,21 +58,39 @@ that first appears later needs an HA reload to surface.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.util import dt as dt_util
 
 from . import SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
 from .entity import SmartPlacePushEntity
-from .smart_place_client import chart_target_status
+from .smart_place_client import (
+    CHART_RANGE_SERIES_HIGH_TARIFF,
+    CHART_RANGE_SERIES_LOW_TARIFF,
+    CHART_RANGE_SERIES_TOTAL,
+    chart_target_status,
+    energy_cost_chf,
+    is_high_tariff,
+    next_tariff_boundary,
+    rates_for,
+)
+from .smart_place_client.tariff import TARIFF_TZ
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # Daily series — STAND1 carries today's consumption so far. State
@@ -207,7 +225,41 @@ async def async_setup_entry(
             entities.append(SmartPlaceChartTargetPercentSensor(entry, data, chart_id, enabled_default=enabled_default))
             entities.append(SmartPlaceChartTargetStatusSensor(entry, data, chart_id, enabled_default=enabled_default))
 
+    # Electricity price + cost entities, attached to the grid meter chart
+    # (label "Electricity" — excludes the PV allocation chart, whose
+    # server-side history is empty, and any SUMME aggregate).
+    electricity_chart_id = _find_electricity_chart_id(state)
+    if electricity_chart_id is not None:
+        _, stale = rates_for(dt_util.now())
+        if stale:
+            _LOGGER.warning(
+                "No EWZ tariff table for the current year - electricity price/cost "
+                "sensors are using the latest known year's rates. Add the new year "
+                "to smart_place_client/tariff.py (published by ewz each September)."
+            )
+        entities.append(SmartPlaceElectricityPriceSensor(entry, data))
+        entities.append(SmartPlaceElectricityCostTodaySensor(entry, data, electricity_chart_id))
+        entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=True))
+        entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=False))
+
     async_add_entities(entities)
+
+
+def _find_electricity_chart_id(state) -> int | None:
+    """Return the grid electricity meter's chart id, or None.
+
+    Matches the cleaned ``ChartDefinition`` label exactly: this
+    installation has one grid meter chart labelled ``Electricity``
+    (raw ``Elektro <site>``). The PV chart cleans to ``PV electricity``
+    and water/heating to other labels, so an exact match cannot pick
+    the wrong chart; if a future installation reports several
+    (``Electricity I`` / ``II``), no price entities are created rather
+    than guessing.
+    """
+    for chart_id, chart in sorted(state.charts.items()):
+        if chart.label == "Electricity":
+            return chart_id
+    return None
 
 
 def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> DeviceInfo:
@@ -614,6 +666,186 @@ class SmartPlaceChartTargetStatusSensor(_SmartPlaceChartScopedSensor):
     def native_value(self) -> str | None:
         """Return green/orange/red, or None before reading + target are seen."""
         return chart_target_status(self._daily_reading(), self._target())
+
+
+class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
+    """Current all-in price of one grid kWh (EWZ tariff clock).
+
+    A pure wall-clock function — high tariff Mon-Sat 06:00-22:00 local,
+    low tariff otherwise, at the calendar year's EWZ rates (see
+    ``smart_place_client.tariff`` for provenance and the yearly manual
+    update). Always available: it needs no server data, so it keeps
+    working through WebSocket drops and can feed HA's Energy dashboard
+    cost tracking ("Use an entity with current price") alongside the
+    ``Electricity (today)`` consumption sensor.
+
+    Frame-driven writes would lag a tariff flip by whatever the next
+    state change is, so the sensor also schedules an exact refresh at
+    every boundary (06:00 / 22:00 / midnight).
+    """
+
+    _category = "Energy"
+    _attr_name = "Electricity price"
+    _attr_native_unit_of_measurement = "CHF/kWh"
+    _attr_icon = "mdi:cash-multiple"
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+        """Wire the unique_id; no chart data is consumed."""
+        super().__init__(entry, data)
+        self._attr_unique_id = f"{entry.entry_id}_electricity_price"
+        self._boundary_unsub = None
+
+    @property
+    def available(self) -> bool:
+        """Always available — the price is a clock, not a server value."""
+        return True
+
+    @property
+    def native_value(self) -> float:
+        """Return the all-in CHF/kWh for a grid kWh drawn right now."""
+        now = dt_util.now()
+        tariff, _ = rates_for(now)
+        return tariff.total_ht if is_high_tariff(now) else tariff.total_nt
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose the tariff window, rate table components, and staleness."""
+        now = dt_util.now()
+        tariff, stale = rates_for(now)
+        return {
+            "tariff_window": "high" if is_high_tariff(now) else "low",
+            "high_tariff_chf_kwh": tariff.total_ht,
+            "low_tariff_chf_kwh": tariff.total_nt,
+            "energy_chf_kwh": tariff.energy_ht if is_high_tariff(now) else tariff.energy_nt,
+            "grid_chf_kwh": tariff.grid_ht if is_high_tariff(now) else tariff.grid_nt,
+            "levies_chf_kwh": tariff.levies,
+            "pv_chf_kwh": tariff.pv_chf_kwh,
+            "fixed_chf_month": tariff.fixed_chf_month,
+            "rates_year": tariff.year,
+            "rates_stale": stale,
+            "rates_source": tariff.source,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to frames + schedule the exact boundary refresh."""
+        await super().async_added_to_hass()
+        self._schedule_boundary_refresh()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the boundary timer alongside the frame subscription."""
+        await super().async_will_remove_from_hass()
+        if self._boundary_unsub is not None:
+            self._boundary_unsub()
+            self._boundary_unsub = None
+
+    def _schedule_boundary_refresh(self) -> None:
+        boundary = next_tariff_boundary(dt_util.now())
+        self._boundary_unsub = async_track_point_in_time(self.hass, self._on_tariff_boundary, boundary)
+
+    @callback
+    def _on_tariff_boundary(self, _now: datetime) -> None:
+        """Write the flipped price and re-arm for the next boundary."""
+        self._handle_frame_update()
+        self._schedule_boundary_refresh()
+
+
+class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
+    """Today's grid electricity cost in CHF, from server-side tariff buckets.
+
+    The client polls ``Commands.ChartStandRange`` with the current local
+    day every ``CHART_POLL_INTERVAL``; the server answers with its own
+    high/low-tariff consumption split (the same bucketing the EWZ
+    invoices bill, verified against five months of invoices — see
+    DESIGN.md). State = HT kWh x HT rate + NT kWh x NT rate at the
+    current year's rates.
+
+    ``TOTAL`` + ``last_reset`` (local midnight) lets HA's long-term
+    statistics accumulate daily costs into weekly/monthly/yearly sums
+    correctly across the midnight reset AND across a 1 January rate
+    change (each day accrues at its own year's rates).
+
+    Known bias, documented in ``smart_place_client.tariff``: the meter
+    buckets include the ZEV solar allocation that EWZ bills ~20% cheaper;
+    against the 2025 invoices this sensor over-reads by +0.3..+2.3%
+    (~0.4 CHF/month). The monthly fixed fee (``fixed_chf_month``
+    attribute) is not part of the state either.
+    """
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "CHF"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+    _name_suffix = "cost (today)"
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
+        """Wire the per-chart unique_id."""
+        super().__init__(entry, data, chart_id)
+        self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"
+
+    def _buckets(self) -> dict[int, float]:
+        return self._data.state.chart_today_buckets.get(self._chart_id, {})
+
+    @property
+    def last_reset(self) -> datetime:
+        """The buckets cover the current local day; reset is local midnight."""
+        return dt_util.now(TARIFF_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return today's variable cost, or None before the first range poll."""
+        buckets = self._buckets()
+        ht = buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)
+        nt = buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)
+        if ht is None and nt is None:
+            return None
+        tariff, _ = rates_for(dt_util.now())
+        return energy_cost_chf(ht or 0.0, nt or 0.0, tariff)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose the kWh split, the rates applied, and the fixed-fee context."""
+        buckets = self._buckets()
+        tariff, stale = rates_for(dt_util.now())
+        return {
+            "high_tariff_kwh": buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF),
+            "low_tariff_kwh": buckets.get(CHART_RANGE_SERIES_LOW_TARIFF),
+            "total_kwh": buckets.get(CHART_RANGE_SERIES_TOTAL),
+            "high_tariff_chf_kwh": tariff.total_ht,
+            "low_tariff_chf_kwh": tariff.total_nt,
+            "fixed_chf_month": tariff.fixed_chf_month,
+            "rates_year": tariff.year,
+            "rates_stale": stale,
+        }
+
+
+class SmartPlaceElectricityTariffEnergySensor(_SmartPlaceChartScopedSensor):
+    """Today's high- or low-tariff share of grid consumption (kWh).
+
+    Sourced from the same server-side range buckets as the cost sensor.
+    Mirrors ``SmartPlaceChartSensor``'s daily ``TOTAL_INCREASING``
+    convention (resets to 0 at midnight), so each share can feed the
+    Energy dashboard or utility meters independently — e.g. to track
+    how much load actually runs in the cheap window.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int, *, high: bool) -> None:
+        """Wire the tariff window (high/low) this share tracks."""
+        super().__init__(entry, data, chart_id)
+        self._series = CHART_RANGE_SERIES_HIGH_TARIFF if high else CHART_RANGE_SERIES_LOW_TARIFF
+        window = "ht" if high else "nt"
+        self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_{window}_today"
+        self._name_suffix = f"{'high' if high else 'low'} tariff (today)"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return today's share in kWh, or None before the first range poll."""
+        return self._data.state.chart_today_buckets.get(self._chart_id, {}).get(self._series)
 
 
 class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):

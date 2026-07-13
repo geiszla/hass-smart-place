@@ -619,7 +619,7 @@ Likely read/enumeration commands:
 | Per-device admin detail | `GiveMeAdminSettingsINHALTLeuchten:<id>`, `...S ZENEN:<id>`, `...Jalousien:<id>`, `...Klimas:<id>`, `...MediaPanel:<id>`, `...Mediacenter:<id>`, `...Lautsprecher:<id>`, `...Sensor:<id>` | Looks like detailed configuration fetch for one device/category item. Requires IDs discovered elsewhere. |
 | Integrations / APIs | `GiveMeGlobalGsa`, `GiveMeAnbindungen`, `GiveMeMoeglicheAnbindungen`, `GiveMeAPIFuer><id>`, `SPMGiveMeAPIAnbindungsInfos><id>` | Hinted responses include `GlobalAnbindungenBack`, `GlobalAnbindungenBackFinish`, `GiveMeAPIFuerBack`, `GiveMeAPIAnbindungsInfosBack`. May expose integration tokens; do not commit captures blindly. |
 | Media / multiroom | `GiveMeGlobalMulti`, `GiveMeMultiInfos><id>`, `GiveMeMultiAllPlayedInfos>`, `GiveMeMultiPlayListRightNowInfos><id>` | Hinted responses include `MediacenterUpdateInfos...` and multiroom/media status. |
-| Charts / history | `GiveMeChartSummeWasGenau><diagram_id>`, `GiveMeChartStandsManuell<diagram_id>`, `GiveMeChartValuesFor:<chart_id>:...`, `GiveMeRecordingsHour><ts>`, `GiveMeRecordingsDay><ts>` | Reads chart/history/recording data; parameters come from UI state. |
+| Charts / history | `GiveMeChartSummeWasGenau><diagram_id>`, `GiveMeChartStandsManuell<diagram_id>`, `GiveMeChartValuesFor:<chart_id>:...`, `GiveMeRecordingsHour><ts>`, `GiveMeRecordingsDay><ts>` | Reads chart/history/recording data; parameters come from UI state. NOTE (probed live 2026-07-13): `GiveMeRecordings*` is the intercom **camera recordings** browser, not energy history. The energy history reads are `SingelChartUpdate:<id>:<von_epoch_s>:<bis_epoch_s>` (decimated kW samples + `CreateChartSingelDiagramm<id>` metadata, terminated by `FinishSingelChartUpdate<id>`) and `SingelStandUpdate:<id>:<von>:<bis>` (range consumption: series `98`=total, `97`=high-tariff, `96`=low-tariff kWh, plus `SingelStand2Update`/`SingelStand3Update` `:99:` lifetime register at the bounds). The 97/96 split is the server's own HT/NT tariff bucketing — a Sunday range returns 97=0, and monthly buckets match the EWZ invoices' Netzstrom HT/NT + PV split. Full history back to 2025-08 is queryable. The PV chart (904) returns zeros / `Keine Werte` for every range — no server-side history. Broadcast/`GiveMeChartStandsManuell` STAND values lag the meter by ~1-2 h; `SingelStandUpdate` range reads return fresh data. |
 | Scan/file area | `GiveMeScansAllFirstLevel`, `GiveMeScansOrdner><id>`, `ScanGiveMeFile><id>`, `ScanGiveMeOrdnerEditFile>` | Reads document/file structures. Likely private; avoid fixture commits. |
 | Misc system/account | `GiveMeBasicInfos`, `GiveMeRechnungenAbschliessenCount`, `GiveMeToken` | `GiveMeToken` likely returns or refreshes a secret/token; avoid during captures unless needed and redaction is proven. |
 
@@ -845,6 +845,25 @@ HA reload to surface.
 | `TEMPIST<N>:<v>` + matching `Klimas<N>` zone | `SmartPlaceIndoorTemperatureSensor` (per N) | `TEMPERATURE` | °C | `MEASUREMENT` |
 | `StandsSingelChartUpdate<id>:STAND1:<v>` | `SmartPlaceChartSensor` (per non-SUMME chart) | `ENERGY` / `WATER` | kWh / L | `TOTAL_INCREASING` |
 | `PERSINFO:<…PIN:N…>` | `SmartPlacePackageDeliveryPinSensor` (singleton) | — | — | (text state) |
+| (wall clock + `tariff.py` rate table) | `SmartPlaceElectricityPriceSensor` | — | CHF/kWh | — |
+| `SingelStandUpdate<id>:97/96:<kWh>` (today range poll) | `SmartPlaceElectricityCostTodaySensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` local midnight) |
+| `SingelStandUpdate<id>:97:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (high) | `ENERGY` | kWh | `TOTAL_INCREASING` |
+| `SingelStandUpdate<id>:96:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (low) | `ENERGY` | kWh | `TOTAL_INCREASING` |
+
+**Electricity price + cost** (added 2026-07-13): the client polls
+`Commands.ChartStandRange` (`SingelStandUpdate:<id>:<local-midnight>:<next-midnight>`)
+for every chart each `CHART_POLL_INTERVAL`; the server answers with its
+own high/low-tariff consumption split — the same bucketing the EWZ
+invoices bill (validated against all five 2025 invoices and the EWZ
+portal's 15-min profiles; both reproduce to ~1 %). The EWZ rate table
+lives in `smart_place_client/tariff.py`, keyed per calendar year
+(2025 from the invoices — reproduces them to the cent; 2026 from the
+published ewz sheet). Price entities attach only to the chart labelled
+`Electricity`. Known bias: the meter buckets include the ZEV solar
+allocation (billed ~20 % cheaper), unknowable live — cost reads
++0.3…+2.3 % high (~0.4 CHF/month in 2025). **Yearly manual step:** add
+the next year's `TariffYear` each September; a missing year falls back
+to the latest known one with a `rates_stale` attribute + setup warning.
 
 Chart device-class and native unit are derived from the
 `ChartDefinition` frames that arrive during `GiveMeMainmenu` (the

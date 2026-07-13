@@ -157,6 +157,26 @@ class Commands:
         example="GiveMeChartStandsManuell49",
         audit=False,
     )
+    ChartStandRange = CommandDefinition(
+        name="ChartStandRange",
+        description=(
+            "Read chart <id>'s consumption between two epoch-second bounds "
+            "(wire: ``SingelStandUpdate:<id>:<von>:<bis>``). This is the "
+            "read-only fetch the SPA's chart-detail page issues; the server "
+            "replies with one ``SingelStandUpdate<id>:<series>:<kWh>::::`` "
+            "frame per series — 98 = range total, 97 = high-tariff (HT) "
+            "share, 96 = low-tariff (NT) share — plus the lifetime register "
+            "at the bounds (``SingelStand2Update``/``SingelStand3Update``). "
+            "The HT/NT buckets are the server's own tariff bucketing (the "
+            "same split the EWZ invoices bill), verified 2026-07-13 against "
+            "a Sunday range (HT=0) and five months of invoices. The client "
+            "polls this with today's bounds to drive the electricity cost "
+            "sensors."
+        ),
+        encode=lambda chart_id, von, bis: f"SingelStandUpdate:{chart_id}:{von}:{bis}",
+        example="SingelStandUpdate:49:1757887200:1757973600",
+        audit=False,
+    )
     # -- Door openers (write; observe-only by default — caller must opt in)
     OpenGroundFloorEntrance = CommandDefinition(
         name="OpenGroundFloorEntrance",

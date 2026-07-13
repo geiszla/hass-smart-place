@@ -584,3 +584,65 @@ credential scheme derivable) but needs `SPID` + an Asterisk-side
 extension/`max_contacts` decision; it is a real SIP client (aiosip/
 similar over the asterisk WSS), not a pure WS add-on. Reachability to
 `172.16.140.10:8089` can only be tested from the Pi (no SSH today).
+
+## 2026-07-13 — Electricity price + cost sensors (EWZ tariff model)
+
+Goal: display current electricity cost in HA from live Smart Place data,
+calibrated against real EWZ ZEV invoices.
+
+**Data gathered** (all read-only; archives in gitignored `output/`):
+
+- EWZ portal (`zev.ewz.ch` JSON API, session auth): 15-min apartment +
+  building profiles for the full metering window Aug–Dec 2025
+  (`output/ewz/ewz_merged.json`); the feed is stalled after Dec 2025.
+- Both member invoices (`output/ewz/invoice_*.pdf`): full 2025 rate card —
+  Energiebezug 9.10/4.70 Rp, Netznutzung 13.80/7.30 Rp, PV Strom 19.52 Rp
+  flat, Abgabe Gemeindewesen 2.55 + Netzzuschlag (KEV) 2.30 Rp on grid kWh
+  only, Messkosten 5 CHF/mo, no VAT.
+- Smart Place history (`output/sp-history/*.ndjson`): the SPA's chart-detail
+  reads work over the app WS — `SingelStandUpdate:<id>:<von>:<bis>` returns
+  the server's HT (97) / NT (96) / total (98) kWh for any epoch range, plus
+  the lifetime register at the bounds. Monthly probes Aug 2025 → Jul 2026
+  captured; **SP meter ≡ EWZ billing meter** (Sep–Dec totals match the
+  invoices exactly; Aug diverges because EWZ metering only started
+  mid-August). PV chart 904 has no server-side history ("Keine Werte").
+
+**Calibration** (`output/ewz/calibrate.py`): the Mon–Sat 06–22
+Europe/Zurich HT calendar reproduces the server buckets on all five
+months (~1 %); the rate table reproduces every invoice line to the cent;
+ignoring the ZEV PV allocation (unknowable live) overstates cost
++0.3…+2.3 %/month.
+
+**Implementation**:
+
+- `smart_place_client/tariff.py` — NEW: per-calendar-year EWZ rate table
+  (2025 invoice-derived, 2026 from the published sheet: 26.25/15.90 Rp
+  all-in), HT/NT calendar, boundary/next-change helpers, today-range
+  epoch helper. Stale-year fallback with flag.
+- `commands.py` — `Commands.ChartStandRange` (`SingelStandUpdate:` read).
+- `messages.py` — six new inbound shapes (`ChartRangeStand`,
+  `ChartRangeStartReading`, `ChartRangeEndReading`, `ChartRangeDefinition`,
+  `ChartRangePoint`, `ChartRangeFinished`).
+- `state.py` — `chart_today_buckets` fold (+ series-id constants).
+- `client.py` — `_poll_charts` now also issues today's `ChartStandRange`
+  per chart (once immediately + every interval). Bonus: range reads return
+  *fresh* meter data while the broadcast STAND1 lags the meter by ~1–2 h.
+- `sensor.py` — 4 new entities on the Energy device:
+  `Electricity price` (CHF/kWh tariff clock, always available, exact
+  boundary refresh), `Electricity cost (today)` (CHF, MONETARY/TOTAL with
+  local-midnight `last_reset`), `Electricity high/low tariff (today)` (kWh).
+- Tests: `tests/test_tariff.py` (calendar incl. DST, staleness, invoice
+  reproduction) + state/client/protocol coverage. 181 passed.
+
+**Manual factors** (documented in `tariff.py`): yearly rate-table entry
+each September (published sheet), confirm the fixed fee + (optional) ZEV
+PV price from the first invoice of each year. Everything else is live.
+
+**Divergences/notes**: `stand79`/`stand89` attributes on the electricity
+sensor are almost certainly the NT/HT lifetime registers (ratios match
+the invoices; not yet observed ticking across a tariff boundary — the
+broadcast lag makes that a multi-hour observation). Not load-bearing:
+the cost sensors use the 97/96 range buckets instead. HA recorder
+statistics under-counted June 2026 (133 vs 284 kWh server-truth) —
+another reason the cost model reads server buckets, not HA-accumulated
+statistics.

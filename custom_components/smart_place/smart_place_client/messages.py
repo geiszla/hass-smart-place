@@ -616,6 +616,79 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         parse=_named_fields_parser("ChartSumResponse", "GiveMeChartSummeWasGenauBack"),
         example="GiveMeChartSummeWasGenauBack>Wasser>337",
     ),
+    # -- Chart range reads (replies to Commands.ChartStandRange & the
+    # SPA's SingelChartUpdate:<id>:<von>:<bis> detail-page fetch) --------
+    MessageDefinition(
+        name="ChartRangeStand",
+        description=(
+            "Reply to ``Commands.ChartStandRange``: consumption within the "
+            "requested epoch range, one frame per series. Format: "
+            "SingelStandUpdate<id>:<series>:<kWh>:::: (trailing colons are "
+            "padding). Series 98 = range total, 97 = high-tariff (HT) share, "
+            "96 = low-tariff (NT) share — the server's own tariff bucketing, "
+            "identified live 2026-07-13 (a Sunday range returns 97=0; monthly "
+            "buckets match the EWZ invoices' HT/NT split)."
+        ),
+        pattern=re.compile(r"^SingelStandUpdate\d+:"),
+        parse=_indexed_value_parser("ChartRangeStand", "SingelStandUpdate"),
+        example="SingelStandUpdate49:97:41.0819999999999::::",
+    ),
+    MessageDefinition(
+        name="ChartRangeStartReading",
+        description=(
+            "Reply to ``Commands.ChartStandRange``: lifetime register at the "
+            "range START. Format: SingelStand2Update<id>:99:<reading> (the "
+            "reading may be the literal 'Keine Werte' when the series has no "
+            "stored history, e.g. the PV allocation chart)."
+        ),
+        pattern=re.compile(r"^SingelStand2Update\d+:"),
+        parse=_indexed_value_parser("ChartRangeStartReading", "SingelStand2Update"),
+        example="SingelStand2Update49:99:4744.52",
+    ),
+    MessageDefinition(
+        name="ChartRangeEndReading",
+        description=(
+            "Reply to ``Commands.ChartStandRange``: lifetime register at the "
+            "range END. Format: SingelStand3Update<id>:99:<reading>."
+        ),
+        pattern=re.compile(r"^SingelStand3Update\d+:"),
+        parse=_indexed_value_parser("ChartRangeEndReading", "SingelStand3Update"),
+        example="SingelStand3Update49:99:4807.877",
+    ),
+    MessageDefinition(
+        name="ChartRangeDefinition",
+        description=(
+            "Chart metadata sent alongside a SingelChartUpdate range reply. "
+            "Format: CreateChartSingelDiagramm<id>:<';'-delimited descriptor> "
+            "— includes vendor-configured CHF prices that do NOT match the "
+            "real EWZ billing rates (observed 0.1788/0.1249 vs invoice "
+            "0.2775/0.1685 all-in); parsed-but-unused."
+        ),
+        pattern=re.compile(r"^CreateChartSingelDiagramm\d+:"),
+        parse=_indexed_value_parser("ChartRangeDefinition", "CreateChartSingelDiagramm"),
+        example="CreateChartSingelDiagramm49:Elektro;Area;Zeit;Verbrauch in Kw/h;...",
+    ),
+    MessageDefinition(
+        name="ChartRangePoint",
+        description=(
+            "One decimated sample of a SingelChartUpdate range reply. Format: "
+            "SingelChartUpdate<id>:<epoch-seconds>:<kW>::::. The server "
+            "decimates to a handful of points per requested range; "
+            "parsed-but-unused (the range *stands* carry the billing data)."
+        ),
+        pattern=re.compile(r"^SingelChartUpdate\d+:"),
+        parse=_indexed_value_parser("ChartRangePoint", "SingelChartUpdate"),
+        example="SingelChartUpdate49:1757887202:0.021::::",
+    ),
+    MessageDefinition(
+        name="ChartRangeFinished",
+        description=(
+            "Marker: end of a SingelChartUpdate range series. Format: FinishSingelChartUpdate<id> (no payload)."
+        ),
+        pattern=re.compile(r"^FinishSingelChartUpdate\d+$"),
+        parse=_indexed_value_parser("ChartRangeFinished", "FinishSingelChartUpdate", separator=""),
+        example="FinishSingelChartUpdate49",
+    ),
     # -- One-off shapes ----------------------------------------------------
     MessageDefinition(
         name="PlaySlot",

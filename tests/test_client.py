@@ -247,7 +247,12 @@ async def test_live_chases_chart_ids_after_status_content_finished(
 async def test_poll_charts_refires_known_chart_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``_poll_charts`` periodically re-sends ``GiveMeChartStandsManuell<id>``."""
+    """``_poll_charts`` re-sends the STAND snapshot + today's range per chart.
+
+    The range read (``SingelStandUpdate:<id>:<von>:<bis>``) fires once
+    immediately — bootstrap covers the STAND snapshot but not the HT/NT
+    buckets — and again after every ``GiveMeChartStandsManuell`` round.
+    """
 
     sent: list[str] = []
 
@@ -273,8 +278,19 @@ async def test_poll_charts_refires_known_chart_requests(
     monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
     await client._poll_charts()
 
-    # First tick fires both charts; second tick sets _closing before sending.
-    assert sent == ["GiveMeChartStandsManuell49", "GiveMeChartStandsManuell337"]
+    # Immediate range poll; first tick fires the STAND snapshots then the
+    # ranges again; second tick sets _closing before sending.
+    assert [msg.split(":", 2)[:2] if msg.startswith("SingelStandUpdate") else msg for msg in sent] == [
+        ["SingelStandUpdate", "49"],
+        ["SingelStandUpdate", "337"],
+        "GiveMeChartStandsManuell49",
+        "GiveMeChartStandsManuell337",
+        ["SingelStandUpdate", "49"],
+        ["SingelStandUpdate", "337"],
+    ]
+    # The range bounds are today's local midnights, 23-25h apart (DST).
+    von, bis = (int(part) for part in sent[0].split(":")[2:4])
+    assert 23 * 3600 <= bis - von <= 25 * 3600
 
 
 async def test_poll_charts_disabled_when_interval_non_positive() -> None:
