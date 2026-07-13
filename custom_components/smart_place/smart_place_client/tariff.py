@@ -192,6 +192,18 @@ def next_tariff_boundary(now: datetime) -> datetime:
     return min(c for c in candidates if c > local)
 
 
+def local_day_start(now: datetime | None = None) -> datetime:
+    """Midnight of the current local (Zurich) day, tz-aware."""
+    local = _localize(now) if now is not None else datetime.now(tz=TARIFF_TZ)
+    return datetime(local.year, local.month, local.day, tzinfo=TARIFF_TZ)
+
+
+def local_month_start(now: datetime | None = None) -> datetime:
+    """Midnight of the 1st of the current local month, tz-aware."""
+    local = _localize(now) if now is not None else datetime.now(tz=TARIFF_TZ)
+    return datetime(local.year, local.month, 1, tzinfo=TARIFF_TZ)
+
+
 def today_range_epochs(now: datetime | None = None) -> tuple[int, int]:
     """Epoch-second bounds of the current local day, for ``Commands.ChartStandRange``.
 

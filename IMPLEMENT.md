@@ -675,3 +675,46 @@ shows the true 228.3 kWh / 68.80 CHF, total 1820 kWh / 429 CHF since
 Aug 2025. August 2025 shows metered reality (76.9 kWh / 19.51 CHF) vs the
 9.71 CHF EWZ actually billed (their metering started mid-August) — known,
 documented divergence.
+
+**August 2025 correction (same day):** replaced August's statistics with
+the EWZ-billed 15-min data (`repair_august.py`, dataset
+`daily_49_final2.json`). The SP register recorded 76.9 kWh in August but
+EWZ only billed 42: their ingestion missed Aug 6-13 entirely and
+undercounted Aug 4-5 (verified day-by-day against the portal export). The
+dashboard now shows billed reality for August (41.78 kWh / 9.99 CHF vs
+9.71 billed variable — the gap is the PV credit, consistent with every
+other month). All months Sep+ keep the register-exact values, which match
+the invoices by construction.
+
+**Late-June hole correction (same day):** the missing days Jun 25-28 turned
+out to be a full upstream outage (the SP server's store froze mid-Jun 24 at
+register 6259.6 and resumed Jun 29 at 6347.7; HA's live recording shows 0
+for the same days — the whole pipeline was down). The 88.2 kWh gap is
+register-verified: 84.8 kWh HT vs only 1.7 kWh NT, so it was daytime AC on
+Jun 24-27 with a genuinely idle Sunday Jun 28 (previous Sunday: 15.7 kWh
+all-NT). Replaced the month-wide proportional smear (which had inflated
+normal days ~1.9x) with: raw server values everywhere + the HT gap spread
+over Jun 24-27 and the NT gap over Jun 24-28 (`daily_49_final3.json`).
+June total unchanged (register-exact 284.1 kWh / 68.80 CHF), zero negative
+changes, seams intact.
+
+**Full-history sanity scan (same day):** register-gap scan over all 346
+days found only two additional discrete overnight gaps beyond the known
+June hole — Mar 29→30 2026 (2.89 kWh, the DST night) and May 24→25
+(0.55 kWh) — now localized into those nights' NT instead of the month-wide
+smear (`daily_49_final4.json`). Everything else is diffuse midnight-reading
+lag (~1 kWh/month), which the proportional smear handles correctly. August's
+SP-side gaps (24 kWh) are irrelevant: August uses EWZ-billed data. Cost
+dashboard rebuilt as a panel view (full-width cards, date picker on top).
+Note: the core energy-date-selection card cannot default to "This month"
+(open feature request; the HACS energy-period-selector-plus card can).
+
+**Month-to-date cost sensor (same day):** replaced the interim
+utility_meter helper with an integration entity
+(`SmartPlaceElectricityCostMonthSensor`, "Electricity cost (this month)").
+State = recorder-statistics change of the daily cost sensor from the 1st
+through today's local midnight (the same statistics the Energy dashboard
+charts, incl. the backfill) + the live today value from the server
+buckets — dashboard-consistent and restart-proof. Prefix re-read every
+15 min; `recorder` added to manifest dependencies. The helper was deleted
+(its entity_id is inherited by the new sensor after the next deploy).
