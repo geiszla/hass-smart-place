@@ -689,6 +689,11 @@ class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
     _attr_native_unit_of_measurement = "CHF/kWh"
     _attr_icon = "mdi:cash-multiple"
     _attr_suggested_display_precision = 4
+    # Hidden by default: the price is plumbing for the Energy dashboard's
+    # "entity with current price" cost tracking (hidden entities still
+    # work there), not a reading to watch on the auto-generated Overview
+    # — the tariff window + rates stay inspectable via its attributes.
+    _attr_entity_registry_visible_default = False
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
         """Wire the unique_id; no chart data is consumed."""
@@ -833,6 +838,10 @@ class SmartPlaceElectricityTariffEnergySensor(_SmartPlaceChartScopedSensor):
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 3
+    # Hidden by default (same rationale as the price sensor): these are
+    # the Energy dashboard's grid-flow inputs, not Overview readings —
+    # the dashboard and recorder use hidden entities just fine.
+    _attr_entity_registry_visible_default = False
 
     def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int, *, high: bool) -> None:
         """Wire the tariff window (high/low) this share tracks."""
