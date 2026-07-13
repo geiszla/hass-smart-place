@@ -427,3 +427,38 @@ def test_apply_change_detection_across_frame_kinds() -> None:
     # Unknown / unhandled frames never count as a change.
     assert state.apply(UnknownFrame(raw="ZZZ:unmapped")) is False
     assert state.apply(NamedValue(name="LightsCentral", value="01", index=1)) is False
+
+
+def test_apply_chart_range_stand_folds_tariff_buckets() -> None:
+    """``SingelStandUpdate<id>`` range replies land in ``chart_today_buckets``.
+
+    Wire shapes are the live 2026-07-13 probe captures: series 97 = HT,
+    96 = NT, 98 = total, with '::::'-padding after the reading.
+    """
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("SingelStandUpdate49:97:41.0819999999999::::")) is True
+    assert state.apply(parse_frame("SingelStandUpdate49:96:22.2750000000001::::")) is True
+    assert state.apply(parse_frame("SingelStandUpdate49:98:63.357::::")) is True
+    buckets = state.chart_today_buckets[49]
+    assert buckets[97] == 41.0819999999999
+    assert buckets[96] == 22.2750000000001
+    assert buckets[98] == 63.357
+    # Re-sending the same reading is a no-op (fan-out gate).
+    assert state.apply(parse_frame("SingelStandUpdate49:98:63.357::::")) is False
+
+
+def test_apply_chart_range_stand_ignores_non_numeric_readings() -> None:
+    """'Keine Werte' (the dead PV chart) must not clear or crash anything."""
+    state = SmartPlaceState()
+    state.apply(parse_frame("SingelStandUpdate904:98:5.0::::"))
+    assert state.apply(parse_frame("SingelStandUpdate904:98:Keine Werte::::")) is False
+    assert state.chart_today_buckets[904][98] == 5.0
+
+
+def test_chart_range_registers_parse_but_do_not_fold() -> None:
+    """Range start/end register frames parse cleanly and change nothing."""
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("SingelStand2Update49:99:4744.52")) is False
+    assert state.apply(parse_frame("SingelStand3Update49:99:4807.877")) is False
+    assert state.apply(parse_frame("FinishSingelChartUpdate49")) is False
+    assert not state.chart_today_buckets

@@ -55,6 +55,7 @@ from .protocol import (
     encode_frame,
     parse_chart_references,
 )
+from .tariff import today_range_epochs
 
 _LOGGER = logging.getLogger("smart_place_client")
 
@@ -1022,15 +1023,23 @@ class SmartPlaceClient:
                 return
 
     async def _poll_charts(self) -> None:
-        """Periodically re-issue ``GiveMeChartStandsManuell<id>`` for known charts.
+        """Periodically re-issue chart reads for known charts.
 
         Chart values don't push; without a poll we'd only see the
-        initial bootstrap reading. Cancelled when the connection is
-        torn down or :meth:`aclose` flips ``_closing``.
+        initial bootstrap reading. Two reads per chart per interval:
+        ``GiveMeChartStandsManuell<id>`` (the STAND series snapshot)
+        and ``SingelStandUpdate:<id>:<today>`` (the server-side HT/NT
+        tariff buckets for the current local day, which drive the
+        electricity cost sensors). The range poll runs once immediately
+        — the bootstrap covers the STAND snapshot but not the range
+        buckets. Cancelled when the connection is torn down or
+        :meth:`aclose` flips ``_closing``.
         """
         assert self._live is not None
         interval = self._live.chart_poll_interval
         if interval <= 0:
+            return
+        if not await self._poll_chart_ranges():
             return
         while not self._closing:
             try:
@@ -1047,6 +1056,25 @@ class SmartPlaceClient:
                 except (RuntimeError, ConnectionError) as err:
                     _LOGGER.debug("chart poll send failed (%s); stopping", err)
                     return
+            if not await self._poll_chart_ranges():
+                return
+
+    async def _poll_chart_ranges(self) -> bool:
+        """Issue today's ``ChartStandRange`` read for every known chart.
+
+        Returns ``False`` when the connection went away mid-poll so the
+        caller stops its loop (mirrors the ``ChartStands`` poll).
+        """
+        von, bis = today_range_epochs()
+        for cid in sorted(self.state.chart_ids):
+            if self._closing or self._ws is None or self._ws.closed:
+                return False
+            try:
+                await self.issue(Commands.ChartStandRange, cid, von, bis)
+            except (RuntimeError, ConnectionError) as err:
+                _LOGGER.debug("chart range poll send failed (%s); stopping", err)
+                return False
+        return True
 
     async def _dispatch_loop(self, source: AsyncIterator[str]) -> None:
         async for text in source:
