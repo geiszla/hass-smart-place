@@ -646,3 +646,32 @@ the cost sensors use the 97/96 range buckets instead. HA recorder
 statistics under-counted June 2026 (133 vs 284 kWh server-truth) —
 another reason the cost model reads server buckets, not HA-accumulated
 statistics.
+
+## 2026-07-13 (later) — Energy-dashboard statistics backfill Aug 2025 → today
+
+Backfilled the four Energy-dashboard statistics (HT/NT kWh sensors + their
+HA-created `_cost` trackers) with daily server history so the dashboard's
+month/year views are complete from 2025-08-01. Scripts + datasets archived
+in `output/sp-history/` (`fetch_daily2.py`, `daily_49_final.json`,
+`import_stats.py`).
+
+Method: one read-only `SingelStandUpdate` per day over a secondary WS
+session, validated via the register chain (`SingelStand2/3Update` bounds +
+month anchors from the invoice-verified probe) because **the server leaks
+the primary session's range-poll responses to secondary sessions** (a naive
+fetch recorded one frozen today-snapshot per ~10 requests; the reverse
+direction does not leak — the deployed box stayed clean). Residuals from
+sparse stored readings (midnight gaps land in NT; an ~88 kWh store hole
+around 2026-06-29 — the same hole behind HA's June stats undercount) were
+distributed proportionally within each month so monthly totals equal the
+register-exact probe values. Imported via `recorder/import_statistics`
+(negative-offset sums joined to the live baseline) + one
+`recorder/adjust_sum_statistics` shift so the first month baselines at 0;
+plus a 13:00 injection row carrying deploy-day pre-existing accrual.
+
+Verified from the recorder: Sep–Dec 2025 monthly costs land 0.14–0.59 CHF
+above the invoiced variable amounts (= exactly the PV credit), June 2026
+shows the true 228.3 kWh / 68.80 CHF, total 1820 kWh / 429 CHF since
+Aug 2025. August 2025 shows metered reality (76.9 kWh / 19.51 CHF) vs the
+9.71 CHF EWZ actually billed (their metering started mid-August) — known,
+documented divergence.
