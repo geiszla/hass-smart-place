@@ -3,6 +3,7 @@
   "name": "Smart Place",
   "codeowners": ["@geiszla"],
   "config_flow": true,
+  "dependencies": ["recorder"],
   "documentation": "https://www.smartplace.ch",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/geiszla/hass-smart-place/issues",

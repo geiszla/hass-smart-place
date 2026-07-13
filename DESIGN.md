@@ -847,6 +847,7 @@ HA reload to surface.
 | `PERSINFO:<…PIN:N…>` | `SmartPlacePackageDeliveryPinSensor` (singleton) | — | — | (text state) |
 | (wall clock + `tariff.py` rate table) | `SmartPlaceElectricityPriceSensor` | — | CHF/kWh | — |
 | `SingelStandUpdate<id>:97/96:<kWh>` (today range poll) | `SmartPlaceElectricityCostTodaySensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` local midnight) |
+| (recorder statistics prefix + today range poll) | `SmartPlaceElectricityCostMonthSensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` month start) |
 | `SingelStandUpdate<id>:97:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (high) | `ENERGY` | kWh | `TOTAL_INCREASING` |
 | `SingelStandUpdate<id>:96:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (low) | `ENERGY` | kWh | `TOTAL_INCREASING` |
 

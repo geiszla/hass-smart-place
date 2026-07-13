@@ -17,6 +17,8 @@ from smart_place_client.tariff import (
     TARIFFS,
     energy_cost_chf,
     is_high_tariff,
+    local_day_start,
+    local_month_start,
     next_tariff_boundary,
     price_chf_per_kwh,
     rates_for,
@@ -150,3 +152,13 @@ def test_today_range_epochs_dst_days_are_23_or_25_hours() -> None:
     assert bis - von == 23 * 3600
     von, bis = today_range_epochs(_zrh("2026-10-25 12:00"))
     assert bis - von == 25 * 3600
+
+
+def test_local_period_starts() -> None:
+    now = _zrh("2026-07-13 15:30")
+    assert local_day_start(now).isoformat() == "2026-07-13T00:00:00+02:00"
+    assert local_month_start(now).isoformat() == "2026-07-01T00:00:00+02:00"
+    # the month start keeps its own offset (March 1 is CET) even when
+    # queried from after the DST switch (March 31 is CEST)
+    start = local_month_start(_zrh("2026-03-31 12:00"))
+    assert start.isoformat() == "2026-03-01T00:00:00+01:00"

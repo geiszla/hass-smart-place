@@ -58,14 +58,18 @@ that first appears later needs an HA reload to surface.
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 from typing import TYPE_CHECKING
 
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import SmartPlaceData, category_device_info, main_device_info
@@ -81,7 +85,7 @@ from .smart_place_client import (
     next_tariff_boundary,
     rates_for,
 )
-from .smart_place_client.tariff import TARIFF_TZ
+from .smart_place_client.tariff import TARIFF_TZ, local_day_start, local_month_start
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -91,6 +95,12 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often the month-to-date cost sensor re-reads its history prefix from
+# recorder statistics. The prefix only changes at local midnight (yesterday
+# rolls from "live" into "history"), so this bounds the staleness right
+# after midnight; between refreshes the live today-part keeps it current.
+_COST_PREFIX_REFRESH = timedelta(minutes=15)
 
 
 # Daily series — STAND1 carries today's consumption so far. State
@@ -239,6 +249,7 @@ async def async_setup_entry(
             )
         entities.append(SmartPlaceElectricityPriceSensor(entry, data))
         entities.append(SmartPlaceElectricityCostTodaySensor(entry, data, electricity_chart_id))
+        entities.append(SmartPlaceElectricityCostMonthSensor(entry, data, electricity_chart_id))
         entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=True))
         entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=False))
 
@@ -822,6 +833,115 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
             "rates_year": tariff.year,
             "rates_stale": stale,
         }
+
+
+class SmartPlaceElectricityCostMonthSensor(_SmartPlaceChartScopedSensor):
+    """Month-to-date grid electricity cost in CHF.
+
+    State = history prefix + live today: the prefix is the long-term
+    statistics change of the daily cost sensor from the 1st of the month
+    through today's local midnight (read from HA's recorder — the same
+    statistics the Energy dashboard charts, including any backfilled
+    history), and the today part comes live from the server's tariff
+    buckets. Reading the prefix from statistics keeps this sensor exactly
+    consistent with the Energy dashboard and makes it restart-proof
+    without any extra bookkeeping.
+
+    The prefix changes only at local midnight; it is re-read every
+    ``_COST_PREFIX_REFRESH`` so the sensor is at most that stale right
+    after the day rolls over. ``None`` (unknown) until both the first
+    statistics read and the first range poll have landed.
+    """
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "CHF"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+    _name_suffix = "cost (this month)"
+
+    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
+        """Wire the per-chart unique_id and the prefix cache."""
+        super().__init__(entry, data, chart_id)
+        self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_month"
+        self._cost_stat_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"  # unique_id; resolved to entity_id below
+        self._prefix_chf: float | None = None
+        self._prefix_through: str | None = None
+        self._refresh_unsub = None
+
+    @property
+    def last_reset(self) -> datetime:
+        """The month-to-date total resets on the 1st at local midnight."""
+        return local_month_start()
+
+    def _today_cost(self) -> float | None:
+        buckets = self._data.state.chart_today_buckets.get(self._chart_id, {})
+        ht = buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)
+        nt = buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)
+        if ht is None and nt is None:
+            return None
+        tariff, _ = rates_for(dt_util.now())
+        return energy_cost_chf(ht or 0.0, nt or 0.0, tariff)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return history prefix + live today, or None until both are known."""
+        today = self._today_cost()
+        if self._prefix_chf is None or today is None:
+            return None
+        return round(self._prefix_chf + today, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose the prefix/live split so the composition is inspectable."""
+        return {
+            "history_chf": self._prefix_chf,
+            "history_through": self._prefix_through,
+            "today_chf": self._today_cost(),
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Resolve the daily cost statistic, read the prefix, start the refresh timer."""
+        await super().async_added_to_hass()
+        registry = er.async_get(self.hass)
+        self._cost_stat_id = registry.async_get_entity_id("sensor", DOMAIN, self._cost_stat_id) or ""
+        await self._async_refresh_prefix()
+        self._refresh_unsub = async_track_time_interval(self.hass, self._async_refresh_prefix, _COST_PREFIX_REFRESH)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the prefix refresh timer alongside the frame subscription."""
+        await super().async_will_remove_from_hass()
+        if self._refresh_unsub is not None:
+            self._refresh_unsub()
+            self._refresh_unsub = None
+
+    async def _async_refresh_prefix(self, _now: datetime | None = None) -> None:
+        """Re-read the month-through-yesterday cost from recorder statistics."""
+        if not self._cost_stat_id:
+            return
+        start = local_month_start()
+        end = local_day_start()
+        if start >= end:
+            prefix = 0.0  # first day of the month: no history part yet
+        else:
+            try:
+                stats = await get_instance(self.hass).async_add_executor_job(
+                    statistics_during_period,
+                    self.hass,
+                    start,
+                    end,
+                    {self._cost_stat_id},
+                    "day",
+                    None,
+                    {"change"},
+                )
+            except Exception:  # noqa: BLE001 - recorder may not be ready yet; retry next tick
+                _LOGGER.debug("month-cost prefix query failed; keeping previous value", exc_info=True)
+                return
+            prefix = round(sum(row.get("change") or 0.0 for row in stats.get(self._cost_stat_id, ())), 6)
+        if prefix != self._prefix_chf:
+            self._prefix_chf = prefix
+            self._prefix_through = end.date().isoformat()
+            self._handle_frame_update()
 
 
 class SmartPlaceElectricityTariffEnergySensor(_SmartPlaceChartScopedSensor):
