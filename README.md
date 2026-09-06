@@ -90,3 +90,7 @@ use `--replay` mode where sends are accepted but never transmitted.
 - [`DESIGN.md`](DESIGN.md) — protocol notes, architecture, decision log.
 - [`IMPLEMENT.md`](IMPLEMENT.md) — implementation progress and any
   divergence from the design.
+
+## License
+
+[MIT](LICENSE)
