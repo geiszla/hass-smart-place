@@ -63,6 +63,15 @@ class SmartPlaceOfflineError(ProtocolError):
     """
 
 
+class SmartPlaceNotConnectedError(Exception):
+    """Raised when a frame cannot be sent because the app WebSocket is not open.
+
+    The one error callers of ``SmartPlaceClient.send`` / ``issue`` need to
+    handle: it covers "never connected", "reconnecting" and a socket that
+    closed while the frame was being written.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class HostNotOnline:
     """Discovery reply: the user's Smart Place installation is currently offline.
@@ -478,6 +487,13 @@ class SessionState:
       ``ClimateConfig`` / ``LightConfig`` / ... config frame for the
       installation, so the snapshot is rich enough to enumerate HA
       entities. The marker signals BOOTSTRAPPED.
+    - ``phase``, ``route``, ``global_config`` and ``main_menu_loaded``
+      describe the current connection; :meth:`reset_connection` clears
+      them before every connection attempt. The chart and plan fields
+      describe the installation and survive reconnects.
+    - ``chart_range_request`` is the start (epoch seconds) of the range the
+      client last asked for with ``ChartStandRange``; ``SmartPlaceState``
+      stamps each complete reply with it.
     - ``global_config`` is populated opportunistically if the client
       chose to send ``GiveMeGlobalConfig`` (the bootstrap doesn't
       require it; see ``client.py`` notes).
@@ -492,6 +508,15 @@ class SessionState:
     main_menu_loaded: bool = False
     chart_ids: set[int] = field(default_factory=set)
     chart_units: dict[int, str] = field(default_factory=dict)
+    chart_range_request: int | None = None
+    plan_ids: set[int] = field(default_factory=set)
+
+    def reset_connection(self) -> None:
+        """Forget everything that belongs to the previous connection."""
+        self.phase = SessionPhase.DISCOVERY_OPEN
+        self.route = None
+        self.global_config = None
+        self.main_menu_loaded = False
 
     def on_discovery_frame(self, frame: ServerFrame) -> SessionPhase:
         """Apply a frame received on the discovery WS.
@@ -527,6 +552,8 @@ class SessionState:
             self.global_config = frame
         elif isinstance(frame, NamedFields) and frame.name == "MainMenuFinished":
             self.main_menu_loaded = True
+        elif isinstance(frame, NamedFields) and frame.name == "Floorplan" and frame.index is not None:
+            self.plan_ids.add(frame.index)
 
         if self.phase is SessionPhase.APP_OPEN and self.main_menu_loaded:
             self.phase = SessionPhase.BOOTSTRAPPED

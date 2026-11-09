@@ -10,18 +10,31 @@ wire string.
 Adding a new command: append a class attribute on :class:`Commands`
 with a :class:`CommandDefinition`. For static payloads use
 :func:`_static`; for parameterized ones (e.g. an embedded id),
-pass a callable that returns the wire string.
+pass a typed encoder function that checks its arguments and returns
+the wire string, plus ``example_args`` that produce ``example``.
 
 Per the ``smart-place-observe-only`` memory: declaring a command
 here does not auto-issue it. The library only sends when a caller
-explicitly invokes ``client.send(Commands.X.encode(...))``.
+explicitly invokes ``client.issue(Commands.X, ...)``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import re
 from typing import Final
+
+# Vendor ranges, from the vendor JavaScript: dim level is one byte, the
+# heating setpoint slider runs 18..26 (18 = forced off, 26 = forced on).
+LIGHT_LEVEL_MAX: Final = 255
+SETPOINT_OFF: Final = 18
+SETPOINT_MAX: Final = 26
+
+# The lights sub-menu names its own command (``UnterMenuLeuchten<n>:...,
+# LEUCHTENZENTRAL<n>,...``). It comes from the server, so only this shape
+# is ever sent back.
+_LIGHTS_GROUP_MESSAGE_RE = re.compile(r"LEUCHTENZENTRAL\d+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +52,11 @@ class CommandDefinition:
             parameterized commands (e.g. ``encode(chart_id)``).
         example: Concrete wire string used as documentation +
             verified by :func:`test_commands_encode_matches_example`.
+        example_args: Arguments for which ``encode`` returns ``example``.
+        write: Whether the command changes something in the building
+            (lights, blinds, heating, scenes, doors). Defaults to ``True``
+            so a new command is treated as a write unless declared a
+            read; ``client.issue`` withholds writes in dry-run mode.
         audit: Whether issuing this command is logged at INFO as an
             audit-trail line (``client.issue``). Defaults to ``True`` so
             new commands are recorded by default — the audit log should
@@ -53,6 +71,8 @@ class CommandDefinition:
     encode: Callable[..., str]
     example: str
     audit: bool = True
+    example_args: tuple[object, ...] = ()
+    write: bool = True
 
 
 def _static(wire: str) -> Callable[[], str]:
@@ -62,6 +82,65 @@ def _static(wire: str) -> Callable[[], str]:
         return wire
 
     return encode
+
+
+def _device_id(value: int, what: str) -> int:
+    """Return ``value`` if it is a usable vendor id, else raise ``ValueError``."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{what} must be a positive whole number, got {value!r}")
+    return value
+
+
+def _in_range(value: int, low: int, high: int, what: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+        raise ValueError(f"{what} must be a whole number {low}..{high}, got {value!r}")
+    return value
+
+
+def _encode_light_toggle(light_id: int) -> str:
+    return f"leuchte{_device_id(light_id, 'light id')}"
+
+
+def _encode_light_dim(light_id: int, level: int) -> str:
+    return f"DIMleuchte{_device_id(light_id, 'light id')}:{_in_range(level, 0, LIGHT_LEVEL_MAX, 'dim level')}"
+
+
+def _encode_blind_up(blind_id: int) -> str:
+    return f"JALUP{_device_id(blind_id, 'blind id')}"
+
+
+def _encode_blind_down(blind_id: int) -> str:
+    return f"JALDOW{_device_id(blind_id, 'blind id')}"
+
+
+def _encode_blind_vent(blind_id: int) -> str:
+    return f"JALLUE{_device_id(blind_id, 'blind id')}"
+
+
+def _encode_blinds_group_up(plan_id: int) -> str:
+    return f"JALUPZENTRAL{_device_id(plan_id, 'plan id')}"
+
+
+def _encode_blinds_group_down(plan_id: int) -> str:
+    return f"JALDOWZENTRAL{_device_id(plan_id, 'plan id')}"
+
+
+def _encode_setpoint(zone_id: int, value: int) -> str:
+    return f"TEMPSOLL{_device_id(zone_id, 'zone id')}:{_in_range(value, SETPOINT_OFF, SETPOINT_MAX, 'setpoint')}"
+
+
+def _encode_scene(scene_id: int) -> str:
+    return f"SZENEN{_device_id(scene_id, 'scene id')}"
+
+
+def _encode_group_message(message: str) -> str:
+    if not isinstance(message, str) or not _LIGHTS_GROUP_MESSAGE_RE.fullmatch(message):
+        raise ValueError(f"not a lights group message: {message!r}")
+    return message
+
+
+def _encode_mute_toggle(mute_id: int) -> str:
+    return f"MUTE{_device_id(mute_id, 'mute id')}"
 
 
 class Commands:
@@ -85,6 +164,7 @@ class Commands:
         encode=_static("StatusInhaltListe"),
         example="StatusInhaltListe",
         audit=False,
+        write=False,
     )
     Mainmenu = CommandDefinition(
         name="Mainmenu",
@@ -97,6 +177,7 @@ class Commands:
         encode=_static("GiveMeMainmenu"),
         example="GiveMeMainmenu",
         audit=False,
+        write=False,
     )
     GlobalGsa = CommandDefinition(
         name="GlobalGsa",
@@ -112,6 +193,7 @@ class Commands:
         encode=_static("GiveMeGlobalGsa"),
         example="GiveMeGlobalGsa",
         audit=False,
+        write=False,
     )
     SocketConnected = CommandDefinition(
         name="SocketConnected",
@@ -129,6 +211,7 @@ class Commands:
         encode=lambda n=1: f"SocketConnected:{n}",
         example="SocketConnected:1",
         audit=False,
+        write=False,
     )
     # -- Heartbeat ---------------------------------------------------------
     Ping = CommandDefinition(
@@ -143,6 +226,7 @@ class Commands:
         encode=_static("Ping"),
         example="Ping",
         audit=False,
+        write=False,
     )
     # -- Per-id chart fetch (parameterized) --------------------------------
     ChartStands = CommandDefinition(
@@ -156,6 +240,8 @@ class Commands:
         encode=lambda chart_id: f"GiveMeChartStandsManuell{chart_id}",
         example="GiveMeChartStandsManuell49",
         audit=False,
+        example_args=(49,),
+        write=False,
     )
     ChartStandRange = CommandDefinition(
         name="ChartStandRange",
@@ -176,6 +262,8 @@ class Commands:
         encode=lambda chart_id, von, bis: f"SingelStandUpdate:{chart_id}:{von}:{bis}",
         example="SingelStandUpdate:49:1757887200:1757973600",
         audit=False,
+        example_args=(49, 1757887200, 1757973600),
+        write=False,
     )
     # -- Door openers (write; observe-only by default — caller must opt in)
     OpenGroundFloorEntrance = CommandDefinition(
@@ -205,6 +293,121 @@ class Commands:
         description="Door opener: ``OEFFNER4`` opens the front door.",
         encode=_static("OEFFNER4"),
         example="OEFFNER4",
+    )
+    # -- Lights and sockets (write) ---------------------------------------
+    LightToggle = CommandDefinition(
+        name="LightToggle",
+        description=(
+            "Toggle light or socket <id> (wire: ``leuchte<id>``, no value). "
+            "The only on/off command for every kind (schalter, led, steckdose, "
+            "dimmer): the server flips the state and echoes ``leuchte<id>:<level>``. "
+            "There is no absolute on or off, so the caller must know the current "
+            "state before sending."
+        ),
+        encode=_encode_light_toggle,
+        example="leuchte13",
+        example_args=(13,),
+    )
+    LightDim = CommandDefinition(
+        name="LightDim",
+        description=(
+            "Set dimmer <id> to an absolute level 0..255 (wire: "
+            "``DIMleuchte<id>:<level>``). The vendor app only sends it for kind "
+            "``dimmer``; whether the server accepts it for a switch-type light is "
+            "untested."
+        ),
+        encode=_encode_light_dim,
+        example="DIMleuchte13:128",
+        example_args=(13, 128),
+    )
+    # -- Blinds (write) -----------------------------------------------------
+    BlindUp = CommandDefinition(
+        name="BlindUp",
+        description=(
+            "Move blind <id> fully up (wire: ``JALUP<id>``, single shot). The "
+            "server reports the movement as ``JALICO<id>`` positions. There is no "
+            "stop and no go-to-position command."
+        ),
+        encode=_encode_blind_up,
+        example="JALUP8",
+        example_args=(8,),
+    )
+    BlindDown = CommandDefinition(
+        name="BlindDown",
+        description="Move blind <id> fully down (wire: ``JALDOW<id>``, single shot).",
+        encode=_encode_blind_down,
+        example="JALDOW8",
+        example_args=(8,),
+    )
+    BlindVent = CommandDefinition(
+        name="BlindVent",
+        description=(
+            "Move slatted blind <id> to its vent position (wire: ``JALLUE<id>``). "
+            "The vendor app offers it only for kind ``jalousie``."
+        ),
+        encode=_encode_blind_vent,
+        example="JALLUE8",
+        example_args=(8,),
+    )
+    BlindsGroupUp = CommandDefinition(
+        name="BlindsGroupUp",
+        description=(
+            "Move every blind of floor plan <plan> up (wire: ``JALUPZENTRAL<plan>``), "
+            "the blinds sub-menu's 'All up' button. The number is the plan id."
+        ),
+        encode=_encode_blinds_group_up,
+        example="JALUPZENTRAL1",
+        example_args=(1,),
+    )
+    BlindsGroupDown = CommandDefinition(
+        name="BlindsGroupDown",
+        description="Move every blind of floor plan <plan> down (wire: ``JALDOWZENTRAL<plan>``).",
+        encode=_encode_blinds_group_down,
+        example="JALDOWZENTRAL1",
+        example_args=(1,),
+    )
+    # -- Heating (write) ----------------------------------------------------
+    Setpoint = CommandDefinition(
+        name="Setpoint",
+        description=(
+            "Set the heating setpoint of climate zone <id> (wire: "
+            "``TEMPSOLL<id>:<value>``), absolute, whole degrees 18..26. The vendor "
+            "app labels 18 'forced off' and 26 'forced on'."
+        ),
+        encode=_encode_setpoint,
+        example="TEMPSOLL5:21",
+        example_args=(5, 21),
+    )
+    # -- Scenes (write) -----------------------------------------------------
+    Scene = CommandDefinition(
+        name="Scene",
+        description=(
+            "Trigger an ``OnOn`` scene or toggle an ``OnOff`` scene (wire: "
+            "``SZENEN<id>``, no value). A PIN-protected scene needs a separate PIN "
+            "exchange, which is not implemented; do not send this for one."
+        ),
+        encode=_encode_scene,
+        example="SZENEN11",
+        example_args=(11,),
+    )
+    # -- Group and intercom buttons (write) ---------------------------------
+    GroupMessage = CommandDefinition(
+        name="GroupMessage",
+        description=(
+            "Press a lights sub-menu button by sending its group message verbatim "
+            "(wire: ``LEUCHTENZENTRAL<n>``, taken from the ``LightSubMenu`` frame). "
+            "What the server does with it (all off, all on, toggle) is untested."
+        ),
+        encode=_encode_group_message,
+        example="LEUCHTENZENTRAL1",
+        example_args=("LEUCHTENZENTRAL1",),
+    )
+    MuteToggle = CommandDefinition(
+        name="MuteToggle",
+        description="Toggle doorbell mute <n> (wire: ``MUTE<n>``, no value).",
+        encode=_encode_mute_toggle,
+        example="MUTE1",
+        example_args=(1,),
     )
 
 

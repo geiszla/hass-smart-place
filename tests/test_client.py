@@ -8,10 +8,17 @@ exercised end-to-end without any network or mock server.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+from collections.abc import Awaitable, Callable
+import hashlib
+import io
 import json
 import logging
 from pathlib import Path
+import re
+from typing import Any
 
+import aiohttp
 import pytest
 
 from smart_place_client import (
@@ -26,11 +33,20 @@ from smart_place_client import (
     SessionPhase,
     SmartPlaceAuthError,
     SmartPlaceClient,
+    SmartPlaceNotConnectedError,
     SmartPlaceOfflineError,
     UnknownFrame,
     install_token_redaction_filter,
 )
-from smart_place_client.client import _LOGGER, ExponentialBackoff, _interpret_discovery_frame, _scrub_token
+from smart_place_client.client import (
+    _LOGGER,
+    ExponentialBackoff,
+    _build_cli,
+    _interpret_discovery_frame,
+    _run_cli,
+    _stdin_pump,
+    scrub_secrets,
+)
 from smart_place_client.protocol import HostNotOnline
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -493,8 +509,8 @@ def test_log_filter_scrubs_url_infoboard_query() -> None:
 
 def test_scrub_token_helper_idempotent() -> None:
     raw = "GET /Start5?abcdef and TOKEN=xyz123"
-    once = _scrub_token(raw)
-    twice = _scrub_token(once)
+    once = scrub_secrets(raw)
+    twice = scrub_secrets(once)
     assert once == twice
     assert "abcdef" not in once
     assert "xyz123" not in once
@@ -885,3 +901,541 @@ async def test_issue_parameterized_command_forwards_args() -> None:
     client = SmartPlaceClient.replay(path=FIXTURES / "bootstrap.ndjson")
     await client.issue(Commands.ChartStands, 49)
     assert any("GiveMeChartStandsManuell49" in frame.text for frame in client.sent_log)
+
+
+# ------------------- live connection on fake sockets -------------------
+
+
+def _text(data: str) -> aiohttp.WSMessage:
+    return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, data, None)
+
+
+class _FakeWebSocket:
+    """Scripted stand-in for ``aiohttp.ClientWebSocketResponse``.
+
+    Yields ``frames`` in order, runs ``on_drained`` once they are used up,
+    then ends the stream. Everything sent is recorded.
+    """
+
+    def __init__(self, frames: list[str], on_drained: Callable[[], Awaitable[None]] | None = None) -> None:
+        self.closed = False
+        self.sent: list[str] = []
+        self._frames = list(frames)
+        self._on_drained = on_drained
+
+    async def receive(self) -> aiohttp.WSMessage:
+        return _text(self._frames.pop(0))
+
+    def __aiter__(self) -> _FakeWebSocket:
+        return self
+
+    async def __anext__(self) -> aiohttp.WSMessage:
+        if self._frames:
+            return _text(self._frames.pop(0))
+        if self._on_drained is not None:
+            on_drained, self._on_drained = self._on_drained, None
+            await on_drained()
+        raise StopAsyncIteration
+
+    async def send_str(self, text: str) -> None:
+        if self.closed:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        self.sent.append(text)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def exception(self) -> None:
+        return None
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes = b"", status: int = 200) -> None:
+        self.status = status
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            raise aiohttp.ClientError(f"HTTP {self.status}")
+
+
+class _FakeRequest:
+    """What ``session.get`` / ``session.ws_connect`` return: awaitable and a context manager."""
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def __await__(self) -> Any:
+        async def get() -> Any:
+            return self._value
+
+        return get().__await__()
+
+    async def __aenter__(self) -> Any:
+        return self._value
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeSession:
+    """Hands out the scripted sockets in order and serves scripted HTTP bodies."""
+
+    def __init__(self, sockets: list[_FakeWebSocket], pages: dict[str, _FakeResponse] | None = None) -> None:
+        self._sockets = list(sockets)
+        self._pages = pages or {}
+        self.ws_urls: list[str] = []
+        self.get_urls: list[str] = []
+
+    def ws_connect(self, url: str, **_kwargs: object) -> _FakeRequest:
+        self.ws_urls.append(url)
+        return _FakeRequest(self._sockets.pop(0))
+
+    def get(self, url: str, **_kwargs: object) -> _FakeRequest:
+        self.get_urls.append(url)
+        for suffix, response in self._pages.items():
+            if url.endswith(suffix):
+                return _FakeRequest(response)
+        return _FakeRequest(_FakeResponse())
+
+
+_ROUTE = "GoToLinkSSL:routed.example:40000/Start1:Leer"
+# The smallest thing ``png_size`` accepts: signature, IHDR length and tag, 1000 x 710.
+_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x03\xe8\x00\x00\x02\xc6\x08\x06\x00\x00\x00"
+
+
+def _bootstrap_frames() -> list[str]:
+    """Server frames of the reference flat's bootstrap, after the discovery frame."""
+    lines = (FIXTURES / "control-bootstrap.ndjson").read_text(encoding="utf-8").splitlines()
+    frames = [row["text"] for row in map(json.loads, lines) if row["direction"] == "server"]
+    assert frames[0].startswith("GoToLinkSSL:")
+    return frames[1:]
+
+
+async def test_live_connection_sends_only_read_commands() -> None:
+    """Bootstrap, heartbeat and chart polls never put a write command on the wire.
+
+    Runs one whole connection lifetime on scripted sockets with the
+    reference flat's bootstrap, then keeps the connection open long enough
+    for several heartbeat and chart-poll rounds.
+    """
+
+    async def idle() -> None:
+        await asyncio.sleep(0.1)
+
+    discovery = _FakeWebSocket([_ROUTE])
+    app = _FakeWebSocket(_bootstrap_frames(), on_drained=idle)
+    session = _FakeSession([discovery, app], {"/uebersichten/upload/Floorplan1.png": _FakeResponse(_PNG)})
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=session,  # type: ignore[arg-type]
+        ping_interval=0.01,
+        chart_poll_interval=0.01,
+    )
+
+    await client._run_live_once()
+
+    assert discovery.sent == []
+    read_shapes = {
+        "StatusInhaltListe": r"StatusInhaltListe",
+        "GiveMeMainmenu": r"GiveMeMainmenu",
+        "GiveMeGlobalGsa": r"GiveMeGlobalGsa",
+        "SocketConnected": r"SocketConnected:1",
+        "Ping": r"Ping",
+        "ChartStands": r"GiveMeChartStandsManuell\d+",
+        "ChartStandRange": r"SingelStandUpdate:\d+:\d+:\d+",
+    }
+    seen = Counter(
+        next((name for name, shape in read_shapes.items() if re.fullmatch(shape, text)), f"UNEXPECTED {text}")
+        for text in app.sent
+    )
+    assert set(seen) == set(read_shapes)
+    assert seen["Ping"] >= 2
+    assert seen["ChartStandRange"] >= 2 * 9
+    # None of the write commands' wire shapes went out.
+    write_prefixes = ("leuchte", "DIMleuchte", "JAL", "TEMPSOLL", "SZENEN", "LEUCHTENZENTRAL", "MUTE", "OEFFNER")
+    assert not [text for text in app.sent if text.startswith(write_prefixes)]
+
+
+async def test_live_connection_fetches_the_plan_image() -> None:
+    """After the main-menu reply the client fetches each listed plan from the routed port."""
+    notified: list[int] = []
+    client: SmartPlaceClient
+
+    async def on_plan_image() -> None:
+        notified.append(len(client.plan_images))
+
+    async def idle() -> None:
+        await asyncio.sleep(0.05)
+
+    session = _FakeSession(
+        [_FakeWebSocket([_ROUTE]), _FakeWebSocket(_bootstrap_frames(), on_drained=idle)],
+        {"/uebersichten/upload/Floorplan1.png": _FakeResponse(_PNG)},
+    )
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=session,  # type: ignore[arg-type]
+        ping_interval=0,
+        chart_poll_interval=0,
+        on_plan_image=on_plan_image,
+    )
+
+    await client._run_live_once()
+
+    assert "https://routed.example:40000/uebersichten/upload/Floorplan1.png" in session.get_urls
+    image = client.plan_images[1]
+    assert (image.width, image.height) == (1000, 710)
+    assert image.content == _PNG
+    assert image.digest == hashlib.sha256(_PNG).hexdigest()
+    assert notified == [1]
+
+
+async def test_plan_image_that_is_not_a_png_is_ignored(caplog: pytest.LogCaptureFixture) -> None:
+    session = _FakeSession([], {"Floorplan1.png": _FakeResponse(b"<html>sample</html>" * 4)})
+    client = SmartPlaceClient.live(token="dummy", session=session)  # type: ignore[arg-type]
+    client._camera_route = GoToLinkSSL(host="routed.example", port=40000, path="/Start1", token2="Leer")
+    client.state.plan_ids = {1}
+    with caplog.at_level(logging.WARNING, logger="smart_place_client"):
+        await client._fetch_plan_images()
+    assert client.plan_images == {}
+    assert any("not a PNG" in record.message for record in caplog.records)
+
+
+async def test_unchanged_plan_image_is_not_reported_again() -> None:
+    calls: list[bool] = []
+
+    async def on_plan_image() -> None:
+        calls.append(True)
+
+    session = _FakeSession([], {"Floorplan1.png": _FakeResponse(_PNG)})
+    client = SmartPlaceClient.live(token="dummy", session=session, on_plan_image=on_plan_image)  # type: ignore[arg-type]
+    client._camera_route = GoToLinkSSL(host="routed.example", port=40000, path="/Start1", token2="Leer")
+    client.state.plan_ids = {1}
+    await client._fetch_plan_images()
+    await client._fetch_plan_images()
+    assert calls == [True]
+
+
+async def test_reconnect_starts_from_a_clean_session_and_never_sends_on_the_discovery_socket() -> None:
+    """During re-discovery the client is not connected and a command is refused.
+
+    Regression: the phase of the previous connection (READY) was kept and
+    the discovery socket was the client's send socket, so a command issued
+    during a reconnect was written to the discovery socket and lost while
+    the log said it had been issued.
+    """
+    observed: list[tuple[bool, SessionPhase, bool]] = []
+
+    class _ProbingDiscovery(_FakeWebSocket):
+        async def receive(self) -> aiohttp.WSMessage:
+            with pytest.raises(SmartPlaceNotConnectedError):
+                await client.issue(Commands.LightToggle, 13)
+            observed.append((client.connected, client.state.phase, client.state.main_menu_loaded))
+            return await super().receive()
+
+    first_discovery = _FakeWebSocket([_ROUTE])
+    second_discovery = _ProbingDiscovery([_ROUTE])
+    session = _FakeSession(
+        [first_discovery, _FakeWebSocket(_bootstrap_frames()), second_discovery, _FakeWebSocket([])],
+    )
+    client = SmartPlaceClient.live(token="dummy", session=session, ping_interval=0, chart_poll_interval=0)  # type: ignore[arg-type]
+
+    await client._run_live_once()
+    assert client.state.phase is SessionPhase.READY
+    assert client.connected is False
+
+    await client._run_live_once()
+
+    assert observed == [(False, SessionPhase.DISCOVERY_OPEN, False)]
+    assert first_discovery.sent == []
+    assert second_discovery.sent == []
+
+
+async def test_send_before_connect_raises_not_connected() -> None:
+    client = SmartPlaceClient.live(token="dummy")
+    with pytest.raises(SmartPlaceNotConnectedError):
+        await client.send("Ping")
+    with pytest.raises(SmartPlaceNotConnectedError):
+        await client.issue(Commands.OpenFrontDoor)
+
+
+async def test_send_on_a_closing_socket_raises_not_connected() -> None:
+    """aiohttp's connection-reset error surfaces as the one typed error."""
+
+    class _ClosingWs:
+        closed = False
+
+        async def send_str(self, _text: str) -> None:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    client = SmartPlaceClient.live(token="dummy")
+    client._ws = _ClosingWs()  # type: ignore[assignment]
+    with pytest.raises(SmartPlaceNotConnectedError):
+        await client.issue(Commands.OpenFrontDoor)
+
+
+async def test_failed_send_is_not_written_to_the_capture(tmp_path: Path) -> None:
+    """The capture records what was transmitted, not what was attempted."""
+    out = tmp_path / "capture.ndjson"
+    client = SmartPlaceClient.live(token="dummy", capture=out)
+    with pytest.raises(SmartPlaceNotConnectedError):
+        await client.send("leuchte13")
+    assert not out.exists()
+
+    ws = _FakeWebSocket([])
+    client._ws = ws  # type: ignore[assignment]
+    await client.send("Ping")
+    assert ws.sent == ["Ping"]
+    assert [json.loads(line)["text"] for line in out.read_text(encoding="utf-8").splitlines()] == ["Ping"]
+
+
+# ------------------------------ dry run -------------------------------
+
+
+async def test_dry_run_withholds_write_commands(caplog: pytest.LogCaptureFixture) -> None:
+    """In dry run a write is logged at WARNING and never reaches the socket."""
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy", dry_run=True)
+    client._ws = ws  # type: ignore[assignment]
+    with caplog.at_level(logging.INFO, logger="smart_place_client"):
+        await client.issue(Commands.LightToggle, 13)
+        await client.issue(Commands.Setpoint, 5, 21)
+        await client.issue(Commands.OpenFrontDoor)
+    assert ws.sent == []
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == [
+        "dry run: would send LightToggle (leuchte13)",
+        "dry run: would send Setpoint (TEMPSOLL5:21)",
+        "dry run: would send OpenFrontDoor (OEFFNER4)",
+    ]
+    assert not any("command issued" in record.message for record in caplog.records)
+
+
+async def test_dry_run_still_sends_reads() -> None:
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy", dry_run=True)
+    client._ws = ws  # type: ignore[assignment]
+    await client.issue(Commands.Ping)
+    await client.issue(Commands.ChartStands, 49)
+    assert ws.sent == ["Ping", "GiveMeChartStandsManuell49"]
+
+
+async def test_dry_run_still_validates_arguments() -> None:
+    client = SmartPlaceClient.live(token="dummy", dry_run=True)
+    with pytest.raises(ValueError, match="setpoint"):
+        await client.issue(Commands.Setpoint, 5, 30)
+
+
+async def test_without_dry_run_write_commands_are_sent() -> None:
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy")
+    client._ws = ws  # type: ignore[assignment]
+    await client.issue(Commands.BlindVent, 8)
+    assert ws.sent == ["JALLUE8"]
+
+
+# ----------------------- credential redaction -------------------------
+
+_PASSWORD = "s3cret:pass word>1"
+
+
+def test_scrub_secrets_redacts_credential_frames() -> None:
+    assert scrub_secrets(f"144Update:{_PASSWORD}") == "144Update:<REDACTED>"
+    assert scrub_secrets(f"145Update:{_PASSWORD}") == "145Update:<REDACTED>"
+    assert _PASSWORD not in scrub_secrets(f"parse error on frame '145Update:{_PASSWORD}' — skipping")
+    # Ordinary frames with "Update" in their name are left alone.
+    assert scrub_secrets("SingelStandUpdate49:97:41.08::::") == "SingelStandUpdate49:97:41.08::::"
+    assert scrub_secrets("SingelStand2Update49:99:4744.52") == "SingelStand2Update49:99:4744.52"
+
+
+def test_log_filter_scrubs_credential_frames() -> None:
+    install_token_redaction_filter()
+    record = _LOGGER.makeRecord(
+        name="smart_place_client",
+        level=logging.DEBUG,
+        fn="x.py",
+        lno=1,
+        msg="unknown frame: %s",
+        args=(f"144Update:{_PASSWORD}",),
+        exc_info=None,
+    )
+    for filt in _LOGGER.filters:
+        assert filt.filter(record) is True
+    assert _PASSWORD not in record.getMessage()
+    assert "144Update:<REDACTED>" in record.getMessage()
+
+
+async def test_credential_frames_are_redacted_everywhere_they_are_written(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Capture file, unknown-frame log, debug log and the frame handed to handlers."""
+
+    async def _iter(items: list[str]):
+        for item in items:
+            yield item
+
+    capture = tmp_path / "capture.ndjson"
+    unknown = tmp_path / "unknown.ndjson"
+    seen: list[ServerFrame] = []
+
+    async def collect(frame: ServerFrame) -> None:
+        seen.append(frame)
+
+    client = SmartPlaceClient.live(token="dummy", capture=capture, unknown_log=unknown, handlers=[collect])
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        await self_._dispatch_loop(
+            _iter(
+                [
+                    _ROUTE,
+                    f"144Update:{_PASSWORD}",
+                    f"145Update:{_PASSWORD}",
+                    # Not a known shape, so it also goes to the unknown-frame log.
+                    f"Hinweis 146Update:{_PASSWORD}",
+                ],
+            ),
+        )
+        self_._closing = True
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    with caplog.at_level(logging.DEBUG, logger="smart_place_client"):
+        await client.run()
+
+    written = capture.read_text(encoding="utf-8") + unknown.read_text(encoding="utf-8") + caplog.text
+    assert _PASSWORD not in written
+    assert "s3cret" not in written
+    assert capture.read_text(encoding="utf-8").count("Update:<REDACTED>") == 3
+    assert json.loads(unknown.read_text(encoding="utf-8"))["raw"] == "Hinweis 146Update:<REDACTED>"
+    assert "unknown frame: Hinweis 146Update:<REDACTED>" in caplog.text
+    assert _PASSWORD not in repr(seen[:3])
+    assert seen[1:3] == [
+        NamedValue(name="RemoteAccessCredential", value="", index=144),
+        NamedValue(name="RemoteAccessCredential", value="", index=145),
+    ]
+
+
+async def test_unknown_frames_are_logged_at_debug(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Without an unknown-frame file (the HA box) an unknown frame still leaves a trace."""
+
+    async def _iter(items: list[str]):
+        for item in items:
+            yield item
+
+    client = SmartPlaceClient.live(token="dummy")
+
+    async def fake_once(self_: SmartPlaceClient) -> None:
+        await self_._dispatch_loop(_iter(["ZZZ_UNKNOWN_PUSH:hello"]))
+        self_._closing = True
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", fake_once)
+    with caplog.at_level(logging.DEBUG, logger="smart_place_client"):
+        await client.run()
+    records = [record for record in caplog.records if "unknown frame: ZZZ_UNKNOWN_PUSH:hello" in record.message]
+    assert [record.levelno for record in records] == [logging.DEBUG]
+
+
+# --------------------------- outage logging ---------------------------
+
+
+async def test_outage_is_logged_once_and_recovery_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Repeated failed attempts of one outage produce one warning, then one "restored"."""
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    sockets = [_FakeWebSocket([_ROUTE]), _FakeWebSocket([])]
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=_FakeSession(sockets),  # type: ignore[arg-type]
+        ping_interval=0,
+        chart_poll_interval=0,
+        backoff=ExponentialBackoff(jitter=0.0),
+    )
+    real_once = SmartPlaceClient._run_live_once
+    attempts = 0
+
+    async def flaky_once(self_: SmartPlaceClient) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise SmartPlaceOfflineError("offline") if attempts == 2 else OSError("network down")
+        await real_once(self_)
+        self_._closing = True
+
+    monkeypatch.setattr(SmartPlaceClient, "_run_live_once", flaky_once)
+    with caplog.at_level(logging.DEBUG, logger="smart_place_client"):
+        await client.run()
+
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == ["Smart Place server unavailable (network down); reconnecting"]
+    assert sum("still unavailable" in record.message for record in caplog.records) == 2
+    restored = [record for record in caplog.records if "connection restored" in record.message]
+    assert [record.levelno for record in restored] == [logging.INFO]
+
+
+# --------------------------- CLI stdin gate ---------------------------
+
+
+async def test_stdin_lines_are_dropped_without_allow_send(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``sp-cli --live`` without ``--allow-send`` logs typed lines and sends nothing."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("leuchte13\n\nOEFFNER4\n"))
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy")
+    client._ws = ws  # type: ignore[assignment]
+    with caplog.at_level(logging.WARNING, logger="smart_place_client"):
+        await _stdin_pump(client, allow_send=False)
+    assert ws.sent == []
+    dropped = [record.message for record in caplog.records if "not sent" in record.message]
+    assert len(dropped) == 2
+    assert dropped[0].endswith("leuchte13")
+
+
+async def test_stdin_lines_are_sent_with_allow_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO("Ping\n"))
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy")
+    client._ws = ws  # type: ignore[assignment]
+    await _stdin_pump(client, allow_send=True)
+    assert ws.sent == ["Ping"]
+
+
+async def test_cli_gates_live_sends_but_not_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live mode passes the flag on; replay (which never transmits) always accepts lines."""
+    gates: list[bool] = []
+
+    async def fake_pump(_client: SmartPlaceClient, *, allow_send: bool) -> None:
+        gates.append(allow_send)
+
+    async def fake_run(_self: SmartPlaceClient) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr("smart_place_client.client._stdin_pump", fake_pump)
+    monkeypatch.setattr(SmartPlaceClient, "run", fake_run)
+    monkeypatch.setenv("SMART_PLACE_TOKEN", "dummy")
+    await _run_cli(True, None, None)
+    await _run_cli(True, None, None, allow_send=True)
+    await _run_cli(False, FIXTURES / "bootstrap.ndjson", None)
+    assert gates == [False, True, True]
+
+
+def test_cli_offers_allow_send() -> None:
+    import click  # noqa: PLC0415
+    from click.testing import CliRunner  # noqa: PLC0415
+
+    result = CliRunner().invoke(_build_cli(click), ["--help"])  # type: ignore[arg-type]
+    assert result.exit_code == 0
+    assert "--allow-send" in result.output

@@ -413,3 +413,69 @@ def test_known_messages_examples_round_trip_through_parse_frame() -> None:
         else:
             actual = type(frame).__name__
         assert actual == defn.name, f"{defn.name} example {defn.example!r} parsed as {actual!r}"
+
+
+# ------------------------- control frames ----------------------------
+
+
+def test_light_config_field_order_is_top_then_left() -> None:
+    """Config positions are ``name,top,left,...`` — vertical first."""
+    frame = parse_frame("INHALTLeuchten13:Corridor lights,289px,330px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF")
+    assert isinstance(frame, NamedFields)
+    assert frame.name == "LightConfig"
+    assert frame.index == 13
+    assert frame.fields[:4] == ("Corridor lights", "289px", "330px", "schalter")
+    assert frame.fields[6] == "Uebersicht1"
+
+
+def test_scene_config_has_eighteen_fields() -> None:
+    frame = parse_frame(
+        "INHALTSZENEN11:Night,340px,535px,7.png,OnOn,Remove,,,23-00,,00-00,NoPw,"
+        "SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1",
+    )
+    assert isinstance(frame, NamedFields)
+    assert len(frame.fields) == 18
+    assert (frame.fields[4], frame.fields[11]) == ("OnOn", "NoPw")
+
+
+@pytest.mark.parametrize(
+    ("text", "index"),
+    [("144Update:hunter2", 144), ("145Update:pa:ss>word,1", 145), ("146Update:future", 146)],
+)
+def test_credential_frames_parse_without_the_password(text: str, index: int) -> None:
+    """The remote-access password never survives parsing."""
+    frame = parse_frame(text)
+    assert frame == NamedValue(name="RemoteAccessCredential", value="", index=index)
+
+
+def test_floorplan_rotated_and_rights_marker_are_known() -> None:
+    assert parse_frame("FloorGedreht") == NamedValue(name="FloorplanRotated", value="")
+    assert parse_frame("ShowMeTheRightBack") == NamedFields(name="AccessRightsShown", fields=())
+
+
+def test_blind_and_setpoint_values_keep_their_raw_payload() -> None:
+    assert parse_frame("JALICO7:regenalarm-01") == NamedValue(name="BlindState", value="regenalarm-01", index=7)
+    assert parse_frame("TEMPSOLL6:18") == NamedValue(name="TemperatureSetpoint", value="18", index=6)
+    assert parse_frame("KLIMASINFO3:heizen") == NamedValue(name="ClimateInfo", value="heizen", index=3)
+    assert parse_frame("MUTE1:01") == NamedValue(name="Mute", value="01", index=1)
+
+
+def test_session_state_reset_connection_keeps_installation_facts() -> None:
+    """A new connection starts from scratch; charts and plans are not per connection."""
+    state = SessionState()
+    state.on_discovery_frame(GoToLinkSSL("h", 8770, "/Start1", "Leer"))
+    state.on_app_open()
+    state.on_app_frame(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima"))
+    state.on_app_frame(NamedFields(name="MainMenuFinished", fields=()))
+    state.chart_ids.add(49)
+    state.chart_range_request = 1783893600
+    assert state.phase is SessionPhase.BOOTSTRAPPED
+
+    state.reset_connection()
+
+    assert state.phase is SessionPhase.DISCOVERY_OPEN
+    assert state.route is None
+    assert state.main_menu_loaded is False
+    assert state.chart_ids == {49}
+    assert state.plan_ids == {1}
+    assert state.chart_range_request == 1783893600

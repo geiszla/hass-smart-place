@@ -1,0 +1,319 @@
+{"direction": "server", "ts": 1794254533.287936, "iso_ts": "2026-11-09T20:02:13.287+00:00", "text": "GoToLinkSSL:spr1.smartplace.ch:31399/Start1:Leer"}
+{"direction": "client", "ts": 1794254533.678884, "iso_ts": "2026-11-09T20:02:13.678+00:00", "text": "StatusInhaltListe"}
+{"direction": "client", "ts": 1794254533.679158, "iso_ts": "2026-11-09T20:02:13.679+00:00", "text": "GiveMeMainmenu"}
+{"direction": "client", "ts": 1794254533.679223, "iso_ts": "2026-11-09T20:02:13.679+00:00", "text": "GiveMeGlobalGsa"}
+{"direction": "client", "ts": 1794254533.67927, "iso_ts": "2026-11-09T20:02:13.679+00:00", "text": "SocketConnected:1"}
+{"direction": "server", "ts": 1794254533.786341, "iso_ts": "2026-11-09T20:02:13.786+00:00", "text": "StatusInhaltListe_1_1_SPtext390>TEMPOUT~SPDB-REM>unit-Â°C~>LinkOff"}
+{"direction": "server", "ts": 1794254533.786737, "iso_ts": "2026-11-09T20:02:13.786+00:00", "text": "StatusInhaltListe_1_2_SPtext391>REGEN~SPDB-REM>icon-regen~>LinkOff<SPtext402>HAGEL~SPDB-REM>icon-hagel~>LinkOff"}
+{"direction": "server", "ts": 1794254533.78686, "iso_ts": "2026-11-09T20:02:13.786+00:00", "text": "StatusInhaltListe_1_3_SPtext392>WINDALARM1~SPDB-W1>icon-windalarm~>LinkOff<SPtext403>JALWARTUNG~SPDB-REM>icon-jalwartung~>LinkOff"}
+{"direction": "server", "ts": 1794254533.786921, "iso_ts": "2026-11-09T20:02:13.786+00:00", "text": "StatusInhaltListe_1_4_SPtext393>WINDGESCHWINDIGKEIT~SPDB-REM>unit-km/h~>LinkOff"}
+{"direction": "server", "ts": 1794254533.78697, "iso_ts": "2026-11-09T20:02:13.786+00:00", "text": "StatusInhaltListe_2_1_SPtext395>CHART337STAND1~SPDB-CHARTSSTANDS>unit-l~>LinkOff"}
+{"direction": "server", "ts": 1794254533.787033, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_2_2_SPtext396>CHART595STAND1~SPDB-CHARTSSTANDS>unit-l~>LinkOff"}
+{"direction": "server", "ts": 1794254533.78708, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_2_3_SPtext397>CHART49STAND1~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff"}
+{"direction": "server", "ts": 1794254533.787125, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_2_4_SPtext398>CHART144STAND1~SPDB-CHARTSSTANDS>unit-KWh~>LinkOff"}
+{"direction": "server", "ts": 1794254533.787168, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_3_1_"}
+{"direction": "server", "ts": 1794254533.787206, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_3_2_"}
+{"direction": "server", "ts": 1794254533.787257, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_3_3_"}
+{"direction": "server", "ts": 1794254533.787294, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltListe_3_4_"}
+{"direction": "server", "ts": 1794254533.787331, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "StatusInhaltFinishedListe"}
+{"direction": "client", "ts": 1794254533.787386, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "GiveMeChartStandsManuell49"}
+{"direction": "client", "ts": 1794254533.787554, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "GiveMeChartStandsManuell144"}
+{"direction": "client", "ts": 1794254533.787611, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "GiveMeChartStandsManuell337"}
+{"direction": "client", "ts": 1794254533.787647, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "GiveMeChartStandsManuell595"}
+{"direction": "server", "ts": 1794254533.787708, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "AllItemsOhneAdmin :Klimas1=Bedroom heating,254px,419px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff;Klimas2=Office heating,493px,237px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff;Klimas3=Living room/dining room/kitchen heating,473px,466px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff;Klimas4=Corridor/laundry room heating,248px,236px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff;Klimas5=Large bathroom heating,108px,569px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff;Klimas6=Small bathroom heating,113px,390px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff:Leuchten1=Kitchen lights (off),638px,565px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten2=Dining room lights,651px,422px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten3=Kitchen spot lights,661px,633px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten4=Living room lights,490px,516px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten5=Living room socket,410px,542px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten6=Laundry room lights,418px,254px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten7=Office balcony lights,678px,267px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten8=Bedroom balcony lights,310px,615px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten9=Office socket,602px,204px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten10=Office lights,543px,273px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten11=Bedroom lights,324px,463px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten12=Bedroom socket,237px,464px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten13=Corridor lights,289px,330px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten14=Big bathroom lights,126px,544px,led,,dimmkurve1,Uebersicht1,,MemoryOFF;Leuchten15=Small bathroom lights,167px,438px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF:Jalousien1=Bath blinds,127px,778px,jalousie,,60,Uebersicht1;Jalousien2=Bedroom balcony blinds,298px,755px,jalousiestoff,,29,Uebersicht1;Jalousien3=Bedroom blinds,303px,563px,jalousiestoff,,39,Uebersicht1;Jalousien4=Living room balcony door blinds,394px,652px,jalousiestoff,,29,Uebersicht1;Jalousien5=Living room blinds,502px,693px,jalousie,,60,Uebersicht1;Jalousien6=Dining room blinds,735px,506px,jalousie,,60,Uebersicht1;Jalousien7=Office balcony blinds,728px,288px,jalousiestoff,,60,Uebersicht1;Jalousien8=Office balcony door blinds,674px,405px,jalousie,,60,Uebersicht1;Jalousien9=Office blinds,607px,295px,jalousie,,60,Uebersicht1;Jalousien10=Bathroom window blinds,198px,648px,jalousiestoff,,29,Uebersicht1:::Vol1=Main Wohnen,Uebersicht2-327px-508px?Uebersicht1-213px-129px::Mediacenter1=neues Mediacenter,459px,434px,,,Uebersicht1,rgba(255-164-65-0.9)"}
+{"direction": "server", "ts": 1794254533.787863, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima"}
+{"direction": "server", "ts": 1794254533.787948, "iso_ts": "2026-11-09T20:02:13.787+00:00", "text": "IndividuellStart1:Szenen,Szenen,1,Start1"}
+{"direction": "server", "ts": 1794254533.788012, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "SingelDiagramm336:Kaltwasser II XX00-00-00;Area;Zeit;Verbrauch in l;Kaltwasser II=336=rgba(23,164,247,0.9)=rgba(23, 164, 247, 0.2);===;===;===;;CHF;0.002;;0000000;Wasser;l;smartPLACE_Wasser;92;XX00-00-00"}
+{"direction": "server", "ts": 1794254533.788203, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTLeuchten13:Corridor lights,289px,330px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.78837, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTVol1:Main Wohnen,Uebersicht2-327px-508px?Uebersicht1-213px-129px"}
+{"direction": "server", "ts": 1794254533.788666, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "SingelDiagramm337:SUMME Kaltwasser XX00-00-00;Area;Zeit;Verbrauch in l;SUMME Kaltwasser=337=rgba(23,164,247,0.9)=rgba(23, 164, 247, 0.2);===;===;===;;CHF;0.002;;0000000;Summe;l;>SummeForDiagramm-336>SummeForDiagramm-335>;250;SUMME Kaltwasser XX00-00-00"}
+{"direction": "server", "ts": 1794254533.78879, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTLeuchten12:Bedroom socket,237px,464px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.788858, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTLeuchten1:Kitchen lights (off),638px,565px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.788917, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTLeuchten11:Bedroom lights,324px,463px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.78897, "iso_ts": "2026-11-09T20:02:13.788+00:00", "text": "INHALTLeuchten2:Dining room lights,651px,422px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.78904, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "SingelDiagramm335:Kaltwasser I XX00-00-00;Area;Zeit;Verbrauch in l;Kaltwasser I=335=rgba(23,164,247,0.9)=rgba(23, 164, 247, 0.2);===;===;===;;CHF;0.002;;0000000;Wasser;l;smartPLACE_Wasser;91;XX00-00-00"}
+{"direction": "server", "ts": 1794254533.789104, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten10:Office lights,543px,273px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789158, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten3:Kitchen spot lights,661px,633px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789211, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTJalousien8:Office balcony door blinds,674px,405px,jalousie,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.789265, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten4:Living room lights,490px,516px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789316, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTSZENEN10:Evening,250px,535px,0.png,OnOn,Remove,,,19-30,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.789375, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTSZENEN9:Afternoon sun,520px,535px,4.png,OnOn,Remove,,,15-45,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.78944, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTJalousien9:Office blinds,607px,295px,jalousie,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.789492, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten5:Living room socket,410px,542px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789544, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTSZENEN11:Night,340px,535px,7.png,OnOn,Remove,,,23-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.7896, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTSZENEN8:Movie (day),70px,535px,22.png,OnOff,Remove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.789655, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten15:Small bathroom lights,167px,438px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789706, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten6:Laundry room lights,418px,254px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789755, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTSZENEN12:Movie (night),160px,535px,22.png,OnOn,Remove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.78981, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "UnterMenuJalousien1:All,70px,10px,Jalousien,OffOff,JALZENTRAL1,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.789863, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTJalousien10:Bathroom window blinds,198px,648px,jalousiestoff,,29,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.789914, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten14:Big bathroom lights,126px,544px,led,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.789964, "iso_ts": "2026-11-09T20:02:13.789+00:00", "text": "INHALTLeuchten7:Office balcony lights,678px,267px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.790013, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTJalousien4:Living room balcony door blinds,394px,652px,jalousiestoff,,29,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.790208, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTKlimas5:Large bathroom heating,108px,569px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.790305, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTLeuchten8:Bedroom balcony lights,310px,615px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.790367, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTSZENEN5:LÃ¼ftung Stufe 3,655px,745px,25.png,OnOff,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm2"}
+{"direction": "server", "ts": 1794254533.790448, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "UnterMenuLeuchten1:All,70px,10px,Leuchten,OnOn,LEUCHTENZENTRAL1,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.790605, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "SingelDiagramm144:WÃ¤rme XX00-00-00;Area;Zeit;Verbrauch in Kw/h;WÃ¤rme=144=rgba(202,3,3,0.9)=rgba(202, 3, 3, 0.2);===;===;===;;CHF;0.9;;0000000;Energie;kWh;smartPLACE_Energie_W;53;XX00-00-00"}
+{"direction": "server", "ts": 1794254533.790776, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "SingelDiagramm593:Warmwasser I XX00-00-00;Area;Zeit;Verbrauch in l;Warmwasser I=593=rgba(241,64,64,0.9)=rgba(241, 64, 64, 0.2);===;===;===;;CHF;0.002;;0000000;Wasser;l;smartPLACE_Wasser;160; XX00-00-00"}
+{"direction": "server", "ts": 1794254533.790875, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTJalousien5:Living room blinds,502px,693px,jalousie,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.790939, "iso_ts": "2026-11-09T20:02:13.790+00:00", "text": "INHALTKlimas4:Corridor/laundry room heating,248px,236px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.791105, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTLeuchten9:Office socket,602px,204px,steckdose,,dimmkurve1,Uebersicht1,,MemoryOFF"}
+{"direction": "server", "ts": 1794254533.791179, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTSZENEN4:LÃ¼ftung Stufe 2,655px,625px,25.png,OnOff,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm2"}
+{"direction": "server", "ts": 1794254533.791257, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTJalousien6:Dining room blinds,735px,506px,jalousie,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.791313, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTSZENEN7:Set heating,340px,160px,3.png,OnOn,Remove,,,06-00,mo-di-mi-do-fr-sa-so,23-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.791384, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTJalousien7:Office balcony blinds,728px,288px,jalousiestoff,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.791437, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTKlimas6:Small bathroom heating,113px,390px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.791491, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTSZENEN6:Blinds,250px,160px,4.png,OnOff,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.791549, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTKlimas1:Bedroom heating,254px,419px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.7916, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTMediacenter1:neues Mediacenter,459px,434px,,,Uebersicht1,rgba(255-164-65-0.9)"}
+{"direction": "server", "ts": 1794254533.791651, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTSZENEN1:Bye-Bye,70px,160px,1.png,OnOn,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.791718, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "UnterMenuLautsprecher1:All,70px,820px,Lautsprecher,OnOn,LAUTSPRECHERZENTRAL1,,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.791771, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "SingelDiagramm49:Elektro XX00-00-00;Area;Zeit;Verbrauch in Kw/h;Elektro=49=rgba(206,0,105,0.9)=rgba(206, 0, 105, 0.2);===;===;===;;CHF;0.1788;0.1249;0000000;Elektro;kWh;smartPLACE_Elektro;63;XX00-00-00"}
+{"direction": "server", "ts": 1794254533.791835, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "SingelDiagramm904:PV Anteil Elektro XX00-00-00;Area;Zeit;Verbrauch in Kw/h;PV Elektro=904=rgba(39,234,72,0.9)=rgba(39, 234, 72, 0.2);===;===;===;;CHF;0.1788;0.1249;0000000;Elektro;kWh;smartPLACE_Elektro_3;63;XX00-00-00"}
+{"direction": "server", "ts": 1794254533.791894, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "INHALTJalousien1:Bath blinds,127px,778px,jalousie,,60,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.791945, "iso_ts": "2026-11-09T20:02:13.791+00:00", "text": "SingelDiagramm594:Warmwasser II XX00-00-00;Area;Zeit;Verbrauch in l;Warmwasser II=594=rgba(241,64,64,0.9)=rgba(241, 64, 64, 0.2);===;===;===;;CHF;0.002;;0000000;Wasser;l;smartPLACE_Wasser;161; XX00-00-00"}
+{"direction": "server", "ts": 1794254533.792003, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTJalousien2:Bedroom balcony blinds,298px,755px,jalousiestoff,,29,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.792059, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTKlimas3:Living room/dining room/kitchen heating,473px,466px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.79227, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTSZENEN3:LÃ¼ftung Stufe 1,655px,505px,25.png,OnOff,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm2"}
+{"direction": "server", "ts": 1794254533.792389, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "SingelDiagramm595:SUMME Warmwasser XX00-00-00;Area;Zeit;Verbrauch in l;Summe Warmwasser=595=rgba(241,64,64,0.9)=rgba(241, 64, 64, 0.2);===;===;===;;CHF;0.002;;0000000;Summe;l;>SummeForDiagramm-593>SummeForDiagramm-594>;250;SUMME Warmwasser XX00-00-00"}
+{"direction": "server", "ts": 1794254533.792467, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTJalousien3:Bedroom blinds,303px,563px,jalousiestoff,,39,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.792524, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTKlimas2:Office heating,493px,237px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff"}
+{"direction": "server", "ts": 1794254533.79263, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTMediaPanel1:Main panel,369px,429px,NoRemove,SollMediaOn,Uebersicht1"}
+{"direction": "server", "ts": 1794254533.792775, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "INHALTSZENEN2:Welcome,160px,160px,1.png,OnOn,NoRemove,,,00-00,,00-00,NoPw,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm1"}
+{"direction": "server", "ts": 1794254533.792849, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "GiveMeMainMenuFinished"}
+{"direction": "client", "ts": 1794254533.792909, "iso_ts": "2026-11-09T20:02:13.792+00:00", "text": "GiveMeChartStandsManuell49"}
+{"direction": "client", "ts": 1794254533.793041, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell144"}
+{"direction": "client", "ts": 1794254533.793093, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell335"}
+{"direction": "client", "ts": 1794254533.79313, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell336"}
+{"direction": "client", "ts": 1794254533.793162, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell337"}
+{"direction": "client", "ts": 1794254533.793325, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell593"}
+{"direction": "client", "ts": 1794254533.793469, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell594"}
+{"direction": "client", "ts": 1794254533.793626, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell595"}
+{"direction": "client", "ts": 1794254533.793752, "iso_ts": "2026-11-09T20:02:13.793+00:00", "text": "GiveMeChartStandsManuell904"}
+{"direction": "server", "ts": 1794254533.799125, "iso_ts": "2026-11-09T20:02:13.799+00:00", "text": "GlobalGsa>YEALINKOFF>192.0.2.1>60>1^/linkmap1<2^/linkmap2<3^/linkmap3<4^/linkmap4>1^Eingang EG<2^Briefkasten<3^Garage<4^Eingang WHG>70>"}
+{"direction": "server", "ts": 1794254533.799539, "iso_ts": "2026-11-09T20:02:13.799+00:00", "text": "SocketConnectedFinished>Mojo::Transaction::WebSocket=HASH(0x55717d7fff60)"}
+{"direction": "server", "ts": 1794254533.830684, "iso_ts": "2026-11-09T20:02:13.830+00:00", "text": "StandsSingelChartUpdate49:STAND99:7305.886"}
+{"direction": "server", "ts": 1794254533.831087, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND89:4795.321"}
+{"direction": "server", "ts": 1794254533.831317, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND79:2510.565"}
+{"direction": "server", "ts": 1794254533.831438, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND98:"}
+{"direction": "server", "ts": 1794254533.83151, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND97:"}
+{"direction": "server", "ts": 1794254533.831658, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND96:"}
+{"direction": "server", "ts": 1794254533.831765, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND1:4.131"}
+{"direction": "server", "ts": 1794254533.831833, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND2:39.248"}
+{"direction": "server", "ts": 1794254533.831888, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND3:47.982"}
+{"direction": "server", "ts": 1794254533.831938, "iso_ts": "2026-11-09T20:02:13.831+00:00", "text": "StandsSingelChartUpdate49:STAND4:2029.796"}
+{"direction": "server", "ts": 1794254533.832033, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND99:12807"}
+{"direction": "server", "ts": 1794254533.832301, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND89:"}
+{"direction": "server", "ts": 1794254533.832405, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND79:"}
+{"direction": "server", "ts": 1794254533.832469, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND98:"}
+{"direction": "server", "ts": 1794254533.832524, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND97:"}
+{"direction": "server", "ts": 1794254533.832576, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND96:"}
+{"direction": "server", "ts": 1794254533.832627, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND1:12"}
+{"direction": "server", "ts": 1794254533.832677, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND2:117"}
+{"direction": "server", "ts": 1794254533.832728, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND3:128"}
+{"direction": "server", "ts": 1794254533.832881, "iso_ts": "2026-11-09T20:02:13.832+00:00", "text": "StandsSingelChartUpdate144:STAND4:1534"}
+{"direction": "server", "ts": 1794254533.836595, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND99:248986"}
+{"direction": "server", "ts": 1794254533.836748, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND89:"}
+{"direction": "server", "ts": 1794254533.836825, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND79:"}
+{"direction": "server", "ts": 1794254533.836876, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND98:"}
+{"direction": "server", "ts": 1794254533.836921, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND97:"}
+{"direction": "server", "ts": 1794254533.836969, "iso_ts": "2026-11-09T20:02:13.836+00:00", "text": "StandsSingelChartUpdate337:STAND96:"}
+{"direction": "server", "ts": 1794254533.837007, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate337:STAND1:84"}
+{"direction": "server", "ts": 1794254533.837043, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate337:STAND2:872"}
+{"direction": "server", "ts": 1794254533.83708, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate337:STAND3:1115"}
+{"direction": "server", "ts": 1794254533.837115, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate337:STAND4:48233"}
+{"direction": "server", "ts": 1794254533.837152, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND99:123508"}
+{"direction": "server", "ts": 1794254533.837188, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND89:"}
+{"direction": "server", "ts": 1794254533.837223, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND79:"}
+{"direction": "server", "ts": 1794254533.837258, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND98:"}
+{"direction": "server", "ts": 1794254533.837293, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND97:"}
+{"direction": "server", "ts": 1794254533.837329, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND96:"}
+{"direction": "server", "ts": 1794254533.837366, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND1:54"}
+{"direction": "server", "ts": 1794254533.837402, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND2:306"}
+{"direction": "server", "ts": 1794254533.837437, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND3:337"}
+{"direction": "server", "ts": 1794254533.837472, "iso_ts": "2026-11-09T20:02:13.837+00:00", "text": "StandsSingelChartUpdate595:STAND4:15170"}
+{"direction": "server", "ts": 1794254533.844192, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND99:7305.886"}
+{"direction": "server", "ts": 1794254533.844368, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND89:4795.321"}
+{"direction": "server", "ts": 1794254533.844429, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND79:2510.565"}
+{"direction": "server", "ts": 1794254533.844533, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND98:"}
+{"direction": "server", "ts": 1794254533.844709, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND97:"}
+{"direction": "server", "ts": 1794254533.844864, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND96:"}
+{"direction": "server", "ts": 1794254533.84494, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND1:4.131"}
+{"direction": "server", "ts": 1794254533.844999, "iso_ts": "2026-11-09T20:02:13.844+00:00", "text": "StandsSingelChartUpdate49:STAND2:39.248"}
+{"direction": "server", "ts": 1794254533.845053, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate49:STAND3:47.982"}
+{"direction": "server", "ts": 1794254533.845107, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate49:STAND4:2029.796"}
+{"direction": "server", "ts": 1794254533.845158, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND99:12807"}
+{"direction": "server", "ts": 1794254533.845232, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND89:"}
+{"direction": "server", "ts": 1794254533.8453, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND79:"}
+{"direction": "server", "ts": 1794254533.845419, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND98:"}
+{"direction": "server", "ts": 1794254533.84548, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND97:"}
+{"direction": "server", "ts": 1794254533.845553, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND96:"}
+{"direction": "server", "ts": 1794254533.845675, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND1:12"}
+{"direction": "server", "ts": 1794254533.845735, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND2:117"}
+{"direction": "server", "ts": 1794254533.845787, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND3:128"}
+{"direction": "server", "ts": 1794254533.845836, "iso_ts": "2026-11-09T20:02:13.845+00:00", "text": "StandsSingelChartUpdate144:STAND4:1534"}
+{"direction": "server", "ts": 1794254533.855098, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND99:40335"}
+{"direction": "server", "ts": 1794254533.855281, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND89:"}
+{"direction": "server", "ts": 1794254533.855337, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND79:"}
+{"direction": "server", "ts": 1794254533.85538, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND98:"}
+{"direction": "server", "ts": 1794254533.855417, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND97:"}
+{"direction": "server", "ts": 1794254533.855453, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND96:"}
+{"direction": "server", "ts": 1794254533.855488, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND1:17"}
+{"direction": "server", "ts": 1794254533.855524, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND2:184"}
+{"direction": "server", "ts": 1794254533.855559, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND3:259"}
+{"direction": "server", "ts": 1794254533.855593, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate335:STAND4:10359"}
+{"direction": "server", "ts": 1794254533.855793, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate336:STAND99:208651"}
+{"direction": "server", "ts": 1794254533.855867, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate336:STAND89:"}
+{"direction": "server", "ts": 1794254533.855913, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate336:STAND79:"}
+{"direction": "server", "ts": 1794254533.855952, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate336:STAND98:"}
+{"direction": "server", "ts": 1794254533.855989, "iso_ts": "2026-11-09T20:02:13.855+00:00", "text": "StandsSingelChartUpdate336:STAND97:"}
+{"direction": "server", "ts": 1794254533.856025, "iso_ts": "2026-11-09T20:02:13.856+00:00", "text": "StandsSingelChartUpdate336:STAND96:"}
+{"direction": "server", "ts": 1794254533.85606, "iso_ts": "2026-11-09T20:02:13.856+00:00", "text": "StandsSingelChartUpdate336:STAND1:67"}
+{"direction": "server", "ts": 1794254533.856262, "iso_ts": "2026-11-09T20:02:13.856+00:00", "text": "StandsSingelChartUpdate336:STAND2:688"}
+{"direction": "server", "ts": 1794254533.856356, "iso_ts": "2026-11-09T20:02:13.856+00:00", "text": "StandsSingelChartUpdate336:STAND3:856"}
+{"direction": "server", "ts": 1794254533.856403, "iso_ts": "2026-11-09T20:02:13.856+00:00", "text": "StandsSingelChartUpdate336:STAND4:37874"}
+{"direction": "server", "ts": 1794254533.865835, "iso_ts": "2026-11-09T20:02:13.865+00:00", "text": "StandsSingelChartUpdate337:STAND99:248986"}
+{"direction": "server", "ts": 1794254533.866107, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND89:"}
+{"direction": "server", "ts": 1794254533.866277, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND79:"}
+{"direction": "server", "ts": 1794254533.866406, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND98:"}
+{"direction": "server", "ts": 1794254533.866482, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND97:"}
+{"direction": "server", "ts": 1794254533.866539, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND96:"}
+{"direction": "server", "ts": 1794254533.866592, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND1:84"}
+{"direction": "server", "ts": 1794254533.86664, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND2:872"}
+{"direction": "server", "ts": 1794254533.866677, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND3:1115"}
+{"direction": "server", "ts": 1794254533.86681, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate337:STAND4:48233"}
+{"direction": "server", "ts": 1794254533.866894, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate593:STAND99:100375"}
+{"direction": "server", "ts": 1794254533.866954, "iso_ts": "2026-11-09T20:02:13.866+00:00", "text": "StandsSingelChartUpdate593:STAND89:"}
+{"direction": "server", "ts": 1794254533.867005, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND79:"}
+{"direction": "server", "ts": 1794254533.867053, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND98:"}
+{"direction": "server", "ts": 1794254533.867192, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND97:"}
+{"direction": "server", "ts": 1794254533.867309, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND96:"}
+{"direction": "server", "ts": 1794254533.867441, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND1:37"}
+{"direction": "server", "ts": 1794254533.867577, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND2:139"}
+{"direction": "server", "ts": 1794254533.867687, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND3:151"}
+{"direction": "server", "ts": 1794254533.86775, "iso_ts": "2026-11-09T20:02:13.867+00:00", "text": "StandsSingelChartUpdate593:STAND4:7457"}
+{"direction": "server", "ts": 1794254533.873562, "iso_ts": "2026-11-09T20:02:13.873+00:00", "text": "StandsSingelChartUpdate594:STAND99:23133"}
+{"direction": "server", "ts": 1794254533.873895, "iso_ts": "2026-11-09T20:02:13.873+00:00", "text": "StandsSingelChartUpdate594:STAND89:"}
+{"direction": "server", "ts": 1794254533.874014, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND79:"}
+{"direction": "server", "ts": 1794254533.874164, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND98:"}
+{"direction": "server", "ts": 1794254533.874234, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND97:"}
+{"direction": "server", "ts": 1794254533.874294, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND96:"}
+{"direction": "server", "ts": 1794254533.874425, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND1:17"}
+{"direction": "server", "ts": 1794254533.874541, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND2:167"}
+{"direction": "server", "ts": 1794254533.874614, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND3:186"}
+{"direction": "server", "ts": 1794254533.874676, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate594:STAND4:7713"}
+{"direction": "server", "ts": 1794254533.874765, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate595:STAND99:123508"}
+{"direction": "server", "ts": 1794254533.874824, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate595:STAND89:"}
+{"direction": "server", "ts": 1794254533.87488, "iso_ts": "2026-11-09T20:02:13.874+00:00", "text": "StandsSingelChartUpdate595:STAND79:"}
+{"direction": "server", "ts": 1794254533.875049, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND98:"}
+{"direction": "server", "ts": 1794254533.875161, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND97:"}
+{"direction": "server", "ts": 1794254533.875225, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND96:"}
+{"direction": "server", "ts": 1794254533.875283, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND1:54"}
+{"direction": "server", "ts": 1794254533.875339, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND2:306"}
+{"direction": "server", "ts": 1794254533.87555, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND3:337"}
+{"direction": "server", "ts": 1794254533.875773, "iso_ts": "2026-11-09T20:02:13.875+00:00", "text": "StandsSingelChartUpdate595:STAND4:15170"}
+{"direction": "server", "ts": 1794254533.877435, "iso_ts": "2026-11-09T20:02:13.877+00:00", "text": "StandsSingelChartUpdate904:STAND99:159.909560132952"}
+{"direction": "server", "ts": 1794254533.877747, "iso_ts": "2026-11-09T20:02:13.877+00:00", "text": "StandsSingelChartUpdate904:STAND89:"}
+{"direction": "server", "ts": 1794254533.877845, "iso_ts": "2026-11-09T20:02:13.877+00:00", "text": "StandsSingelChartUpdate904:STAND79:"}
+{"direction": "server", "ts": 1794254533.877911, "iso_ts": "2026-11-09T20:02:13.877+00:00", "text": "StandsSingelChartUpdate904:STAND98:"}
+{"direction": "server", "ts": 1794254533.877969, "iso_ts": "2026-11-09T20:02:13.877+00:00", "text": "StandsSingelChartUpdate904:STAND97:"}
+{"direction": "server", "ts": 1794254533.87803, "iso_ts": "2026-11-09T20:02:13.878+00:00", "text": "StandsSingelChartUpdate904:STAND96:"}
+{"direction": "server", "ts": 1794254533.878235, "iso_ts": "2026-11-09T20:02:13.878+00:00", "text": "StandsSingelChartUpdate904:STAND1:0.0049"}
+{"direction": "server", "ts": 1794254533.878434, "iso_ts": "2026-11-09T20:02:13.878+00:00", "text": "StandsSingelChartUpdate904:STAND2:0.1435"}
+{"direction": "server", "ts": 1794254533.878609, "iso_ts": "2026-11-09T20:02:13.878+00:00", "text": "StandsSingelChartUpdate904:STAND3:0.0049"}
+{"direction": "server", "ts": 1794254533.878792, "iso_ts": "2026-11-09T20:02:13.878+00:00", "text": "StandsSingelChartUpdate904:STAND4:159.8859"}
+{"direction": "server", "ts": 1794254533.934936, "iso_ts": "2026-11-09T20:02:13.934+00:00", "text": "INFOBOARD1:01"}
+{"direction": "server", "ts": 1794254533.935275, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte13:255"}
+{"direction": "server", "ts": 1794254533.935383, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte12:250"}
+{"direction": "server", "ts": 1794254533.935448, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte1:0"}
+{"direction": "server", "ts": 1794254533.935502, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte11:0"}
+{"direction": "server", "ts": 1794254533.93555, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte2:255"}
+{"direction": "server", "ts": 1794254533.935593, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte10:0"}
+{"direction": "server", "ts": 1794254533.935639, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte3:255"}
+{"direction": "server", "ts": 1794254533.935688, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte4:0"}
+{"direction": "server", "ts": 1794254533.935734, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte5:255"}
+{"direction": "server", "ts": 1794254533.935808, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte15:0"}
+{"direction": "server", "ts": 1794254533.935861, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte6:0"}
+{"direction": "server", "ts": 1794254533.935919, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte14:255"}
+{"direction": "server", "ts": 1794254533.935967, "iso_ts": "2026-11-09T20:02:13.935+00:00", "text": "leuchte7:0"}
+{"direction": "server", "ts": 1794254533.936011, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "leuchte8:0"}
+{"direction": "server", "ts": 1794254533.936055, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "leuchte9:250"}
+{"direction": "server", "ts": 1794254533.93627, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO8:0-01"}
+{"direction": "server", "ts": 1794254533.936445, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO9:0-01"}
+{"direction": "server", "ts": 1794254533.936535, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO10:0-01"}
+{"direction": "server", "ts": 1794254533.936737, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO4:0-01"}
+{"direction": "server", "ts": 1794254533.936811, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO5:0-01"}
+{"direction": "server", "ts": 1794254533.936866, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO6:0-01"}
+{"direction": "server", "ts": 1794254533.936914, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO7:regenalarm-01"}
+{"direction": "server", "ts": 1794254533.936963, "iso_ts": "2026-11-09T20:02:13.936+00:00", "text": "JALICO1:0-01"}
+{"direction": "server", "ts": 1794254533.937008, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "JALICO2:regenalarm-00"}
+{"direction": "server", "ts": 1794254533.937052, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "JALICO3:0-01"}
+{"direction": "server", "ts": 1794254533.937096, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL5:21"}
+{"direction": "server", "ts": 1794254533.937138, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL4:21"}
+{"direction": "server", "ts": 1794254533.93718, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL6:18"}
+{"direction": "server", "ts": 1794254533.937219, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL1:21"}
+{"direction": "server", "ts": 1794254533.937262, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL3:22"}
+{"direction": "server", "ts": 1794254533.937302, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPSOLL2:20"}
+{"direction": "server", "ts": 1794254533.937344, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST5:20.7"}
+{"direction": "server", "ts": 1794254533.937405, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST4:21.2"}
+{"direction": "server", "ts": 1794254533.937456, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST6:22.0"}
+{"direction": "server", "ts": 1794254533.937502, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST1:22.2"}
+{"direction": "server", "ts": 1794254533.937542, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST3:21.7"}
+{"direction": "server", "ts": 1794254533.937586, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "TEMPIST2:21.3"}
+{"direction": "server", "ts": 1794254533.937629, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST5:0.0"}
+{"direction": "server", "ts": 1794254533.937674, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST4:0.0"}
+{"direction": "server", "ts": 1794254533.937723, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST6:0.0"}
+{"direction": "server", "ts": 1794254533.937763, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST1:0.0"}
+{"direction": "server", "ts": 1794254533.937806, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST3:0.0"}
+{"direction": "server", "ts": 1794254533.937846, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "FEUCHTEIST2:0.0"}
+{"direction": "server", "ts": 1794254533.937887, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "KLIMASINFO5:heizen"}
+{"direction": "server", "ts": 1794254533.937945, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "KLIMASINFO4:null"}
+{"direction": "server", "ts": 1794254533.937989, "iso_ts": "2026-11-09T20:02:13.937+00:00", "text": "KLIMASINFO6:null"}
+{"direction": "server", "ts": 1794254533.938031, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "KLIMASINFO1:null"}
+{"direction": "server", "ts": 1794254533.938075, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "KLIMASINFO3:heizen"}
+{"direction": "server", "ts": 1794254533.938121, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "KLIMASINFO2:null"}
+{"direction": "server", "ts": 1794254533.938163, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "CHART337STAND1:84"}
+{"direction": "server", "ts": 1794254533.938223, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "CHART595STAND1:54"}
+{"direction": "server", "ts": 1794254533.938274, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "CHART49STAND1:4.131"}
+{"direction": "server", "ts": 1794254533.938326, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "CHART144STAND1:12"}
+{"direction": "server", "ts": 1794254533.938378, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "WINDGESCHWINDIGKEIT:0.7"}
+{"direction": "server", "ts": 1794254533.938423, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "JALWARTUNG:00"}
+{"direction": "server", "ts": 1794254533.938467, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "REGEN:01"}
+{"direction": "server", "ts": 1794254533.938508, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "HAGEL:00"}
+{"direction": "server", "ts": 1794254533.938549, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "TEMPOUT:6.9"}
+{"direction": "server", "ts": 1794254533.938703, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "WINDALARM1:00"}
+{"direction": "server", "ts": 1794254533.938772, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "SPRECHEN1:ring"}
+{"direction": "server", "ts": 1794254533.938817, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "MUTE1:00"}
+{"direction": "server", "ts": 1794254533.938855, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "CALLINFO1:Wohnungseingang"}
+{"direction": "server", "ts": 1794254533.938891, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "LEUCHTENZENTRAL1:00"}
+{"direction": "server", "ts": 1794254533.938926, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "LAUTSPRECHERZENTRAL1:00"}
+{"direction": "server", "ts": 1794254533.938962, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "INFOBOARD1:01"}
+{"direction": "server", "ts": 1794254533.938996, "iso_ts": "2026-11-09T20:02:13.938+00:00", "text": "INFOBOARD2:01"}
+{"direction": "server", "ts": 1794254533.939029, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "INFOBOARD2INHALT:Read"}
+{"direction": "server", "ts": 1794254533.939062, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "PERSINFO:Read"}
+{"direction": "server", "ts": 1794254533.939092, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "PACKETBOX1:Frei"}
+{"direction": "server", "ts": 1794254533.939158, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "PACKETBOX2:Frei"}
+{"direction": "server", "ts": 1794254533.93927, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "PACKETBOX3:Frei"}
+{"direction": "server", "ts": 1794254533.939318, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "PACKETBOX4:Frei"}
+{"direction": "server", "ts": 1794254533.939358, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "Vol1:0"}
+{"direction": "server", "ts": 1794254533.939393, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "Vol81:60"}
+{"direction": "server", "ts": 1794254533.939428, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "MediacenterUpdateInfos>Pic>81>graphics/transparent.png"}
+{"direction": "server", "ts": 1794254533.939486, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN10:01"}
+{"direction": "server", "ts": 1794254533.939561, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN9:01"}
+{"direction": "server", "ts": 1794254533.939663, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN11:00"}
+{"direction": "server", "ts": 1794254533.93971, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN8:00"}
+{"direction": "server", "ts": 1794254533.939769, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN12:01"}
+{"direction": "server", "ts": 1794254533.939803, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN5:01"}
+{"direction": "server", "ts": 1794254533.939835, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN4:00"}
+{"direction": "server", "ts": 1794254533.939866, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN7:00"}
+{"direction": "server", "ts": 1794254533.939896, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN6:00"}
+{"direction": "server", "ts": 1794254533.939927, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN1:01"}
+{"direction": "server", "ts": 1794254533.939957, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN3:00"}
+{"direction": "server", "ts": 1794254533.939987, "iso_ts": "2026-11-09T20:02:13.939+00:00", "text": "SZENEN2:00"}
+{"direction": "server", "ts": 1794254533.940017, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "CHARTZIEL337:300"}
+{"direction": "server", "ts": 1794254533.940052, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "CHARTZIEL144:25"}
+{"direction": "server", "ts": 1794254533.940111, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "CHARTZIEL49:10"}
+{"direction": "server", "ts": 1794254533.94023, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "CHARTZIEL595:300"}
+{"direction": "server", "ts": 1794254533.940415, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "PLAYSLOT-1<1585589386110<Multi1<http://www.my105.ch/fileadmin/templates/img/my105_logo.jpg<http://stream01.my105.ch/my105djnights.mp3"}
+{"direction": "server", "ts": 1794254533.940695, "iso_ts": "2026-11-09T20:02:13.940+00:00", "text": "PLAYSLOT-81<0"}

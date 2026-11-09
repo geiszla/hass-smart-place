@@ -7,6 +7,8 @@ Mirror of ``test_protocol.py``'s ``test_known_messages_*`` block: every
 
 from __future__ import annotations
 
+import pytest
+
 from smart_place_client import KNOWN_COMMANDS, CommandDefinition, Commands
 
 
@@ -26,21 +28,10 @@ def test_known_commands_have_descriptions_and_examples() -> None:
         assert callable(defn.encode), f"{defn.name} encode not callable"
 
 
-def test_static_commands_encode_matches_example() -> None:
-    """Static commands take no args and their encode() output is the example."""
-    static_names = {
-        "StatusContent",
-        "Mainmenu",
-        "GlobalGsa",
-        "Ping",
-        "OpenGroundFloorEntrance",
-        "OpenMailbox",
-        "OpenGarageEntrance",
-        "OpenFrontDoor",
-    }
+def test_commands_encode_matches_example() -> None:
+    """Every command encodes its ``example_args`` to its documented example."""
     for defn in KNOWN_COMMANDS:
-        if defn.name in static_names:
-            assert defn.encode() == defn.example, f"{defn.name} encode() != example"
+        assert defn.encode(*defn.example_args) == defn.example, f"{defn.name} encode() != example"
 
 
 def test_ping_command_encodes_to_wire_ping() -> None:
@@ -103,3 +94,103 @@ def test_machinery_commands_are_not_audited() -> None:
 def test_audit_defaults_to_true() -> None:
     """New commands are audited by default — the trail fails safe to visibility."""
     assert CommandDefinition(name="X", description="d", encode=lambda: "X", example="X").audit is True
+
+
+# The commands that change something in the building. Listed by hand on
+# purpose: a new command must be added here (a write) or to the read list
+# below, so nobody can declare a write as a read by accident.
+_WRITE_COMMANDS = {
+    "OpenGroundFloorEntrance",
+    "OpenMailbox",
+    "OpenGarageEntrance",
+    "OpenFrontDoor",
+    "LightToggle",
+    "LightDim",
+    "BlindUp",
+    "BlindDown",
+    "BlindVent",
+    "BlindsGroupUp",
+    "BlindsGroupDown",
+    "Setpoint",
+    "Scene",
+    "GroupMessage",
+    "MuteToggle",
+}
+_READ_COMMANDS = {
+    "StatusContent",
+    "Mainmenu",
+    "GlobalGsa",
+    "SocketConnected",
+    "Ping",
+    "ChartStands",
+    "ChartStandRange",
+}
+
+
+def test_write_flag_matches_the_explicit_lists() -> None:
+    """Every command is declared a write or a read, exactly as listed here."""
+    assert {defn.name for defn in KNOWN_COMMANDS if defn.write} == _WRITE_COMMANDS
+    assert {defn.name for defn in KNOWN_COMMANDS if not defn.write} == _READ_COMMANDS
+
+
+def test_write_defaults_to_true() -> None:
+    """A new command is a write unless declared a read — dry run fails safe."""
+    assert CommandDefinition(name="X", description="d", encode=lambda: "X", example="X").write is True
+
+
+def test_write_commands_are_audited() -> None:
+    """Every command that changes the building lands in the audit trail."""
+    assert all(defn.audit for defn in KNOWN_COMMANDS if defn.write)
+
+
+def test_control_commands_encode_vendor_wire_strings() -> None:
+    """The control commands produce the frames the vendor app sends."""
+    assert Commands.LightToggle.encode(13) == "leuchte13"
+    assert Commands.LightDim.encode(4, 0) == "DIMleuchte4:0"
+    assert Commands.LightDim.encode(4, 255) == "DIMleuchte4:255"
+    assert Commands.BlindUp.encode(1) == "JALUP1"
+    assert Commands.BlindDown.encode(10) == "JALDOW10"
+    assert Commands.BlindVent.encode(9) == "JALLUE9"
+    assert Commands.BlindsGroupUp.encode(1) == "JALUPZENTRAL1"
+    assert Commands.BlindsGroupDown.encode(2) == "JALDOWZENTRAL2"
+    assert Commands.Setpoint.encode(6, 18) == "TEMPSOLL6:18"
+    assert Commands.Setpoint.encode(6, 26) == "TEMPSOLL6:26"
+    assert Commands.Scene.encode(11) == "SZENEN11"
+    assert Commands.GroupMessage.encode("LEUCHTENZENTRAL1") == "LEUCHTENZENTRAL1"
+    assert Commands.MuteToggle.encode(1) == "MUTE1"
+
+
+@pytest.mark.parametrize(
+    ("command", "args"),
+    [
+        (Commands.LightToggle, (0,)),
+        (Commands.LightToggle, (-1,)),
+        (Commands.LightToggle, ("13",)),
+        (Commands.LightToggle, (True,)),
+        (Commands.LightDim, (13, -1)),
+        (Commands.LightDim, (13, 256)),
+        (Commands.LightDim, (13, 12.5)),
+        (Commands.BlindUp, (0,)),
+        (Commands.BlindDown, (1.0,)),
+        (Commands.BlindVent, (None,)),
+        (Commands.BlindsGroupUp, (0,)),
+        (Commands.BlindsGroupDown, ("1",)),
+        (Commands.Setpoint, (5, 17)),
+        (Commands.Setpoint, (5, 27)),
+        (Commands.Setpoint, (5, 21.5)),
+        (Commands.Setpoint, (0, 21)),
+        (Commands.Scene, (0,)),
+        (Commands.MuteToggle, (0,)),
+        # A group message comes from the server; only the lights shape may go back out.
+        (Commands.GroupMessage, ("OEFFNER1",)),
+        (Commands.GroupMessage, ("LEUCHTENZENTRAL1\nOEFFNER1",)),
+        (Commands.GroupMessage, ("LEUCHTENZENTRAL1\n",)),
+        (Commands.GroupMessage, ("JALZENTRAL1",)),
+        (Commands.GroupMessage, ("",)),
+        (Commands.GroupMessage, (1,)),
+    ],
+)
+def test_control_commands_reject_bad_arguments(command: CommandDefinition, args: tuple[object, ...]) -> None:
+    """Out-of-range or wrongly typed arguments raise instead of reaching the wire."""
+    with pytest.raises(ValueError, match=r"must be|not a lights group message"):
+        command.encode(*args)

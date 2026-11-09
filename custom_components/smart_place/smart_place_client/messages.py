@@ -21,6 +21,8 @@ from typing import Final
 from .protocol import (
     HostNotOnline,
     MessageDefinition,
+    NamedValue,
+    ProtocolError,
     ServerFrame,
     UnknownFrame,
     _indexed_fields_parser,
@@ -38,6 +40,17 @@ from .protocol import (
 def _parse_host_not_online(_text: str) -> HostNotOnline:
     """Parse the literal ``HostNotOnline`` discovery reply (no payload)."""
     return HostNotOnline()
+
+
+_CREDENTIAL_RE = re.compile(r"^(\d+)Update:")
+
+
+def _parse_remote_access_credential(text: str) -> NamedValue:
+    """Parse ``144Update:<password>`` / ``145Update:<password>``, dropping the password."""
+    match = _CREDENTIAL_RE.match(text)
+    if match is None:
+        raise ProtocolError("credential frame malformed")
+    return NamedValue(name="RemoteAccessCredential", value="", index=int(match.group(1)))
 
 
 KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
@@ -291,7 +304,8 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="TemperatureSetpoint",
         description=(
-            "Push: temperature setpoint for room/zone N (°C as float-as-string). "
+            "Push: heating setpoint for climate zone N, whole degrees Celsius 18..26 "
+            "(the vendor app labels 18 'forced off' and 26 'forced on'). "
             "Format: TEMPSOLL<n>:<value>. TEMPSOLL = 'TEMPeratur SOLL' (target)."
         ),
         pattern=re.compile(r"^TEMPSOLL\d+:"),
@@ -311,8 +325,8 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="ClimateInfo",
         description=(
-            "Push: climate-zone N status payload (HVAC mode/fan-coil info). "
-            "Format: KLIMASINFO<n>:<value> (value 'null' when unconfigured)."
+            "Push: what climate zone N is doing. Format: KLIMASINFO<n>:<value> with "
+            "'heizen' (calling for heat), 'kuehlen' (cooling) or 'null' (idle)."
         ),
         pattern=re.compile(r"^KLIMASINFO\d+:"),
         parse=_indexed_value_parser("ClimateInfo", "KLIMASINFO"),
@@ -320,7 +334,11 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="SceneState",
-        description="Push: state of scene N. Format: SZENEN<n>:<code> (e.g. '00', '01').",
+        description=(
+            "Push: flag of scene N. Format: SZENEN<n>:<code> ('00' / '01'). For an "
+            "'OnOff' scene it is the real state; for an 'OnOn' (trigger) scene it is "
+            "set on activation and stays latched, so it is not a state."
+        ),
         pattern=re.compile(r"^SZENEN\d+:"),
         parse=_indexed_value_parser("SceneState", "SZENEN"),
         example="SZENEN10:00",
@@ -328,9 +346,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="LightState",
         description=(
-            "Push: state/level of light N. Format: leuchte<n>:<value>. Value is "
-            "an 8-bit dim level 0..255 for dimmers, or a state code (e.g. 'on'/"
-            "'off') for switches."
+            "Push: level of light or socket N. Format: leuchte<n>:<value>, a number "
+            "0..255 for every kind: 0 = off, above 0 = on (switch-type loads report "
+            "250 or 255 when on)."
         ),
         pattern=re.compile(r"^leuchte\d+:"),
         parse=_indexed_value_parser("LightState", "leuchte"),
@@ -339,7 +357,10 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="BlindState",
         description=(
-            "Push: state/icon code for blind N. Format: JALICO<n>:<code> (e.g. '0-01'). 'JALICO' = Jalousie-Icon."
+            "Push: state of blind N. Format: JALICO<n>:<a>-<b>. <a> is the position in "
+            "percent (0 = fully up, 100 = fully down) or 'regenalarm' / 'windalarm' / "
+            "'hagelalarm' while a weather alarm holds the blind; <b> is '00' or '01'. "
+            "'JALICO' = Jalousie-Icon."
         ),
         pattern=re.compile(r"^JALICO\d+:"),
         parse=_indexed_value_parser("BlindState", "JALICO"),
@@ -432,7 +453,7 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="Mute",
-        description="Push: mute state for audio zone N. Format: MUTE<n>:<code>.",
+        description="Push: doorbell mute N. Format: MUTE<n>:<code> ('01' = muted).",
         pattern=re.compile(r"^MUTE\d+:"),
         parse=_indexed_value_parser("Mute", "MUTE"),
         example="MUTE1:00",
@@ -474,8 +495,10 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="LightConfig",
         description=(
-            "Light entity definition N. Format: INHALTLeuchten<n>:name,x,y,kind,"
-            "?,dim-curve,view,?,memory-flag. Sent once per light during bootstrap."
+            "Light or socket definition N. Format: INHALTLeuchten<n>:name,top,left,kind,"
+            "actuator,dim-curve,Uebersicht<plan>,rotate,memory-flag (positions are "
+            "vertical first). kind is schalter, dimmer, steckdose or led. Sent once per "
+            "light in the GiveMeMainmenu reply."
         ),
         pattern=re.compile(r"^INHALTLeuchten\d+:"),
         parse=_indexed_fields_parser("LightConfig", "INHALTLeuchten"),
@@ -484,8 +507,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="BlindConfig",
         description=(
-            "Blind/shutter entity definition N. Format: INHALTJalousien<n>:name,x,y,"
-            "kind,?,speed,view. Sent once per blind during bootstrap."
+            "Blind definition N. Format: INHALTJalousien<n>:name,top,left,kind,actuator,"
+            "run-time-seconds,Uebersicht<plan>. kind is jalousie (slatted), jalousiestoff "
+            "(fabric) or markise (awning). Sent once per blind in the GiveMeMainmenu reply."
         ),
         pattern=re.compile(r"^INHALTJalousien\d+:"),
         parse=_indexed_fields_parser("BlindConfig", "INHALTJalousien"),
@@ -494,8 +518,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="ClimateConfig",
         description=(
-            "Climate-zone definition N. Format: INHALTKlimas<n>:name,x,y,mode,?,"
-            "color,view,fancoil-flag. Sent once per zone during bootstrap."
+            "Climate-zone definition N. Format: INHALTKlimas<n>:name,top,left,mode,actuator,"
+            "colour,Uebersicht<plan>,fancoil-flag. Sent once per zone in the "
+            "GiveMeMainmenu reply."
         ),
         pattern=re.compile(r"^INHALTKlimas\d+:"),
         parse=_indexed_fields_parser("ClimateConfig", "INHALTKlimas"),
@@ -504,12 +529,18 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="SceneConfig",
         description=(
-            "Scene definition N. Format: INHALTSZENEN<n>:name,x,y,icon,onstate,"
-            "removable,?,weekdays,trigger-time,sunrise-flag,sunset-flag,...,form."
+            "Scene definition N, 18 comma fields: INHALTSZENEN<n>:name,top,left,icon,type,"
+            "Remove|NoRemove,pop-up,<4 timer fields>,NoPw|Pw,<4 sunrise/sunset flags>,"
+            "display-flag,tile-shape. type is OnOn (trigger only) or OnOff (real on/off); "
+            "Pw marks a scene that needs a PIN."
         ),
         pattern=re.compile(r"^INHALTSZENEN\d+:"),
         parse=_indexed_fields_parser("SceneConfig", "INHALTSZENEN"),
-        example="INHALTSZENEN10:Evening,250px,535px,0.png,OnOn,Remove,,mo-di,19-45,...,SzenenForm1",
+        example=(
+            "INHALTSZENEN10:Evening,250px,535px,0.png,OnOn,Remove,,,19-30,,00-00,NoPw,"
+            "SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,"
+            "SollDisplayON,SzenenForm1"
+        ),
     ),
     MessageDefinition(
         name="MediacenterConfig",
@@ -538,14 +569,22 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="LightSubMenu",
-        description="Light sub-menu definition N. Format: UnterMenuLeuchten<n>:name,x,y,kind,onstate,group-msg,view.",
+        description=(
+            "Lights sub-menu ('All' button) N. Format: UnterMenuLeuchten<n>:name,top,left,"
+            "icon,OnOn|OnOff,group-message,Uebersicht<plan>. The group message is sent "
+            "back verbatim as the command."
+        ),
         pattern=re.compile(r"^UnterMenuLeuchten\d+:"),
         parse=_indexed_fields_parser("LightSubMenu", "UnterMenuLeuchten"),
         example="UnterMenuLeuchten1:All,70px,10px,Leuchten,OnOn,LEUCHTENZENTRAL1,Uebersicht1",
     ),
     MessageDefinition(
         name="BlindSubMenu",
-        description="Blind sub-menu definition N. Format: UnterMenuJalousien<n>:name,x,y,kind,onstate,group-msg,view.",
+        description=(
+            "Blinds sub-menu ('All' buttons) N. Format: UnterMenuJalousien<n>:name,top,left,"
+            "icon,OnOn|OnOff,group-message,Uebersicht<plan>. Its commands are "
+            "JALUPZENTRAL<plan> / JALDOWZENTRAL<plan>."
+        ),
         pattern=re.compile(r"^UnterMenuJalousien\d+:"),
         parse=_indexed_fields_parser("BlindSubMenu", "UnterMenuJalousien"),
         example="UnterMenuJalousien1:All,70px,10px,Jalousien,OffOff,JALZENTRAL1,Uebersicht1",
@@ -558,18 +597,33 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         example="UnterMenuLautsprecher1:All,70px,820px,Lautsprecher,OnOn,LAUTSPRECHERZENTRAL1,,Uebersicht1",
     ),
     MessageDefinition(
-        name="QuickStartTile",
-        description=("Quick-start tile N for the home screen. Format: IndividuellStart<n>:label,kind,target-id,view."),
+        name="MainMenuEntry",
+        description=(
+            "Extra main-menu entry N (not a quick-start tile; on the reference "
+            "installation it opens the Scenes page). Format: "
+            "IndividuellStart<n>:label,kind,target-id,page."
+        ),
         pattern=re.compile(r"^IndividuellStart\d+:"),
-        parse=_indexed_fields_parser("QuickStartTile", "IndividuellStart"),
+        parse=_indexed_fields_parser("MainMenuEntry", "IndividuellStart"),
         example="IndividuellStart1:Szenen,Szenen,1,Start1",
     ),
     MessageDefinition(
         name="Floorplan",
-        description="Floor-plan view definition N. Format: Floorplan<n>:label,x,y,plan-name.",
+        description=(
+            "Floor plan N. Format: Floorplan<n>:label,top,left,functions, where functions "
+            "is a '-'-joined list such as Leuchten-Jalousien-Klima. Device definitions "
+            "name their plan as Uebersicht<n>. The label can be an installation tag."
+        ),
         pattern=re.compile(r"^Floorplan\d+:"),
         parse=_indexed_fields_parser("Floorplan", "Floorplan"),
-        example="Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima",
+        example="Floorplan1:Apartment,70px,10px,Leuchten-Jalousien-Klima",
+    ),
+    MessageDefinition(
+        name="FloorplanRotated",
+        description="Push: a floor plan image was rotated, fetch it again. Format: FloorGedreht.",
+        pattern=re.compile(r"^FloorGedreht"),
+        parse=_raw_value_parser("FloorplanRotated", "FloorGedreht"),
+        example="FloorGedreht",
     ),
     # -- Charts (per-id, opaque values) ------------------------------------
     MessageDefinition(
@@ -688,6 +742,30 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         pattern=re.compile(r"^FinishSingelChartUpdate\d+$"),
         parse=_indexed_value_parser("ChartRangeFinished", "FinishSingelChartUpdate", separator=""),
         example="FinishSingelChartUpdate49",
+    ),
+    # -- Remote-access credentials -----------------------------------------
+    MessageDefinition(
+        name="RemoteAccessCredential",
+        description=(
+            "Push: a remote-access password of the installation, sent unrequested. "
+            "Format: 144Update:<password> / 145Update:<password> (any numbered "
+            "<n>Update: frame is treated the same). The password is a secret: the "
+            "parser drops it (index is the number, value is empty) and the client "
+            "redacts the raw frame wherever it is written."
+        ),
+        pattern=re.compile(r"^\d+Update:"),
+        parse=_parse_remote_access_credential,
+        example="144Update:redacted",
+    ),
+    MessageDefinition(
+        name="AccessRightsShown",
+        description=(
+            "Marker that arrives with the credential frames (reply to the vendor "
+            "app's '>ShowMeTheRight>'). Format: ShowMeTheRightBack. Parsed-but-unused."
+        ),
+        pattern=re.compile(r"^ShowMeTheRightBack$"),
+        parse=_named_fields_parser("AccessRightsShown", "ShowMeTheRightBack"),
+        example="ShowMeTheRightBack",
     ),
     # -- One-off shapes ----------------------------------------------------
     MessageDefinition(

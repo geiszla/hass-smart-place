@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import hashlib
 import json
 import logging
 import os
@@ -37,6 +38,7 @@ import aiohttp
 
 from .commands import CommandDefinition, Commands
 from .messages import parse_frame
+from .plan import png_size
 from .protocol import (
     APP_WS_PATH,
     DISCOVERY_ORIGIN,
@@ -49,6 +51,7 @@ from .protocol import (
     SessionPhase,
     SessionState,
     SmartPlaceAuthError,
+    SmartPlaceNotConnectedError,
     SmartPlaceOfflineError,
     UnknownFrame,
     discovery_ws_url,
@@ -76,6 +79,10 @@ DISCOVERY_STEP_TIMEOUT: Final[float] = 30.0
 # stable; 60 s is well above that.
 _STABLE_RUN_THRESHOLD: Final[float] = 60.0
 
+# A plan image is a few hundred kB on the routed port. Ids the server does
+# not know hang instead of failing, so every fetch gets a deadline.
+PLAN_IMAGE_TIMEOUT: Final[float] = 15.0
+
 # Browser-like UA so the server treats us the same as the SPA.
 # Source: matches what a current desktop browser would send to the SPA.
 USER_AGENT: str = (
@@ -90,6 +97,10 @@ USER_AGENT: str = (
 # — both carry token-bearing query strings (token2 in the latter).
 _TOKEN_QUERY = re.compile(r"(TOKEN=)[^&\s\"']+", re.IGNORECASE)
 _URL_TOKEN_TRAILING = re.compile(r"(/(?:Start|Infoboard)[0-9]?\?)[^\s\"']+")
+# ``144Update:<password>`` / ``145Update:<password>`` carry the
+# installation's remote-access passwords. A password may contain any
+# character, so everything after the prefix goes.
+_CREDENTIAL_FRAME = re.compile(r"(\b\d+Update:).*", re.DOTALL)
 
 
 def _interpret_discovery_frame(frame: ServerFrame) -> GoToLinkSSL:
@@ -121,8 +132,13 @@ def _camera_url(route: GoToLinkSSL, link: str) -> str:
     return f"https://{route.host}:{route.port - 1}{link}"
 
 
+def _plan_image_url(route: GoToLinkSSL, plan_id: int) -> str:
+    """Build the URL of a floor plan image (served on the routed port itself)."""
+    return f"https://{route.host}:{route.port}/uebersichten/upload/Floorplan{plan_id}.png"
+
+
 def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
-    """Install a log filter that scrubs URL tokens from emitted records.
+    """Install a log filter that scrubs URL tokens and credential frames from emitted records.
 
     Safe to call multiple times; subsequent calls are no-ops.
     """
@@ -133,14 +149,14 @@ def install_token_redaction_filter(logger: logging.Logger = _LOGGER) -> None:
 
 
 class _TokenRedactionFilter(logging.Filter):
-    """Log filter that replaces token query strings with ``<REDACTED>``."""
+    """Log filter that replaces tokens and credential payloads with ``<REDACTED>``."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             msg = record.getMessage()
         except Exception:  # noqa: BLE001
             return True
-        scrubbed = _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", msg))
+        scrubbed = scrub_secrets(msg)
         if scrubbed != msg:
             record.msg = scrubbed
             record.args = None
@@ -188,9 +204,20 @@ class CapturedFrame:
         return cls(direction=direction, ts=float(payload["ts"]), text=str(payload["text"]))
 
 
+@dataclass(frozen=True, slots=True)
+class PlanImage:
+    """A fetched floor plan image: PNG bytes, their SHA-256 and the pixel size."""
+
+    content: bytes
+    digest: str
+    width: int
+    height: int
+
+
 FrameHandler = Callable[[ServerFrame], Awaitable[None]]
 ReauthCallback = Callable[[], Awaitable[None]]
 DisconnectCallback = Callable[[], Awaitable[None]]
+PlanImageCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -281,22 +308,33 @@ class SmartPlaceClient:
     unknown_log_path: Path | None = None
     on_reauth: ReauthCallback | None = None
     on_disconnect: DisconnectCallback | None = None
+    on_plan_image: PlanImageCallback | None = None
     backoff: ExponentialBackoff = field(default_factory=ExponentialBackoff)
+    # Dry run: ``issue`` logs write commands instead of transmitting them.
+    dry_run: bool = False
+    # Latest image per floor plan id, fetched after every main-menu reply.
+    plan_images: dict[int, PlanImage] = field(default_factory=dict)
     _capture_handle: object | None = None
     _unknown_handle: object | None = None
+    # The app WebSocket only. The short-lived discovery socket is kept
+    # apart so a command can never be written to it.
     _ws: aiohttp.ClientWebSocketResponse | None = None
+    _discovery_ws: aiohttp.ClientWebSocketResponse | None = None
     _live: _LiveSources | None = None
     _replay: _ReplaySources | None = None
     _closing: bool = False
     _bootstrap_done: asyncio.Event = field(default_factory=asyncio.Event)
     _chart_poll_task: asyncio.Task[None] | None = None
     _heartbeat_task: asyncio.Task[None] | None = None
+    _plan_task: asyncio.Task[None] | None = None
     _last_pong: float = 0.0
-    # Camera MJPEG proxy route, managed independently of the app WS.
-    # Seeded for free from the WS route on each (re)connect, then
-    # re-minted on demand when a camera fetch finds the routed port's
-    # lease has lapsed while the WS itself stayed up. See
-    # ``camera_base_url`` / ``refresh_camera_route``.
+    # Set while an outage has been logged, so it is logged once.
+    _outage_logged: bool = False
+    # Route for side HTTP fetches (camera MJPEG proxy, plan images),
+    # managed independently of the app WS. Seeded for free from the WS
+    # route on each (re)connect, then re-minted on demand when a fetch
+    # finds the routed port's lease has lapsed while the WS itself stayed
+    # up. See ``camera_base_url`` / ``refresh_camera_route``.
     _camera_route: GoToLinkSSL | None = None
     _camera_route_minted_at: float = 0.0
     _camera_route_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -318,7 +356,9 @@ class SmartPlaceClient:
         handlers: list[FrameHandler] | None = None,
         on_reauth: ReauthCallback | None = None,
         on_disconnect: DisconnectCallback | None = None,
+        on_plan_image: PlanImageCallback | None = None,
         backoff: ExponentialBackoff | None = None,
+        dry_run: bool = False,
     ) -> Self:
         """Build a live client that connects to the real smartplace.ch.
 
@@ -354,8 +394,14 @@ class SmartPlaceClient:
                 reconnect-backoff sleep). HA wires this to fan
                 listeners out so entity ``available`` flips False
                 during the gap, instead of showing stale values.
+            on_plan_image: coroutine invoked after a floor plan image
+                in :attr:`plan_images` was fetched for the first time
+                or changed.
             backoff: optional reconnect schedule override (mainly for
                 tests).
+            dry_run: if True, :meth:`issue` does not transmit commands
+                flagged ``write``; it logs them at WARNING instead.
+                Reads (bootstrap, heartbeat, chart polls) are unaffected.
         """
         install_token_redaction_filter()
         live = _LiveSources(
@@ -374,7 +420,9 @@ class SmartPlaceClient:
             capture_path=Path(capture) if capture else None,
             on_reauth=on_reauth,
             on_disconnect=on_disconnect,
+            on_plan_image=on_plan_image,
             backoff=backoff or ExponentialBackoff(),
+            dry_run=dry_run,
             _live=live,
         )
 
@@ -456,17 +504,17 @@ class SmartPlaceClient:
             except SmartPlaceOfflineError:
                 # Installation offline — still transient; retry. Logged
                 # separately so the user sees the actual cause rather
-                # than a generic ``WS dropped``.
+                # than a generic connection error.
                 if self._closing:
                     return
                 delay = self._postrun_delay(run_start)
-                _LOGGER.info("Smart Place installation offline; retrying in %.1fs", delay)
+                self._log_outage("the installation is offline", delay)
                 await asyncio.sleep(delay)
             except Exception as err:  # noqa: BLE001
                 if self._closing:
                     return
                 delay = self._postrun_delay(run_start)
-                _LOGGER.warning("WS dropped: %s; retrying in %.1fs", err, delay)
+                self._log_outage(str(err) or type(err).__name__, delay)
                 await asyncio.sleep(delay)
             else:
                 # ``_run_live_once`` returned normally — the dispatch
@@ -480,8 +528,16 @@ class SmartPlaceClient:
                 if self._closing:
                     return
                 delay = self._postrun_delay(run_start)
-                _LOGGER.info("app WS closed by server; reconnecting in %.1fs", delay)
+                self._log_outage("the server closed the connection", delay)
                 await asyncio.sleep(delay)
+
+    def _log_outage(self, reason: str, delay: float) -> None:
+        """Log an outage once; further failed attempts of the same outage go to DEBUG."""
+        if self._outage_logged:
+            _LOGGER.debug("Smart Place server still unavailable (%s); retrying in %.1fs", reason, delay)
+            return
+        self._outage_logged = True
+        _LOGGER.warning("Smart Place server unavailable (%s); reconnecting", reason)
 
     def _postrun_delay(self, run_start: float) -> float:
         """Pick the next reconnect delay; reset backoff after a stable run.
@@ -515,8 +571,16 @@ class SmartPlaceClient:
         ``smart_place_client`` to ``info`` in HA's ``logger:`` config to
         see it. The log goes through the same token-redaction filter as
         every other line, so a token-bearing payload is scrubbed.
+
+        In dry-run mode a command flagged ``write`` is not transmitted:
+        it is logged at WARNING and the call returns as if it had been
+        sent. Raises :class:`SmartPlaceNotConnectedError` when the command
+        cannot be transmitted, ``ValueError`` when ``args`` are invalid.
         """
         wire = command.encode(*args)
+        if self.dry_run and command.write:
+            _LOGGER.warning("dry run: would send %s (%s)", command.name, wire)
+            return
         # Send first: if the WS isn't open ``send`` raises and we must
         # NOT claim the command was issued (the door press didn't fire).
         await self.send(wire)
@@ -527,11 +591,11 @@ class SmartPlaceClient:
         """Send a text frame to the server (live) or log it (replay).
 
         Low-level transport: prefer :meth:`issue` for registered
-        commands so they reach the audit trail. Per the
-        ``smart-place-observe-only`` memory: live mode has no software
-        gate. If you don't want to issue commands, don't call ``send()``.
-        Replay mode appends to an in-memory log instead of contacting the
-        network.
+        commands so they reach the audit trail and honour dry-run mode;
+        ``send`` itself has no gate. Live mode transmits on the app
+        WebSocket only and raises :class:`SmartPlaceNotConnectedError`
+        when that socket is not open or closes during the write. Replay
+        mode appends to an in-memory log instead of contacting the network.
         """
         frame = encode_frame(text)
         captured = CapturedFrame(
@@ -539,13 +603,17 @@ class SmartPlaceClient:
             ts=_now_ts(),
             text=frame,
         )
-        self._write_capture(captured)
         if self._live is not None:
             if self._ws is None or self._ws.closed:
-                raise RuntimeError("send() called before the app WS is open")
-            await self._ws.send_str(frame)
+                raise SmartPlaceNotConnectedError("the Smart Place app connection is not open")
+            try:
+                await self._ws.send_str(frame)
+            except (aiohttp.ClientError, ConnectionError) as err:
+                raise SmartPlaceNotConnectedError("the Smart Place app connection closed while sending") from err
+            self._write_capture(captured)
             _LOGGER.debug("sent: %s", frame)
         elif self._replay is not None:
+            self._write_capture(captured)
             self._replay.sent_log.append(captured)
             _LOGGER.debug("replay: send recorded (not transmitted): %s", frame)
         else:
@@ -554,8 +622,9 @@ class SmartPlaceClient:
     async def aclose(self) -> None:
         """Close the WS and any owned aiohttp session. Idempotent."""
         self._closing = True
-        if self._ws is not None and not self._ws.closed:
-            await self._ws.close()
+        for ws in (self._ws, self._discovery_ws):
+            if ws is not None and not ws.closed:
+                await ws.close()
         if self._live is not None and self._live.own_session and self._live.session is not None:
             await self._live.session.close()
         self.state.close()
@@ -580,15 +649,12 @@ class SmartPlaceClient:
 
     @property
     def connected(self) -> bool:
-        """True iff an app/discovery WS is currently open.
+        """True iff the app WS is currently open.
 
-        ``SessionState.phase`` alone is not enough to gate entity
-        availability: when the WS drops, ``_run_live_once`` clears
-        ``self._ws`` but the phase stays at ``READY`` / ``BOOTSTRAPPED``
-        until the next handshake's ``on_app_open`` fires, which can
-        be many backoff seconds away. Pair this with the phase check
-        in the HA layer so entities flip ``available=False`` for the
-        whole gap, not just up to the disconnect.
+        Pair this with the session phase in the HA layer: the phase tells
+        how far the current connection got, this tells whether there is a
+        connection at all (the phase is only reset when the next attempt
+        starts, which can be many backoff seconds after a drop).
         """
         return self._ws is not None and not self._ws.closed
 
@@ -778,6 +844,10 @@ class SmartPlaceClient:
         if self._live.session is None:
             self._live.session = aiohttp.ClientSession()
         session: aiohttp.ClientSession = self._live.session
+        # Nothing of the previous connection may describe this one: a stale
+        # READY phase made the client look healthy during re-discovery.
+        self.state.reset_connection()
+        self._bootstrap_done.clear()
 
         ws_url = discovery_ws_url(self._live.token)
         _LOGGER.info("opening discovery WS: %s", ws_url)
@@ -794,7 +864,7 @@ class SmartPlaceClient:
                 heartbeat=self._live.heartbeat,
             ) as discovery_ws,
         ):
-            self._ws = discovery_ws
+            self._discovery_ws = discovery_ws
             first_msg = await discovery_ws.receive()
             if first_msg.type is not aiohttp.WSMsgType.TEXT:
                 raise ProtocolError(
@@ -811,7 +881,7 @@ class SmartPlaceClient:
             route = _interpret_discovery_frame(frame)
             self.state.on_discovery_frame(route)
 
-        self._ws = None
+        self._discovery_ws = None
         _LOGGER.info("discovery routed to %s:%s%s", route.host, route.port, route.path or "")
 
         # Step 3: fetch routed page as the browser iframe would.
@@ -850,6 +920,9 @@ class SmartPlaceClient:
             # this lease lapses while the WS stays up (see camera.py).
             self._seed_camera_route(route)
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
+            if self._outage_logged:
+                self._outage_logged = False
+                _LOGGER.info("Smart Place server connection restored")
 
             # Bootstrap reads (DESIGN §10):
             #   1. Commands.StatusContent -> StatusEntry rows +
@@ -911,7 +984,7 @@ class SmartPlaceClient:
                 # Dispatch loop.
                 await self._dispatch_loop(_aiter_ws_text(app_ws))
             finally:
-                for task_attr in ("_chart_poll_task", "_heartbeat_task"):
+                for task_attr in ("_chart_poll_task", "_heartbeat_task", "_plan_task"):
                     task: asyncio.Task[None] | None = getattr(self, task_attr)
                     if task is not None:
                         task.cancel()
@@ -1018,7 +1091,7 @@ class SmartPlaceClient:
                 return
             try:
                 await self.issue(Commands.Ping)
-            except (RuntimeError, ConnectionError) as err:
+            except SmartPlaceNotConnectedError as err:
                 _LOGGER.debug("heartbeat send failed (%s); stopping", err)
                 return
 
@@ -1053,7 +1126,7 @@ class SmartPlaceClient:
                     return
                 try:
                     await self.issue(Commands.ChartStands, cid)
-                except (RuntimeError, ConnectionError) as err:
+                except SmartPlaceNotConnectedError as err:
                     _LOGGER.debug("chart poll send failed (%s); stopping", err)
                     return
             if not await self._poll_chart_ranges():
@@ -1066,15 +1139,80 @@ class SmartPlaceClient:
         caller stops its loop (mirrors the ``ChartStands`` poll).
         """
         von, bis = today_range_epochs()
+        # The replies do not say which range they cover; the state fold
+        # stamps them with this.
+        self.state.chart_range_request = von
         for cid in sorted(self.state.chart_ids):
             if self._closing or self._ws is None or self._ws.closed:
                 return False
             try:
                 await self.issue(Commands.ChartStandRange, cid, von, bis)
-            except (RuntimeError, ConnectionError) as err:
+            except SmartPlaceNotConnectedError as err:
                 _LOGGER.debug("chart range poll send failed (%s); stopping", err)
                 return False
         return True
+
+    def _start_plan_fetch(self) -> None:
+        """Fetch the floor plan images in the background (live mode only)."""
+        if self._live is None:
+            return
+        if self._plan_task is not None:
+            self._plan_task.cancel()
+        self._plan_task = asyncio.create_task(self._fetch_plan_images(), name="smart_place_plan_images")
+
+    async def _fetch_plan_images(self) -> None:
+        """Fetch the image of every plan the server listed; report changes.
+
+        Only ids from ``Floorplan<n>`` frames are fetched: other ids
+        return a vendor sample image or hang.
+        """
+        changed = False
+        for plan_id in sorted(self.state.plan_ids):
+            image = await self._fetch_plan_image(plan_id)
+            if image is not None and image != self.plan_images.get(plan_id):
+                self.plan_images[plan_id] = image
+                changed = True
+        if changed and self.on_plan_image is not None:
+            try:
+                await self.on_plan_image()
+            except Exception:
+                _LOGGER.exception("on_plan_image callback raised")
+
+    async def _fetch_plan_image(self, plan_id: int) -> PlanImage | None:
+        """GET one plan image; re-mint the route once if the fetch fails.
+
+        Right after a connect the routed port is freshly leased, so the
+        first attempt works. A later re-fetch (``FloorGedreht``) can meet
+        a lapsed lease, like the cameras do.
+        """
+        assert self._live is not None
+        assert self._live.session is not None
+        for attempt in range(2):
+            route = self._camera_route
+            if route is None:
+                return None
+            try:
+                async with (
+                    asyncio.timeout(PLAN_IMAGE_TIMEOUT),
+                    self._live.session.get(
+                        _plan_image_url(route, plan_id),
+                        headers={"User-Agent": USER_AGENT},
+                    ) as response,
+                ):
+                    response.raise_for_status()
+                    content = await response.read()
+            except (TimeoutError, aiohttp.ClientError) as err:
+                _LOGGER.debug("plan image %d fetch failed (attempt %d): %s", plan_id, attempt + 1, err)
+                if attempt == 0:
+                    await self.refresh_camera_route(f"plan image {plan_id}")
+                continue
+            size = png_size(content)
+            if size is None:
+                _LOGGER.warning("plan image %d is not a PNG; ignoring it", plan_id)
+                return None
+            return PlanImage(content=content, digest=hashlib.sha256(content).hexdigest(), width=size[0], height=size[1])
+        _LOGGER.warning("plan image %d could not be fetched", plan_id)
+        return None
 
     async def _dispatch_loop(self, source: AsyncIterator[str]) -> None:
         async for text in source:
@@ -1082,10 +1220,11 @@ class SmartPlaceClient:
             try:
                 frame = parse_frame(text)
             except ProtocolError as err:
-                _LOGGER.warning("parse error %s on frame %r — skipping", err, text)
+                _LOGGER.warning("parse error %s on frame %r — skipping", err, scrub_secrets(text))
                 continue
 
             if isinstance(frame, UnknownFrame):
+                _LOGGER.debug("unknown frame: %s", scrub_secrets(frame.raw))
                 self._log_unknown(frame)
 
             current_phase = self.state.phase
@@ -1101,8 +1240,11 @@ class SmartPlaceClient:
                 self.state.on_app_frame(frame)
 
             if isinstance(frame, NamedFields) and frame.name == "MainMenuFinished":
-                if not self._bootstrap_done.is_set():
-                    self._bootstrap_done.set()
+                self._bootstrap_done.set()
+                self._start_plan_fetch()
+
+            if isinstance(frame, NamedValue) and frame.name == "FloorplanRotated":
+                self._start_plan_fetch()
 
             if isinstance(frame, NamedFields) and frame.name == "PongOK":
                 self._last_pong = asyncio.get_running_loop().time()
@@ -1126,7 +1268,7 @@ class SmartPlaceClient:
         if self._capture_handle is None:
             self.capture_path.parent.mkdir(parents=True, exist_ok=True)
             self._capture_handle = self.capture_path.open("a", encoding="utf-8")
-        scrubbed_text = _scrub_token(frame.text)
+        scrubbed_text = scrub_secrets(frame.text)
         sanitized = CapturedFrame(
             direction=frame.direction,
             ts=frame.ts,
@@ -1154,7 +1296,7 @@ class SmartPlaceClient:
         entry = {
             "ts": ts,
             "iso_ts": datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec="milliseconds"),
-            "raw": _scrub_token(frame.raw),
+            "raw": scrub_secrets(frame.raw),
         }
         self._unknown_handle.write(json.dumps(entry, ensure_ascii=False) + "\n")  # type: ignore[attr-defined]
         self._unknown_handle.flush()  # type: ignore[attr-defined]
@@ -1168,9 +1310,14 @@ def _now_ts() -> float:
     return datetime.now(tz=UTC).timestamp()
 
 
-def _scrub_token(text: str) -> str:
-    """Apply the same redaction the log filter does, for capture lines."""
-    return _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", text))
+def scrub_secrets(text: str) -> str:
+    """Replace URL tokens and credential-frame payloads with ``<REDACTED>``.
+
+    The one redaction every written frame goes through: log records,
+    capture lines and the unknown-frame log.
+    """
+    text = _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", text))
+    return _CREDENTIAL_FRAME.sub(r"\1<REDACTED>", text)
 
 
 async def _aiter_ws_text(ws: aiohttp.ClientWebSocketResponse) -> AsyncIterator[str]:
@@ -1251,6 +1398,12 @@ def _build_cli(click: Any) -> Callable[..., None]:
         help="Tee every frame (both directions, token-redacted) to this file.",
     )
     @click.option(
+        "--allow-send",
+        is_flag=True,
+        default=False,
+        help="With --live: send lines typed on stdin to the real server. Without it they are logged and dropped.",
+    )
+    @click.option(
         "--log-level",
         default="INFO",
         type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
@@ -1260,14 +1413,16 @@ def _build_cli(click: Any) -> Callable[..., None]:
         live_mode: bool,
         replay_path: Path | None,
         capture_path: Path | None,
+        allow_send: bool,
         log_level: str,
     ) -> None:
         """Smart Place CLI — observe and (carefully) interact with the live system.
 
-        Exactly one of --live and --replay <file> is required. Either
-        mode is bidirectional: server frames print to stdout, lines
-        typed on stdin are sent. There is no software gate against
-        accidental sends — see DESIGN.md §5.3.
+        Exactly one of --live and --replay <file> is required. Server
+        frames print to stdout. Lines typed on stdin are recorded but
+        never transmitted in --replay mode; in --live mode they are
+        dropped unless --allow-send is given, in which case every line
+        goes to the real server and can switch real devices.
 
         In --live mode, frames the parser doesn't recognise are always
         appended to ``output/unknown_frames.ndjson`` (gitignored) so
@@ -1279,7 +1434,7 @@ def _build_cli(click: Any) -> Callable[..., None]:
         logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         install_token_redaction_filter()
 
-        asyncio.run(_run_cli(live_mode, replay_path, capture_path))
+        asyncio.run(_run_cli(live_mode, replay_path, capture_path, allow_send=allow_send))
 
     return cli
 
@@ -1295,8 +1450,10 @@ async def _run_cli(
     live_mode: bool,
     replay_path: Path | None,
     capture_path: Path | None,
+    *,
+    allow_send: bool = False,
 ) -> None:
-    """Async body of the CLI: print server frames, send stdin lines."""
+    """Async body of the CLI: print server frames, handle stdin lines."""
 
     async def printer(frame: ServerFrame) -> None:
         ts = datetime.now(tz=UTC).isoformat(timespec="milliseconds")
@@ -1330,7 +1487,11 @@ async def _run_cli(
 
     async with client:
         runner = asyncio.create_task(client.run(), name="sp-cli-run")
-        sender = asyncio.create_task(_stdin_pump(client), name="sp-cli-stdin")
+        # Replay never transmits, so stdin lines are always accepted there.
+        sender = asyncio.create_task(
+            _stdin_pump(client, allow_send=allow_send or not live_mode),
+            name="sp-cli-stdin",
+        )
         try:
             # The runner is the primary task. If stdin closes (EOF) the sender
             # exits early and that's fine — the user explicitly wanted
@@ -1346,11 +1507,12 @@ async def _run_cli(
             raise exc
 
 
-async def _stdin_pump(client: SmartPlaceClient) -> None:
-    """Read lines from stdin and feed them to ``client.send``.
+async def _stdin_pump(client: SmartPlaceClient, *, allow_send: bool) -> None:
+    """Read lines from stdin and feed them to ``client.send`` if allowed.
 
-    Each line is a single text frame. Empty lines are ignored. Closing
-    stdin (Ctrl-D) ends the pump and causes the CLI to exit.
+    Each line is a single text frame. Empty lines are ignored. Without
+    ``allow_send`` a line is logged and dropped. Closing stdin (Ctrl-D)
+    ends the pump.
     """
     loop = asyncio.get_running_loop()
     while True:
@@ -1359,6 +1521,9 @@ async def _stdin_pump(client: SmartPlaceClient) -> None:
             return
         line = line.rstrip("\n")
         if not line:
+            continue
+        if not allow_send:
+            _LOGGER.warning("not sent (start with --allow-send to send to the real server): %s", line)
             continue
         try:
             await client.send(line)

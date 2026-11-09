@@ -19,6 +19,22 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING, TypeVar
 
+from .devices import (
+    BlindConfig,
+    BlindValue,
+    ClimateZoneConfig,
+    LightConfig,
+    PlanConfig,
+    SceneConfig,
+    SubMenuConfig,
+    parse_blind_config,
+    parse_blind_value,
+    parse_climate_config,
+    parse_light_config,
+    parse_plan_config,
+    parse_scene_config,
+    parse_sub_menu,
+)
 from .protocol import NamedFields, NamedValue, Temperature, parse_unit_hints
 
 if TYPE_CHECKING:
@@ -30,7 +46,7 @@ _V = TypeVar("_V")
 
 # Strip the trailing site code the SPA appends to chart titles, e.g.
 # "Elektro XX00-00-00" -> "Elektro". Pattern is a hyphenated alnum tail
-# (typical: "XX00-00-00", "HHnn-nn-nn"); trimmed defensively, never raises.
+# (typical: "XX00-00-00", "XXnn-nn-nn"); trimmed defensively, never raises.
 _CHART_SITE_SUFFIX_RE = re.compile(r"\s+[A-Z]{2,}\d+-\d+-\d+(?:\s+.*)?$")
 
 # Light German -> English mapping for the chart labels we see. Only
@@ -49,11 +65,6 @@ _CHART_LABEL_GERMAN_TO_ENGLISH: dict[str, str] = {
     "SUMME Kaltwasser": "Cold water",
     "SUMME Warmwasser": "Hot water",
 }
-
-# ClimateConfig values look like "Bedroom heating" — for sensor naming
-# we want just the room ("Bedroom"). The vendor SPA names climate
-# zones with this trailing "heating" / "Heizung" tag.
-_CLIMATE_ROOM_TAIL_RE = re.compile(r"\s+(?:heating|Heizung)\s*$", re.IGNORECASE)
 
 # Intercom CALLINFO values are German location labels for the building's
 # call points (front door, mailbox, ...). Only tokens we've observed
@@ -118,6 +129,11 @@ _SUMME_CONSTITUENT_RE = re.compile(r"SummeForDiagramm-(\d+)")
 CHART_RANGE_SERIES_TOTAL: int = 98
 CHART_RANGE_SERIES_HIGH_TARIFF: int = 97
 CHART_RANGE_SERIES_LOW_TARIFF: int = 96
+
+# Per-device value frames folded by ``SmartPlaceState._apply_control_value``.
+_CONTROL_VALUE_FRAMES: frozenset[str] = frozenset(
+    {"SceneState", "LightState", "BlindState", "TemperatureSetpoint", "ClimateInfo", "Mute"},
+)
 
 # Parcel-box unlock PIN, extracted from the free-text ``PERSINFO``
 # banner. Empirically a real delivery does NOT set ``PACKETBOX<N>:<code>``
@@ -191,11 +207,6 @@ def _clean_chart_label(raw: str) -> str:
         if cleaned.startswith(german):
             return (english + cleaned[len(german) :]).strip()
     return cleaned
-
-
-def _climate_zone_room(raw: str) -> str:
-    """Drop the trailing ``heating`` tag so the name reads as a room."""
-    return _CLIMATE_ROOM_TAIL_RE.sub("", raw).strip()
 
 
 def _alarm_on(raw: str) -> bool:
@@ -327,6 +338,39 @@ class SmartPlaceState:
     # with ``gsa_cameras`` 1:1, so the camera platform names each camera
     # from the matching label.
     gsa_door_labels: dict[int, str] = field(default_factory=dict)
+    # Start (epoch seconds) of the range the client last requested with
+    # ``Commands.ChartStandRange``. The owner copies it from
+    # ``SessionState.chart_range_request`` before folding frames; a complete
+    # reply is stamped with it in ``chart_today_starts``.
+    chart_range_request: int | None = None
+    # Chart id -> start of the day its ``chart_today_buckets`` cover.
+    chart_today_starts: dict[int, int] = field(default_factory=dict)
+    # Device descriptions from the ``GiveMeMainmenu`` reply, by vendor id.
+    lights: dict[int, LightConfig] = field(default_factory=dict)
+    blinds: dict[int, BlindConfig] = field(default_factory=dict)
+    climate: dict[int, ClimateZoneConfig] = field(default_factory=dict)
+    scene_configs: dict[int, SceneConfig] = field(default_factory=dict)
+    light_sub_menus: dict[int, SubMenuConfig] = field(default_factory=dict)
+    blind_sub_menus: dict[int, SubMenuConfig] = field(default_factory=dict)
+    plans: dict[int, PlanConfig] = field(default_factory=dict)
+    # Control values. They describe the current connection only: a value
+    # from before a reconnect must never decide a toggle command, so
+    # ``clear_control_values`` empties them when the connection drops
+    # (``scene_states`` above is cleared with them).
+    # ``leuchte<N>`` level 0..255; 0 = off, anything above = on.
+    light_levels: dict[int, int] = field(default_factory=dict)
+    # ``JALICO<N>`` position or weather alarm.
+    blind_values: dict[int, BlindValue] = field(default_factory=dict)
+    # ``TEMPSOLL<N>`` setpoint in whole degrees; 18 = heating off.
+    setpoints: dict[int, int] = field(default_factory=dict)
+    # ``KLIMASINFO<N>``: ``heizen`` / ``kuehlen``, ``None`` for ``null``.
+    climate_info: dict[int, str | None] = field(default_factory=dict)
+    # ``MUTE<N>`` doorbell mute.
+    mutes: dict[int, bool] = field(default_factory=dict)
+    # Series of a ``ChartStandRange`` reply that is still arriving. Folded
+    # into ``chart_today_buckets`` in one step so no consumer sees the
+    # high-tariff bucket of one day next to the low-tariff bucket of another.
+    _range_pending: dict[int, dict[int, float]] = field(default_factory=dict, repr=False)
 
     def apply(self, frame: ServerFrame) -> bool:
         """Fold one frame into the snapshot; return whether anything changed.
@@ -395,19 +439,20 @@ class SmartPlaceState:
             return self._apply_chart_stand(frame.value)
         if name == "ChartRangeStand" and frame.index is not None:
             return self._apply_chart_range_stand(frame.index, frame.value)
+        if name == "ChartRangeEndReading" and frame.index is not None:
+            return self._commit_chart_range(frame.index)
         if name == "ChartDefinition" and frame.index is not None:
             return self._apply_chart_definition(frame.index, frame.value)
-        if name == "SceneState" and frame.index is not None:
-            return _set_key(self.scene_states, frame.index, _alarm_on(frame.value))
+        if name in _CONTROL_VALUE_FRAMES and frame.index is not None:
+            return self._apply_control_value(name, frame.index, frame.value)
         # ``LightsCentral`` (LEUCHTENZENTRAL<N>) and ``BlindsCentral``
         # (JALZENTRAL<N>) are deliberately NOT folded: each is the
         # state of the SPA's per-type "All" master button, not an
         # aggregate (verified live 2026-06-11 — LEUCHTENZENTRAL1 read
         # 00 while two ``leuchte<n>`` loads were at 255; the blinds
         # menu wires JALZENTRAL1 to the same button mechanism). The
-        # truthful sources are the per-device pushes — ``leuchte<n>``
-        # (``LightState``) and ``JALICO<n>`` — fold those instead
-        # when light/blind support lands.
+        # truthful sources are the per-device pushes ``leuchte<n>``
+        # (``LightState``) and ``JALICO<n>`` (``BlindState``) above.
         if name == "Humidity" and frame.index is not None:
             # Clear a known zone to ``None`` on an invalid payload so its
             # reading goes ``unknown`` instead of stale — but don't surface a
@@ -438,14 +483,76 @@ class SmartPlaceState:
             return True
         return False
 
+    def _apply_control_value(self, name: str, index: int, raw: str) -> bool:
+        """Fold one per-device control value (see ``clear_control_values``)."""
+        if name == "SceneState":
+            return _set_key(self.scene_states, index, _alarm_on(raw))
+        if name == "LightState":
+            level = _safe_float(raw)
+            return level is not None and _set_key(self.light_levels, index, round(level))
+        if name == "BlindState":
+            value = parse_blind_value(raw)
+            return value is not None and _set_key(self.blind_values, index, value)
+        if name == "TemperatureSetpoint":
+            setpoint = _safe_float(raw)
+            return setpoint is not None and _set_key(self.setpoints, index, round(setpoint))
+        if name == "ClimateInfo":
+            return _set_key(self.climate_info, index, None if raw == "null" else raw)
+        return _set_key(self.mutes, index, _alarm_on(raw))
+
     def _apply_named_fields(self, frame: NamedFields) -> bool:
-        if frame.name == "ClimateConfig" and frame.index is not None and frame.fields:
-            return _set_key(self.climate_zones, frame.index, _climate_zone_room(frame.fields[0]))
-        if frame.name == "SceneConfig" and frame.index is not None and frame.fields:
-            return _set_key(self.scenes, frame.index, frame.fields[0])
-        if frame.name == "GsaConfig":
+        name = frame.name
+        if name == "ClimateConfig":
+            zone = parse_climate_config(frame)
+            if zone is None:
+                return False
+            # ``climate_zones`` (room names) feeds the per-zone sensors.
+            names_changed = _set_key(self.climate_zones, zone.id, zone.room)
+            return _set_key(self.climate, zone.id, zone) or names_changed
+        if name == "SceneConfig" and frame.index is not None and frame.fields:
+            names_changed = _set_key(self.scenes, frame.index, frame.fields[0])
+            scene = parse_scene_config(frame)
+            return (scene is not None and _set_key(self.scene_configs, scene.id, scene)) or names_changed
+        if name == "LightConfig":
+            light = parse_light_config(frame)
+            return light is not None and _set_key(self.lights, light.id, light)
+        if name == "BlindConfig":
+            blind = parse_blind_config(frame)
+            return blind is not None and _set_key(self.blinds, blind.id, blind)
+        if name == "LightSubMenu":
+            menu = parse_sub_menu(frame)
+            return menu is not None and _set_key(self.light_sub_menus, menu.id, menu)
+        if name == "BlindSubMenu":
+            menu = parse_sub_menu(frame)
+            return menu is not None and _set_key(self.blind_sub_menus, menu.id, menu)
+        if name == "Floorplan":
+            plan = parse_plan_config(frame)
+            return plan is not None and _set_key(self.plans, plan.id, plan)
+        if name == "GsaConfig":
             return self._apply_gsa_config(frame)
         return False
+
+    def clear_control_values(self) -> bool:
+        """Forget every control value; return whether anything was stored.
+
+        Called when the connection drops. The server replays all values
+        after a reconnect, so entities read "unknown" until then instead of
+        deciding a toggle against a value that may have changed meanwhile.
+        """
+        stores = (
+            self.light_levels,
+            self.blind_values,
+            self.setpoints,
+            self.climate_info,
+            self.scene_states,
+            self.mutes,
+        )
+        changed = any(stores)
+        for store in stores:
+            store.clear()
+        # A reply cut off by the disconnect must not be completed by the next one.
+        self._range_pending.clear()
+        return changed
 
     def _apply_gsa_config(self, frame: NamedFields) -> bool:
         """Fold the ``GlobalGsa`` reply: intercom cameras + door labels.
@@ -497,11 +604,12 @@ class SmartPlaceState:
         return _set_key(self.charts.setdefault(chart_id, ChartReading(unit="")).stands, series, reading)
 
     def _apply_chart_range_stand(self, chart_id: int, payload: str) -> bool:
-        """Fold a ``SingelStandUpdate<id>:<series>:<kWh>::::`` range bucket.
+        """Hold a ``SingelStandUpdate<id>:<series>:<kWh>::::`` range bucket.
 
-        Non-numeric readings (e.g. the PV chart's ``Keine Werte``) are
-        dropped rather than clearing a previous value — a poll gap should
-        not zero the cost sensors mid-day.
+        The bucket only becomes visible when the reply's last frame
+        arrives (see ``_commit_chart_range``). Non-numeric readings (e.g.
+        the PV chart's ``Keine Werte``) are dropped rather than clearing a
+        previous value — a poll gap should not zero the cost sensors mid-day.
         """
         series_raw, _, rest = payload.partition(":")
         try:
@@ -509,9 +617,27 @@ class SmartPlaceState:
         except ValueError:
             return False
         value = _safe_float(rest.split(":", 1)[0])
-        if value is None:
+        if value is not None:
+            self._range_pending.setdefault(chart_id, {})[series] = value
+        return False
+
+    def _commit_chart_range(self, chart_id: int) -> bool:
+        """Publish the buckets of a complete range reply in one step.
+
+        ``SingelStand3Update<id>`` is the last frame of a reply (order
+        98, 97, 96, start register, end register — captured 2026-07-13).
+        Publishing per frame exposed a mix of two days right after
+        midnight: the new day's high-tariff bucket beside the old day's
+        low-tariff bucket.
+        """
+        pending = self._range_pending.pop(chart_id, None)
+        if not pending:
             return False
-        return _set_key(self.chart_today_buckets.setdefault(chart_id, {}), series, value)
+        buckets = {**self.chart_today_buckets.get(chart_id, {}), **pending}
+        changed = _set_key(self.chart_today_buckets, chart_id, buckets)
+        if self.chart_range_request is not None:
+            changed = _set_key(self.chart_today_starts, chart_id, self.chart_range_request) or changed
+        return changed
 
     def _apply_chart_definition(self, chart_id: int, payload: str) -> bool:
         """Fold ``SingelDiagramm<id>:<title>;<...>;<category>;<unit>;...``.

@@ -114,7 +114,7 @@ def test_apply_climate_config_strips_heating_tail() -> None:
 
 def test_apply_chart_definition_extracts_label_category_unit() -> None:
     """``ChartDefinition`` fills ``label`` / ``category`` / ``unit`` on the chart."""
-    raw = "Elektro XX00-00-00;Area;Zeit;Verbrauch in Kw/h;Elektro=49=rgba(206,0,105,0.9)=rgba(206, 0, 105, 0.2);===;===;===;;CHF;0.1788;0.1249;0000000;Elektro;kWh;smartPLACE_Elektro;63;XX00-00-00 UG 11U2"
+    raw = "Elektro XX00-00-00;Area;Zeit;Verbrauch in Kw/h;Elektro=49=rgba(206,0,105,0.9)=rgba(206, 0, 105, 0.2);===;===;===;;CHF;0.1788;0.1249;0000000;Elektro;kWh;smartPLACE_Elektro;63;XX00-00-00"
     state = SmartPlaceState()
     state.apply(NamedValue(name="ChartDefinition", value=raw, index=49))
     chart = state.charts[49]
@@ -148,7 +148,7 @@ def test_apply_chart_definition_translates_mojibake_waerme() -> None:
     chart-label map — which the mojibake used to silently defeat —
     matches ``Wärme``.
     """
-    raw = "SingelDiagramm144:WÃ¤rme XX00-00-00;Area;Zeit;Verbrauch in Kw/h;WÃ¤rme=144=rgba=rgba;===;===;===;;CHF;0.9;;0000000;Energie;kWh;smartPLACE_Energie_W;53;XX00-00-00 DG 11U3"
+    raw = "SingelDiagramm144:WÃ¤rme XX00-00-00;Area;Zeit;Verbrauch in Kw/h;WÃ¤rme=144=rgba=rgba;===;===;===;;CHF;0.9;;0000000;Energie;kWh;smartPLACE_Energie_W;53;XX00-00-00"
     state = SmartPlaceState()
     state.apply(parse_frame(raw))
     assert state.charts[144].label == "Heating"
@@ -429,30 +429,72 @@ def test_apply_change_detection_across_frame_kinds() -> None:
     assert state.apply(NamedValue(name="LightsCentral", value="01", index=1)) is False
 
 
-def test_apply_chart_range_stand_folds_tariff_buckets() -> None:
-    """``SingelStandUpdate<id>`` range replies land in ``chart_today_buckets``.
+# Real reply to ``SingelStandUpdate:49:<von>:<bis>`` (2026-07-13 probe), in arrival order.
+_RANGE_REPLY = (
+    "SingelStandUpdate49:98:63.357::::",
+    "SingelStandUpdate49:97:41.0819999999999::::",
+    "SingelStandUpdate49:96:22.2750000000001::::",
+    "SingelStand2Update49:99:4744.52",
+    "SingelStand3Update49:99:4807.877",
+)
 
-    Wire shapes are the live 2026-07-13 probe captures: series 97 = HT,
-    96 = NT, 98 = total, with '::::'-padding after the reading.
+
+def test_apply_chart_range_reply_publishes_buckets_in_one_step() -> None:
+    """Range buckets become visible with the reply's last frame, not one by one.
+
+    Series 97 = HT, 96 = NT, 98 = total, with '::::'-padding after the
+    reading. Publishing per frame showed the new day's HT bucket next to
+    the old day's NT bucket right after midnight.
     """
     state = SmartPlaceState()
-    assert state.apply(parse_frame("SingelStandUpdate49:97:41.0819999999999::::")) is True
-    assert state.apply(parse_frame("SingelStandUpdate49:96:22.2750000000001::::")) is True
-    assert state.apply(parse_frame("SingelStandUpdate49:98:63.357::::")) is True
-    buckets = state.chart_today_buckets[49]
-    assert buckets[97] == 41.0819999999999
-    assert buckets[96] == 22.2750000000001
-    assert buckets[98] == 63.357
-    # Re-sending the same reading is a no-op (fan-out gate).
-    assert state.apply(parse_frame("SingelStandUpdate49:98:63.357::::")) is False
+    for text in _RANGE_REPLY[:-1]:
+        assert state.apply(parse_frame(text)) is False
+        assert state.chart_today_buckets == {}
+    assert state.apply(parse_frame(_RANGE_REPLY[-1])) is True
+    assert state.chart_today_buckets[49] == {98: 63.357, 97: 41.0819999999999, 96: 22.2750000000001}
+    # Re-sending the same reply is a no-op (fan-out gate).
+    assert [state.apply(parse_frame(text)) for text in _RANGE_REPLY] == [False] * 5
+
+
+def test_apply_chart_range_reply_is_stamped_with_the_requested_day() -> None:
+    """A complete reply records which day its buckets cover."""
+    state = SmartPlaceState()
+    state.chart_range_request = 1783893600
+    for text in _RANGE_REPLY:
+        state.apply(parse_frame(text))
+    assert state.chart_today_starts == {49: 1783893600}
+    # The next day's request does not relabel yesterday's buckets ...
+    state.chart_range_request = 1783980000
+    assert state.chart_today_starts == {49: 1783893600}
+    for text in ("SingelStandUpdate49:97:0::::", "SingelStandUpdate49:96:0.02::::"):
+        assert state.apply(parse_frame(text)) is False
+    assert state.chart_today_buckets[49][96] == 22.2750000000001
+    # ... its own complete reply does, together with the new values.
+    assert state.apply(parse_frame("SingelStand3Update49:99:4807.9")) is True
+    assert state.chart_today_starts == {49: 1783980000}
+    assert state.chart_today_buckets[49] == {98: 63.357, 97: 0.0, 96: 0.02}
 
 
 def test_apply_chart_range_stand_ignores_non_numeric_readings() -> None:
-    """'Keine Werte' (the dead PV chart) must not clear or crash anything."""
+    """'Keine Werte' (the dead PV chart) must not clear, restamp or crash anything."""
     state = SmartPlaceState()
+    state.chart_range_request = 100
     state.apply(parse_frame("SingelStandUpdate904:98:5.0::::"))
+    state.apply(parse_frame("SingelStand3Update904:99:1.0"))
+    state.chart_range_request = 200
     assert state.apply(parse_frame("SingelStandUpdate904:98:Keine Werte::::")) is False
+    assert state.apply(parse_frame("SingelStand3Update904:99:Keine Werte")) is False
     assert state.chart_today_buckets[904][98] == 5.0
+    assert state.chart_today_starts == {904: 100}
+
+
+def test_clear_control_values_drops_a_half_received_range_reply() -> None:
+    """A reply cut off by a disconnect is not completed by the next connection."""
+    state = SmartPlaceState()
+    state.apply(parse_frame("SingelStandUpdate49:97:41.0::::"))
+    state.clear_control_values()
+    assert state.apply(parse_frame("SingelStand3Update49:99:4807.877")) is False
+    assert state.chart_today_buckets == {}
 
 
 def test_chart_range_registers_parse_but_do_not_fold() -> None:
@@ -462,3 +504,151 @@ def test_chart_range_registers_parse_but_do_not_fold() -> None:
     assert state.apply(parse_frame("SingelStand3Update49:99:4807.877")) is False
     assert state.apply(parse_frame("FinishSingelChartUpdate49")) is False
     assert not state.chart_today_buckets
+
+
+# ------------------------- control devices ---------------------------
+#
+# Wire strings below are frames from the 2026-11-09 capture.
+
+
+def test_apply_light_config_and_level() -> None:
+    """``INHALTLeuchten<n>`` describes the light, ``leuchte<n>`` carries its level."""
+    state = SmartPlaceState()
+    assert (
+        state.apply(
+            parse_frame("INHALTLeuchten14:Big bathroom lights,126px,544px,led,,dimmkurve1,Uebersicht1,,MemoryOFF"),
+        )
+        is True
+    )
+    assert state.lights[14].name == "Big bathroom lights"
+    assert (state.lights[14].top, state.lights[14].left) == (126, 544)
+    assert state.apply(parse_frame("leuchte14:250")) is True
+    assert state.apply(parse_frame("leuchte13:0")) is True
+    assert state.light_levels == {14: 250, 13: 0}
+    # Rebroadcasts of unchanged frames do not wake the entities.
+    assert state.apply(parse_frame("leuchte14:250")) is False
+    assert (
+        state.apply(
+            parse_frame("INHALTLeuchten14:Big bathroom lights,126px,544px,led,,dimmkurve1,Uebersicht1,,MemoryOFF"),
+        )
+        is False
+    )
+
+
+def test_apply_light_level_ignores_non_numeric_value() -> None:
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("leuchte14:on")) is False
+    assert state.light_levels == {}
+
+
+def test_apply_blind_config_and_value() -> None:
+    """``JALICO<n>`` folds to a position or a weather alarm."""
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("INHALTJalousien1:Bath blinds,127px,778px,jalousie,,60,Uebersicht1")) is True
+    assert state.blinds[1].kind == "jalousie"
+    assert state.apply(parse_frame("JALICO1:48-00")) is True
+    assert state.apply(parse_frame("JALICO2:regenalarm-00")) is True
+    assert state.blind_values[1].position == 48
+    assert state.blind_values[2].position is None
+    assert state.blind_values[2].alarm == "rain"
+    assert state.apply(parse_frame("JALICO1:48-00")) is False
+    assert state.apply(parse_frame("JALICO1:50-00")) is True
+
+
+def test_apply_climate_config_keeps_room_names_for_the_sensors() -> None:
+    """The typed zone and the plain room-name map come from the same frame."""
+    state = SmartPlaceState()
+    frame = parse_frame("INHALTKlimas5:Large bathroom heating,108px,569px,Heizen,,rgb(0- 0- 0),Uebersicht1,FanCoilOff")
+    assert state.apply(frame) is True
+    assert state.climate_zones == {5: "Large bathroom"}
+    assert state.climate[5].room == "Large bathroom"
+    assert (state.climate[5].top, state.climate[5].left) == (108, 569)
+    assert state.apply(frame) is False
+
+
+def test_apply_setpoint_and_climate_info() -> None:
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("TEMPSOLL5:21")) is True
+    assert state.apply(parse_frame("TEMPSOLL6:18")) is True
+    assert state.apply(parse_frame("KLIMASINFO5:heizen")) is True
+    assert state.apply(parse_frame("KLIMASINFO6:null")) is True
+    assert state.setpoints == {5: 21, 6: 18}
+    assert state.climate_info == {5: "heizen", 6: None}
+    assert state.apply(parse_frame("TEMPSOLL5:21")) is False
+    assert state.apply(parse_frame("KLIMASINFO6:null")) is False
+
+
+def test_apply_scene_config_keeps_names_and_adds_typed_config() -> None:
+    state = SmartPlaceState()
+    frame = parse_frame(
+        "INHALTSZENEN5:LÃ¼ftung Stufe 3,655px,745px,25.png,OnOff,NoRemove,,,00-00,,00-00,NoPw,"
+        "SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SzenenSonnenAufOFF,SzenenSonnenUnterOFF,SollDisplayON,SzenenForm2",
+    )
+    assert state.apply(frame) is True
+    assert state.scenes == {5: "Lüftung Stufe 3"}
+    assert state.scene_configs[5].name == "Lüftung Stufe 3"
+    assert state.scene_configs[5].kind == "OnOff"
+    assert state.scene_configs[5].pin_protected is False
+    assert state.apply(frame) is False
+
+
+def test_apply_sub_menus_and_plan() -> None:
+    state = SmartPlaceState()
+    assert (
+        state.apply(parse_frame("UnterMenuLeuchten1:All,70px,10px,Leuchten,OnOn,LEUCHTENZENTRAL1,Uebersicht1")) is True
+    )
+    assert (
+        state.apply(parse_frame("UnterMenuJalousien1:All,70px,10px,Jalousien,OffOff,JALZENTRAL1,Uebersicht1")) is True
+    )
+    assert state.apply(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima")) is True
+    assert state.light_sub_menus[1].group_message == "LEUCHTENZENTRAL1"
+    assert state.blind_sub_menus[1].plan_id == 1
+    assert state.plans[1].functions == ("Leuchten", "Jalousien", "Klima")
+    assert state.apply(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima")) is False
+
+
+def test_apply_mute() -> None:
+    state = SmartPlaceState()
+    assert state.apply(parse_frame("MUTE1:00")) is True
+    assert state.mutes == {1: False}
+    assert state.apply(parse_frame("MUTE1:01")) is True
+    assert state.mutes == {1: True}
+    assert state.apply(parse_frame("MUTE1:01")) is False
+
+
+def test_credential_frame_changes_nothing() -> None:
+    """The remote-access password frames parse to an empty value and fold to nothing."""
+    state = SmartPlaceState()
+    frame = parse_frame("144Update:not-the-real-password")
+    assert "not-the-real-password" not in repr(frame)
+    assert state.apply(frame) is False
+
+
+def test_clear_control_values_forgets_values_but_keeps_devices() -> None:
+    """After a disconnect nothing old may decide a toggle; the devices stay known."""
+    state = SmartPlaceState()
+    for text in (
+        "INHALTLeuchten13:Corridor lights,289px,330px,schalter,,dimmkurve1,Uebersicht1,,MemoryOFF",
+        "leuchte13:255",
+        "JALICO1:48-00",
+        "TEMPSOLL5:21",
+        "KLIMASINFO5:heizen",
+        "SZENEN11:01",
+        "MUTE1:01",
+        "TEMPIST5:20.7",
+    ):
+        state.apply(parse_frame(text))
+    assert state.clear_control_values() is True
+    assert state.light_levels == {}
+    assert state.blind_values == {}
+    assert state.setpoints == {}
+    assert state.climate_info == {}
+    assert state.scene_states == {}
+    assert state.mutes == {}
+    # Device descriptions and plain readings are not control values.
+    assert 13 in state.lights
+    assert state.indoor_temperatures == {5: 20.7}
+    # Nothing left to clear: no listener needs to wake.
+    assert state.clear_control_values() is False
+    # The server replays the values after the reconnect; that is a change again.
+    assert state.apply(parse_frame("leuchte13:255")) is True
