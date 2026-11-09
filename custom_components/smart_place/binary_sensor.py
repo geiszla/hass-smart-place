@@ -92,7 +92,7 @@ class _SmartPlaceBinarySensorBase(SmartPlacePushEntity, BinarySensorEntity):
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
         self._attr_device_info = (
-            category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
+            category_device_info(entry, data, self._category) if self._category is not None else main_device_info(entry)
         )
 
 

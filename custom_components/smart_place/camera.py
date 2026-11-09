@@ -127,7 +127,7 @@ class SmartPlaceIntercomCamera(SmartPlacePushEntity, Camera):
         label = _CAMERA_NAMES.get(camera_id) or data.state.gsa_door_labels.get(camera_id)
         self._attr_name = f"{label} camera" if label else f"Camera {camera_id}"
         self._attr_unique_id = f"{entry.entry_id}_camera_{camera_id}"
-        self._attr_device_info = category_device_info(entry, "Cameras")
+        self._attr_device_info = category_device_info(entry, data, "Cameras")
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return a single JPEG snapshot, sliced from the live MJPEG stream.

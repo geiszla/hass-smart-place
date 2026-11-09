@@ -84,7 +84,7 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
         self._door = door
         self._attr_name = door.name
         self._attr_unique_id = f"{entry.entry_id}_door_{door.key}"
-        self._attr_device_info = category_device_info(entry, "Doors")
+        self._attr_device_info = category_device_info(entry, data, "Doors")
 
     async def async_press(self) -> None:
         """Send the door's OEFFNER command on the live WS.

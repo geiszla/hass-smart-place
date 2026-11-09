@@ -16,7 +16,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -58,28 +58,24 @@ HEALTHY_PHASES: frozenset[SessionPhase] = frozenset(
 )
 
 
+MANUFACTURER = "smart PLACE AG"
+
+
 def main_device_info(entry: ConfigEntry) -> DeviceInfo:
-    """Registry info for the main Smart Place device, shared by all platforms.
+    """Reference to the main Smart Place device, shared by all platforms.
 
-    ``configuration_url`` deep-links to the vendor SPA with the entry's
-    current token so automations can template it via
-    ``device_attr(..., 'configuration_url')`` instead of hardcoding the
-    token — a re-auth refreshes the URL on the post-reauth reload.
+    Identifiers only: ``async_setup_entry`` registers the device itself
+    (name, manufacturer, configuration URL) before any platform loads.
     """
-    return DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
-        name="Smart Place",
-        manufacturer="smart PLACE AG",
-        configuration_url=f"{DISCOVERY_ORIGIN}/Start5?{entry.data[CONF_TOKEN]}",
-    )
+    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
 
 
-def category_device_info(entry: ConfigEntry, category: str) -> DeviceInfo:
+def category_device_info(entry: ConfigEntry, data: SmartPlaceData, category: str) -> DeviceInfo:
     """Sub-device grouping one family of entities under its own dashboard card.
 
     ``category`` is both the human label (rendered as ``Smart Place
     <category>``) and, lower-cased, the identifier suffix. Hung off the
-    main device via ``via_device`` so HA's auto dashboard renders it as a
+    main device via ``via_device_id`` so HA's auto dashboard renders it as a
     separate card while the Devices page still nests it under Smart Place —
     the same pattern the per-room climate sub-devices use (sensor.py).
     Splitting the entities across these keeps the integration from
@@ -88,8 +84,8 @@ def category_device_info(entry: ConfigEntry, category: str) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")},
         name=f"Smart Place {category}",
-        manufacturer="smart PLACE AG",
-        via_device=(DOMAIN, entry.entry_id),
+        manufacturer=MANUFACTURER,
+        via_device_id=data.main_device_id,
     )
 
 
@@ -99,6 +95,9 @@ class SmartPlaceData:
 
     client: SmartPlaceClient
     state: SmartPlaceState
+    # Registry id of the main device; every sub-device links to it with
+    # ``via_device_id``.
+    main_device_id: str
     listeners: list[Callable[[], None]] = field(default_factory=list)
 
     @property
@@ -149,7 +148,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         on_disconnect=trigger_disconnect_notify,
     )
 
-    data = SmartPlaceData(client=client, state=SmartPlaceState())
+    # Registered before any platform so sub-devices can link to it by id
+    # (the identifier-based ``via_device`` is deprecated and raises when HA
+    # cannot attribute the call to an integration). ``configuration_url``
+    # deep-links to the vendor SPA with the entry's current token so
+    # automations can template it via ``device_attr(..., 'configuration_url')``
+    # instead of hardcoding the token — a re-auth refreshes the URL on the
+    # post-reauth reload.
+    main_device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Smart Place",
+        manufacturer=MANUFACTURER,
+        configuration_url=f"{DISCOVERY_ORIGIN}/Start5?{token}",
+    )
+
+    data = SmartPlaceData(client=client, state=SmartPlaceState(), main_device_id=main_device.id)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
     def _notify_listeners() -> None:

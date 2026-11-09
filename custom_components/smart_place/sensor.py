@@ -29,7 +29,7 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   ever reported ``Frei`` in practice) — see ``state.py``.
 - One indoor temperature sensor + one humidity sensor per climate
   zone, paired under a per-zone HA sub-device
-  (``via_device=<entry>``) so they render together in the device
+  (``via_device_id``) so they render together in the device
   card. The zone's room name labels the sub-device. Sensor IDs
   without a matching ``Klimas<N>`` zone are skipped. Humidity is
   disabled by default — this building reports a constant 0.0 —
@@ -72,7 +72,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from . import SmartPlaceData, category_device_info, main_device_info
+from . import MANUFACTURER, SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
 from .entity import SmartPlacePushEntity
 from .smart_place_client import (
@@ -273,7 +273,7 @@ def _find_electricity_chart_id(state) -> int | None:
     return None
 
 
-def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> DeviceInfo:
+def _climate_zone_device_info(entry: ConfigEntry, data: SmartPlaceData, room: str, zone_id: int) -> DeviceInfo:
     """Return a per-zone sub-device that pairs temp + humidity under one card.
 
     The device is named after the room alone — ``has_entity_name``
@@ -285,9 +285,9 @@ def _climate_zone_device_info(entry: ConfigEntry, room: str, zone_id: int) -> De
     return DeviceInfo(
         identifiers={(DOMAIN, f"{entry.entry_id}_zone_{zone_id}")},
         name=room,
-        manufacturer="smart PLACE AG",
+        manufacturer=MANUFACTURER,
         model="Climate zone",
-        via_device=(DOMAIN, entry.entry_id),
+        via_device_id=data.main_device_id,
     )
 
 
@@ -309,7 +309,7 @@ class _SmartPlaceSensorBase(SmartPlacePushEntity, SensorEntity):
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
         self._attr_device_info = (
-            category_device_info(entry, self._category) if self._category is not None else main_device_info(entry)
+            category_device_info(entry, data, self._category) if self._category is not None else main_device_info(entry)
         )
 
 
@@ -406,7 +406,7 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
         self._sensor_id = sensor_id
         self._attr_unique_id = f"{entry.entry_id}_indoor_temperature_{sensor_id}"
         room = data.state.climate_zones.get(sensor_id) or f"Zone {sensor_id}"
-        self._attr_device_info = _climate_zone_device_info(entry, room, sensor_id)
+        self._attr_device_info = _climate_zone_device_info(entry, data, room, sensor_id)
 
     @property
     def native_value(self) -> float | None:
@@ -449,7 +449,7 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
         self._zone_id = zone_id
         self._attr_unique_id = f"{entry.entry_id}_humidity_{zone_id}"
         room = data.state.climate_zones.get(zone_id) or f"Zone {zone_id}"
-        self._attr_device_info = _climate_zone_device_info(entry, room, zone_id)
+        self._attr_device_info = _climate_zone_device_info(entry, data, room, zone_id)
 
     @property
     def native_value(self) -> float | None:
