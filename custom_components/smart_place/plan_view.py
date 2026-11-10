@@ -55,9 +55,9 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         found = entity_id(Platform.CAMERA, f"camera_{camera_id}")
         if found is None:
             return None
-        name = registry.entities[found].original_name
-        assert name is not None
-        return NamedEntity(found, name)
+        reg_entry = registry.async_get(found)
+        assert reg_entry is not None and reg_entry.original_name is not None
+        return NamedEntity(found, reg_entry.original_name)
 
     scenes = async_classify_scenes(entry, data)
     lights = {
