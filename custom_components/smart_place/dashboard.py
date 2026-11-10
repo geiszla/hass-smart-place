@@ -38,7 +38,10 @@ if TYPE_CHECKING:
 
     from . import SmartPlaceConfigEntry
 
-URL_PATH = "smart-place"
+# The URL path of the dashboard, and the one used instead when the first
+# is taken by a dashboard or panel that is not ours (a user's own
+# dashboard called "Smart Place" gets the same path).
+URL_PATHS = ("smart-place", "smart-place-plan")
 TITLE = "Smart Place"
 ICON = "mdi:floor-plan"
 
@@ -50,11 +53,11 @@ _REFRESH_DELAY = 2.0
 class SmartPlaceDashboard(LovelaceConfig):
     """Dashboard whose configuration is computed from the integration's state."""
 
-    def __init__(self, hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> None:
-        """Bind the dashboard to a config entry."""
+    def __init__(self, hass: HomeAssistant, entry: SmartPlaceConfigEntry, url_path: str) -> None:
+        """Bind the dashboard to a config entry and a URL path."""
         super().__init__(
             hass,
-            URL_PATH,
+            url_path,
             {
                 "mode": MODE_YAML,
                 "title": TITLE,
@@ -64,6 +67,7 @@ class SmartPlaceDashboard(LovelaceConfig):
             },
         )
         self._entry = entry
+        self._url_path = url_path
         self._served: bytes | None = None
         self._refresh_timer: CALLBACK_TYPE | None = None
         self._unsub_registry = hass.bus.async_listen(
@@ -118,7 +122,7 @@ class SmartPlaceDashboard(LovelaceConfig):
         if self._served is None:
             return
         if json_bytes(async_build_plan_config(self.hass, self._entry)) != self._served:
-            self.hass.bus.async_fire(EVENT_LOVELACE_UPDATED, {"url_path": URL_PATH})
+            self.hass.bus.async_fire(EVENT_LOVELACE_UPDATED, {"url_path": self._url_path})
 
     @callback
     def async_remove(self) -> None:
@@ -127,29 +131,34 @@ class SmartPlaceDashboard(LovelaceConfig):
         if self._refresh_timer is not None:
             self._refresh_timer()
             self._refresh_timer = None
-        frontend.async_remove_panel(self.hass, URL_PATH, warn_if_unknown=False)
-        self.hass.data[LOVELACE_DATA].dashboards.pop(URL_PATH, None)
+        frontend.async_remove_panel(self.hass, self._url_path, warn_if_unknown=False)
+        self.hass.data[LOVELACE_DATA].dashboards.pop(self._url_path, None)
 
 
 @callback
 def async_register_dashboard(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> SmartPlaceDashboard | None:
-    """Create the dashboard and its sidebar panel.
+    """Create the dashboard and its sidebar panel at the first free URL path.
 
     Returns ``None`` when another Smart Place entry already owns the
-    dashboard: there is one URL path, so only the first entry gets one.
-    Raises if the path is taken by something else.
+    dashboard: only the first entry gets one. Raises if every path is
+    taken by something else.
     """
     dashboards = hass.data[LOVELACE_DATA].dashboards
-    if isinstance(dashboards.get(URL_PATH), SmartPlaceDashboard):
+    if any(isinstance(dashboards.get(url_path), SmartPlaceDashboard) for url_path in URL_PATHS):
         return None
-    dashboard = SmartPlaceDashboard(hass, entry)
-    frontend.async_register_built_in_panel(
-        hass,
-        "lovelace",
-        sidebar_title=TITLE,
-        sidebar_icon=ICON,
-        frontend_url_path=URL_PATH,
-        config={"mode": MODE_YAML},
-    )
-    dashboards[URL_PATH] = dashboard
-    return dashboard
+    for url_path in URL_PATHS:
+        if url_path in dashboards or frontend.async_panel_exists(hass, url_path):
+            continue
+        frontend.async_register_built_in_panel(
+            hass,
+            "lovelace",
+            sidebar_title=TITLE,
+            sidebar_icon=ICON,
+            frontend_url_path=url_path,
+            config={"mode": MODE_YAML},
+        )
+        # Created after the panel is registered: the dashboard listens to
+        # the entity registry from the start, and only ``async_remove`` ends that.
+        dashboards[url_path] = dashboard = SmartPlaceDashboard(hass, entry, url_path)
+        return dashboard
+    raise ValueError(f"The dashboard URL paths {' and '.join(URL_PATHS)} are both taken")
