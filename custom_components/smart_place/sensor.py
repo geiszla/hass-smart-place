@@ -52,7 +52,9 @@ Exposes the read-only metrics surfaced by the WS dispatch:
 Discovery is observation-based: an entity is created when the state
 snapshot first holds its value — normally all at once at setup, after
 ``__init__.py``'s observation window, and later for anything the server
-only delivers then.
+only delivers then. An entity that takes a unit, a name or a default from
+other frames when it is created (outdoor readings, intercoms, charts and
+what hangs on them) waits for the complete main-menu reply.
 """
 
 from __future__ import annotations
@@ -105,6 +107,11 @@ PARALLEL_UPDATES = 0
 # to a new day; that case triggers a read of its own, so this is the retry
 # and the pick-up for statistics corrected after the fact (a backfill).
 _COST_PREFIX_REFRESH = timedelta(minutes=15)
+
+# A prefix read prompted by a new day that did not deliver the prefix (the
+# recorder failed, or is slow) is repeated on a later update, this far
+# apart at least.
+_COST_PREFIX_RETRY = timedelta(minutes=1)
 
 
 # Daily series — STAND1 carries today's consumption so far. State
@@ -182,10 +189,6 @@ def _collect(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> dict[Hashabl
     state = data.state
     found: dict[Hashable, Callable[[], Entity]] = {}
 
-    if state.outdoor_temperature is not None:
-        found["outdoor_temperature"] = partial(SmartPlaceOutdoorTemperatureSensor, entry, data)
-    if state.wind_speed is not None:
-        found["wind_speed"] = partial(SmartPlaceWindSpeedSensor, entry, data)
     # Always created (not observation-gated): a delivery PIN is
     # transient and rare, so gating on its presence would mean the
     # sensor almost never exists. As a permanent entity it reads
@@ -203,14 +206,26 @@ def _collect(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> dict[Hashabl
             found["temperature", zone_id] = partial(SmartPlaceIndoorTemperatureSensor, entry, data, zone_id)
         if zone_id in state.humidities:
             found["humidity", zone_id] = partial(SmartPlaceHumiditySensor, entry, data, zone_id)
-    for intercom_id in sorted(set(state.intercom_ringing) | set(state.intercom_callers)):
-        found["intercom", intercom_id] = partial(SmartPlaceIntercomSensor, entry, data, intercom_id)
     if state.infoboard_contents:
         found["infoboard"] = partial(SmartPlaceInfoboardSensor, entry, data)
     # Always created (not observation-gated): the idle banner is
     # ``PERSINFO:Read`` which folds to ``None``, so gating on presence
     # would usually skip the sensor. Reads ``unknown`` when clear.
     found["person_info"] = partial(SmartPlacePersonInfoSensor, entry, data)
+
+    # Everything below takes something from other frames when it is
+    # created: a unit, a name that depends on how many there are, a chart's
+    # label (it becomes the entity id) or whether a chart is part of a sum.
+    # Created from half a bootstrap it would get that wrong for good.
+    if not data.devices_listed:
+        return found
+
+    if state.outdoor_temperature is not None:
+        found["outdoor_temperature"] = partial(SmartPlaceOutdoorTemperatureSensor, entry, data)
+    if state.wind_speed is not None:
+        found["wind_speed"] = partial(SmartPlaceWindSpeedSensor, entry, data)
+    for intercom_id in sorted(set(state.intercom_ringing) | set(state.intercom_callers)):
+        found["intercom", intercom_id] = partial(SmartPlaceIntercomSensor, entry, data, intercom_id)
     # Per-meter charts that roll up into a SUMME aggregate (e.g.
     # ``Cold water I`` / ``II`` under ``Cold water``) are registered
     # disabled — the aggregate is the reading users care about, and
@@ -878,9 +893,10 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceElectricityCostSensor):
     only added when they belong to the same day (``MonthToDateCost``): the
     value stands still for a moment after midnight instead of dropping by
     the cost of the day that just ended. The prefix is read once the
-    statistics of that day are complete and re-read every
-    ``_COST_PREFIX_REFRESH``. ``None`` (unknown) until both the first
-    statistics read and the first range poll have landed.
+    statistics of that day are complete (again every ``_COST_PREFIX_RETRY``
+    until that read succeeds) and re-read every ``_COST_PREFIX_REFRESH``.
+    ``None`` (unknown) until both the first statistics read and the first
+    range poll have landed.
     """
 
     _name_suffix = "cost (this month)"
@@ -891,8 +907,8 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceElectricityCostSensor):
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_month"
         self._cost_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"
         self._month = MonthToDateCost()
-        # Day for which a prefix read was started as soon as it became readable.
-        self._prompted_day: datetime | None = None
+        # When a prefix read was last started because the buckets moved to a new day.
+        self._prefix_prompted_at: datetime | None = None
         self._refresh_unsub = None
 
     @property
@@ -920,12 +936,16 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceElectricityCostSensor):
         """Fold the running day's cost; fetch the prefix of a new day once it can be read."""
         day = self._bucket_day()
         self._month.update(day, self._today_cost())
+        now = dt_util.utcnow()
         if (
             day is not None
-            and day not in (self._month.prefix_day, self._prompted_day)
-            and dt_util.utcnow() >= day + STATISTICS_SETTLE
+            and day != self._month.prefix_day
+            and now >= day + STATISTICS_SETTLE
+            and (self._prefix_prompted_at is None or now - self._prefix_prompted_at >= _COST_PREFIX_RETRY)
         ):
-            self._prompted_day = day
+            # Until the read delivers this day's prefix it is prompted
+            # again, but not by every update: one read at a time.
+            self._prefix_prompted_at = now
             self.hass.async_create_task(self._async_refresh_prefix())
         super()._handle_frame_update()
 

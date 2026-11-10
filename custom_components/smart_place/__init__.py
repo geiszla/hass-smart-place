@@ -485,6 +485,7 @@ def _async_setup_dashboard(hass: HomeAssistant, entry: SmartPlaceConfigEntry, da
         )
 
 
+@callback
 def _async_assign_zone_areas(hass: HomeAssistant, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
     """Give heating-zone devices without an area the area of their room, once.
 

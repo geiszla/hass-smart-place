@@ -41,11 +41,12 @@ async def async_setup_entry(
     state = data.state
 
     def collect() -> dict[Hashable, Callable[[], Entity]]:
+        if not data.devices_listed:
+            return {}
+        # The mute's name depends on how many mutes there are, so it waits like the rest.
         found: dict[Hashable, Callable[[], Entity]] = {
             ("mute", mute_id): partial(SmartPlaceMuteSwitch, entry, data, mute_id) for mute_id in state.mutes
         }
-        if not data.devices_listed:
-            return found
         for light in state.lights.values():
             if light.kind == LIGHT_KIND_SOCKET:
                 found["socket", light.id] = partial(SmartPlaceSocket, entry, data, light)

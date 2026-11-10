@@ -305,3 +305,40 @@ def test_companion_buttons_stay_inside_the_image() -> None:
     )
     buttons = {e["title"]: e for e in config["views"][0]["cards"][0]["elements"] if e["type"] == "icon"}
     assert buttons["Down"]["style"] == {"left": "0.0%", "top": "100.0%"}
+
+
+def test_icon_buttons_do_nothing_on_a_long_press(flat_state: SmartPlaceState) -> None:
+    """An icon element has no entity, so the default hold action (more-info) ends in an error toast."""
+    views = _views(_flat_dashboard(flat_state))
+    icons = [
+        element
+        for path in ("blinds", "climate")
+        for element in views[path]["cards"][0]["elements"]
+        if element["type"] == "icon"
+    ]
+    assert {icon["title"] for icon in icons} == {"Down", "Vent", "Up", "Lower", "Raise"}
+    assert all(icon["hold_action"] == {"action": "none"} for icon in icons)
+    # A light's icon has an entity: a long press opens its details.
+    light = views["lights"]["cards"][0]["elements"][0]
+    assert light["hold_action"] == {"action": "more-info"}
+
+
+def test_dashboard_without_entities_has_a_placeholder_view() -> None:
+    """The frontend opens a dashboard without views in edit mode; this one is read-only."""
+    config = build_dashboard(
+        plans={},
+        images={},
+        lights={},
+        blinds={},
+        zones={},
+        entities=DashboardEntities(),
+        temperature_unit="°C",
+    )
+    (view,) = config["views"]
+    assert view["path"] == "waiting"
+    assert [card["type"] for card in view["cards"]] == ["markdown"]
+
+
+def test_placeholder_view_goes_away_with_the_first_entity(flat_state: SmartPlaceState) -> None:
+    config = _flat_dashboard(flat_state, entities=DashboardEntities(scenes=["scene.night"]))
+    assert [view["path"] for view in config["views"]] == ["scenes"]

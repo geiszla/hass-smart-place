@@ -41,6 +41,21 @@ _CLIMATE_BUTTON_DX: Final = 62.0
 
 _UNAVAILABLE_STATES: Final = ["unknown", "unavailable"]
 
+# Shown while no entity is known yet (the server has not listed the devices).
+_WAITING_VIEW: Final[dict[str, Any]] = {
+    "title": "Smart Place",
+    "path": "waiting",
+    "icon": "mdi:timer-sand",
+    "cards": [
+        {
+            "type": "markdown",
+            "content": (
+                "No Smart Place devices are known yet. They appear here once the Smart Place server has listed them."
+            ),
+        },
+    ],
+}
+
 
 def light_centre(left: int, top: int) -> Point:
     """Marker centre of a light or socket, in image pixels."""
@@ -110,7 +125,15 @@ def _perform(action: str, entity_id: str, data: dict[str, Any] | None = None) ->
 
 
 def _button(icon: str, title: str, action: dict[str, Any], style: dict[str, str]) -> dict[str, Any]:
-    return {"type": "icon", "icon": icon, "title": title, "tap_action": action, "style": style}
+    # Without an entity the default hold action (more-info) shows an error toast.
+    return {
+        "type": "icon",
+        "icon": icon,
+        "title": title,
+        "tap_action": action,
+        "hold_action": {"action": "none"},
+        "style": style,
+    }
 
 
 def _light_elements(entity_id: str, centre: Point, image: PlanBackground) -> list[dict[str, Any]]:
@@ -317,6 +340,7 @@ def build_dashboard(
     card, so it stays reachable; devices of an unknown plan are listed in
     the first plan's views. With several plans the views repeat per plan
     with the plan label in the title; with one plan the label is not shown.
+    Without any entity the dashboard has one view that says so.
     """
     plan_ids: list[int | None] = [*sorted(plans)] or [None]
     several_plans = len(plan_ids) > 1
@@ -384,4 +408,7 @@ def build_dashboard(
     scenes_view = _scenes_view(entities)
     if scenes_view is not None:
         views.append(scenes_view)
+    if not views:
+        # The frontend opens a dashboard without views in edit mode, and this one cannot be edited.
+        views.append(_WAITING_VIEW)
     return {"title": "Smart Place", "views": views}

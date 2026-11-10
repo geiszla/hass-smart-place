@@ -71,8 +71,11 @@ async def async_setup_entry(
             found["hail"] = partial(SmartPlaceHailSensor, entry, data)
         if state.blinds_maintenance is not None:
             found["blinds_maintenance"] = partial(SmartPlaceBlindsMaintenanceSensor, entry, data)
-        for zone_id in sorted(state.wind_alarms):
-            found["wind_alarm", zone_id] = partial(SmartPlaceWindAlarmSensor, entry, data, zone_id)
+        # The name depends on how many zones there are; from half a
+        # bootstrap it would be wrong for good.
+        if data.devices_listed:
+            for zone_id in sorted(state.wind_alarms):
+                found["wind_alarm", zone_id] = partial(SmartPlaceWindAlarmSensor, entry, data, zone_id)
         return found
 
     async_add_discovered(entry, async_add_entities, collect)

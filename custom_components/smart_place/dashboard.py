@@ -10,7 +10,9 @@ disables the dashboard only.
 
 The configuration is built on demand from the live state
 (``plan_view.async_build_plan_config``). The frontend treats the
-dashboard as a YAML one: it cannot be edited in the UI.
+dashboard as a YAML one: it cannot be edited in the UI. Open frontends
+are told to load it again when it changed: after new entities or a plan
+image, and after an entity of the entry was renamed, enabled or disabled.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from homeassistant.components.lovelace.const import MODE_YAML
 from homeassistant.components.lovelace.dashboard import LovelaceConfig
 from homeassistant.const import EVENT_LOVELACE_UPDATED
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.json import json_bytes, json_fragment
 
@@ -31,7 +34,7 @@ from .plan_view import async_build_plan_config
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+    from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant
 
     from . import SmartPlaceConfigEntry
 
@@ -63,6 +66,10 @@ class SmartPlaceDashboard(LovelaceConfig):
         self._entry = entry
         self._served: bytes | None = None
         self._refresh_timer: CALLBACK_TYPE | None = None
+        self._unsub_registry = hass.bus.async_listen(
+            er.EVENT_ENTITY_REGISTRY_UPDATED,
+            self._async_entity_registry_updated,
+        )
 
     @property
     def mode(self) -> str:
@@ -92,6 +99,19 @@ class SmartPlaceDashboard(LovelaceConfig):
             self._refresh_timer = async_call_later(self.hass, _REFRESH_DELAY, self._async_refresh)
 
     @callback
+    def _async_entity_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        """Refresh when an entity of this entry was renamed, enabled or disabled.
+
+        The configuration names entity ids and leaves disabled entities
+        out, so it changes without any frame from the server.
+        """
+        if event.data["action"] != "update":
+            return
+        changed = er.async_get(self.hass).async_get(event.data["entity_id"])
+        if changed is not None and changed.config_entry_id == self._entry.entry_id:
+            self.async_schedule_refresh()
+
+    @callback
     def _async_refresh(self, _now: datetime) -> None:
         self._refresh_timer = None
         # Nobody loaded the dashboard yet: nothing to refresh.
@@ -103,6 +123,7 @@ class SmartPlaceDashboard(LovelaceConfig):
     @callback
     def async_remove(self) -> None:
         """Remove the dashboard and its sidebar panel."""
+        self._unsub_registry()
         if self._refresh_timer is not None:
             self._refresh_timer()
             self._refresh_timer = None
