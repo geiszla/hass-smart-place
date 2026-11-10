@@ -21,6 +21,7 @@ without running Home Assistant.
 - [Rooms](#rooms)
   - [When a device is renamed in Smart Place](#when-a-device-is-renamed-in-smart-place)
 - [Plan dashboard](#plan-dashboard)
+- [Automation blueprints](#automation-blueprints)
 - [Actions](#actions)
 - [Development](#development)
 - [Reference](#reference)
@@ -104,8 +105,8 @@ Code Server.
 2. Create `custom_components/` if it does not exist.
 3. Copy the **whole** folder `custom_components/smart_place/` from this
    repository into it, with all its files and sub-folders
-   (`smart_place_client/`, `translations/`, `brand/`). Do not pick single
-   files: the integration needs all of them.
+   (`smart_place_client/`, `translations/`, `brand/`, `blueprints/`). Do not
+   pick single files: the integration needs all of them.
 4. Restart Home Assistant: Settings → System → ⋮ (top right) → **Restart Home
    Assistant**.
 
@@ -180,6 +181,9 @@ existing entities keep their ids, and the [options](#options) stay.
 2. Restart Home Assistant.
 3. Optional: remove the repository in the Marketplace, or delete
    `/config/custom_components/smart_place/`.
+4. Optional: delete `/config/blueprints/automation/smart_place/`. The
+   [blueprints](#automation-blueprints) and the automations made from them
+   stay until you delete them.
 
 ### Troubleshooting
 
@@ -590,6 +594,71 @@ The dashboard is built on parts of Home Assistant that are not a public
 interface. If a Home Assistant update breaks them, the integration logs one
 warning and works on without the dashboard; `smart_place.get_plan_config`
 keeps working.
+
+## Automation blueprints
+
+The integration ships five automation blueprints. A blueprint is a ready-made
+automation with a form: you choose your entities and texts, and Home Assistant
+creates the automation.
+
+- **Installed automatically.** Each time the integration starts, it copies its
+  blueprints to `blueprints/automation/smart_place/` in the Home Assistant
+  configuration folder. They appear under *Settings → Automations & scenes →
+  Blueprints*; their names start with "Smart Place:". To use one, select it
+  there, fill in the form and save.
+- **Never overwritten.** A blueprint file that already exists is left as it
+  is, also when the integration is updated. Your own changes to a blueprint
+  are kept, and an update of the integration does not change your
+  automations.
+- **Updating a blueprint.** To get the current version from GitHub, open the
+  blueprint's menu on the Blueprints page and select **Re-import blueprint**.
+  The automations made from it then use the new version.
+- A blueprint that you delete is copied again the next time the integration
+  starts.
+
+The notifications are sent through the Home Assistant app on the phone.
+Package, info board and intercom notifications go to every phone that has the
+app, also to a phone that is added later. The consumption warning and the wind
+reminder go to the phones you select in the form. The notification channel,
+the page opened by a tap and the persistent reminder are options of the
+Android app.
+
+**Smart Place: package delivered.** Sends the PIN of the parcel box when a
+package is delivered, that is when the sensor "Package delivery PIN" gets a
+new value. A new notification replaces the previous one.
+
+**Smart Place: new info board entry.** Sends the text of a new entry on the
+building's info board. A tap on the notification opens the Smart Place web
+app.
+
+**Smart Place: consumption warning.** Sends a notification when today's
+consumption of a meter reaches a level of its daily target: orange (from
+60 %) or red (from 90 %). You select the meter's "target status" and "target
+use" sensors and the phones. One automation covers both levels, each with its
+own title; a level you deselect sends nothing. The notification for red
+replaces the one for orange. A tap opens the "target use" sensor.
+
+**Smart Place: intercom ringing.** Sends a notification with door buttons
+when somebody rings, and presses the door's button entity when a button is
+tapped: this opens a real door. You select the intercom sensors and the button
+entities of the ground floor entrance, the front door and the garage entrance;
+a door without a button entity gets no button. If the caller text names one
+of the doors (the words to look for can be changed), only that door's button
+is shown, otherwise all of them. A tap on the notification opens the intercom
+page of the Smart Place dashboard. Make only one automation from this
+blueprint and select all intercom sensors in it: every automation made from
+it presses the door button when a notification button is tapped.
+
+**Smart Place: high winds.** Shows a silent reminder on the selected phones
+while the wind speed is above a limit. The reminder is sent again with every
+new reading above the limit, so a reminder that was dismissed comes back. It
+is removed, on every phone that has the app, when the wind speed falls below a
+second, lower value. The sensor can be the Smart Place wind speed sensor or a
+helper made from it, for example a Statistics helper with the average of
+5 minutes. Nothing is stored between readings, so a restart of Home Assistant
+in the middle does no harm. One case is not covered: if the wind speed falls
+below the lower value while Home Assistant is stopped, the reminder stays
+until the next time the wind speed falls below that value.
 
 ## Actions
 

@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -31,6 +32,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 import probatio
 
+from .blueprint_install import install_blueprints
 from .const import (
     CAPTURE_PATH,
     CHART_POLL_INTERVAL,
@@ -609,6 +611,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_setup_dashboard(hass, entry, data)
+    await _async_install_blueprints(hass)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     return True
 
@@ -622,6 +625,17 @@ async def _async_entry_updated(hass: HomeAssistant, entry: SmartPlaceConfigEntry
     data = entry.runtime_data
     data.async_notify_listeners()
     data.async_plan_changed()
+
+
+async def _async_install_blueprints(hass: HomeAssistant) -> None:
+    """Copy the shipped automation blueprints; a failure costs the blueprints only."""
+    target = Path(hass.config.path("blueprints", "automation", DOMAIN))
+    try:
+        await hass.async_add_executor_job(install_blueprints, target)
+    except OSError as err:
+        _LOGGER.warning(
+            "The Smart Place automation blueprints could not be copied to %s (%s); everything else works", target, err
+        )
 
 
 @callback
