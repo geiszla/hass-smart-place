@@ -78,7 +78,9 @@ PLATFORMS: list[Platform] = [
     Platform.CAMERA,
     Platform.CLIMATE,
     Platform.COVER,
+    Platform.FAN,
     Platform.LIGHT,
+    Platform.SCENE,
     Platform.SENSOR,
     Platform.SWITCH,
 ]

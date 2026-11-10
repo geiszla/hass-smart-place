@@ -51,6 +51,9 @@
     },
     "state_unknown": {
       "message": "The command was not sent: the current state is not known yet, and Smart Place can only toggle."
+    },
+    "no_off_level": {
+      "message": "This device has no off: Smart Place always keeps one level active. Choose a level instead."
     }
   },
   "services": {
