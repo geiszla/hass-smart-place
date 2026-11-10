@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.button import ButtonEntity
 
-from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, main_device_info
 from .entity import SmartPlacePushEntity, async_add_discovered
 from .smart_place_client import CommandDefinition, Commands, blinds_menu_plan
 
@@ -177,7 +177,7 @@ class SmartPlaceGroupButton(SmartPlacePushEntity, ButtonEntity):
         self._attr_translation_key = translation_key
         self._attr_unique_id = f"{entry.entry_id}_{unique_id}"
         self._attr_entity_registry_enabled_default = enabled_default
-        self._attr_device_info = category_device_info(entry, data, "Groups")
+        self._attr_device_info = main_device_info(entry)
 
     async def async_press(self) -> None:
         """Send the group command."""

@@ -3,9 +3,9 @@
 - A light of kind ``steckdose`` is an outlet switch on its own device, so
   it stays out of light groups and "all lights off".
 - An ``OnOff`` scene has a real state (``SZENEN<id>:00|01``) and becomes a
-  switch without a device (see ``scene.py``) — unless it is one level of a
-  level group, which is a fan (``fan.py``).
-- ``MUTE<n>`` is the doorbell mute, on the "Intercom" device.
+  switch on the "Scene" device (see ``scene.py``) — unless it is one level
+  of a level group, which is a fan (``fan.py``).
+- ``MUTE<n>`` is the doorbell mute, on the main device.
 
 These three only have a toggle command, so on/off is decided against the
 effective state — see ``SmartPlaceToggleEntity``.
@@ -28,9 +28,22 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 
-from . import SmartPlaceConfigEntry, SmartPlaceData, blind_device_info, category_device_info, light_device_info
+from . import (
+    SmartPlaceConfigEntry,
+    SmartPlaceData,
+    blind_device_info,
+    category_device_info,
+    light_device_info,
+    main_device_info,
+)
 from .const import CONF_LOWER_AFTER_ALARM, CONF_LOWER_DELAY_MINUTES
-from .entity import SmartPlacePushEntity, SmartPlaceToggleEntity, async_add_discovered, async_classify_scenes
+from .entity import (
+    SmartPlacePushEntity,
+    SmartPlaceToggleEntity,
+    async_add_discovered,
+    async_classify_scenes,
+    async_keep_spoken_name,
+)
 from .smart_place_client import (
     DEVICE_LIGHT,
     LIGHT_KIND_SOCKET,
@@ -136,14 +149,25 @@ class SmartPlaceSceneSwitch(SmartPlaceToggleEntity, SwitchEntity):
     _attr_translation_key = "scene_switch"
 
     def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, scene: SceneConfig) -> None:
-        """Wire the scene's id, name and unique_id."""
+        """Wire the scene's id, name, unique_id and device."""
         super().__init__()
         self._data = data
         self._scene_id = scene.id
         self._attr_name = scene.name
         self._attr_unique_id = f"{entry.entry_id}_scene_switch_{scene.id}"
+        self._attr_device_info = category_device_info(entry, data, "Scenes")
         # A scene the vendor app does not show is not meant for daily use.
         self._attr_entity_registry_enabled_default = scene.displayed
+
+    async def async_added_to_hass(self) -> None:
+        """Keep the scene's own name as what the voice assistant listens for."""
+        await super().async_added_to_hass()
+        async_keep_spoken_name(self, self._data.state.scene_configs[self._scene_id].name)
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes: nothing here is keyed on the entity_id."""
+        super().async_entity_id_changed(old_entity_id)
 
     def _server_is_on(self) -> bool | None:
         return self._data.state.scene_states.get(self._scene_id)
@@ -170,7 +194,7 @@ class SmartPlaceMuteSwitch(SmartPlaceToggleEntity, SwitchEntity):
         suffix = f" {mute_id}" if len(data.state.mutes) > 1 else ""
         self._attr_name = f"Doorbell mute{suffix}"
         self._attr_unique_id = f"{entry.entry_id}_mute_{mute_id}"
-        self._attr_device_info = category_device_info(entry, data, "Intercom")
+        self._attr_device_info = main_device_info(entry)
 
     def _server_is_on(self) -> bool | None:
         return self._data.state.mutes.get(self._mute_id)

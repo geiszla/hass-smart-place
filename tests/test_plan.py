@@ -266,13 +266,18 @@ def test_climate_view_has_temperatures_and_step_buttons(flat_state: SmartPlaceSt
     assert buttons["Raise"]["style"] == {"left": "71.9%", "top": "13.31%"}
 
 
+def _rows(*entity_ids: str) -> list[dict[str, Any]]:
+    return [{"entity": entity_id, "name": {"type": "entity"}} for entity_id in entity_ids]
+
+
 def test_scenes_view_uses_built_in_cards(flat_state: SmartPlaceState) -> None:
+    """Each row shows the entity's own name: the shared device's name ("Scene Night") is left out."""
     view = _views(_flat_dashboard(flat_state))["scenes"]
     assert view["cards"] == [
-        {"type": "entities", "title": "Scenes", "entities": ["scene.night", "scene.evening"]},
-        {"type": "entities", "title": "Switches", "entities": ["switch.blinds", "switch.doorbell_mute"]},
+        {"type": "entities", "title": "Scenes", "entities": _rows("scene.night", "scene.evening")},
+        {"type": "entities", "title": "Switches", "entities": _rows("switch.blinds", "switch.doorbell_mute")},
         {"type": "tile", "entity": "fan.ventilation", "features": [{"type": "fan-speed"}]},
-        {"type": "entities", "title": "Groups", "entities": ["button.all_blinds_up", "button.all_blinds_down"]},
+        {"type": "entities", "title": "Groups", "entities": _rows("button.all_blinds_up", "button.all_blinds_down")},
     ]
 
 

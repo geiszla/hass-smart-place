@@ -110,6 +110,18 @@ HEALTHY_PHASES: frozenset[SessionPhase] = frozenset(
 
 MANUFACTURER = "smart PLACE AG"
 
+# Category devices by category (the identifier suffix, lower-cased) and
+# what each is called. The names are singular, like the titles of Home
+# Assistant's own cards, and carry no "Smart Place": Home Assistant puts
+# the device name in front of every entity name.
+_CATEGORY_DEVICE_NAMES: dict[str, str] = {
+    "Weather": "Weather",
+    "Energy": "Energy",
+    "Doors": "Door",
+    "Cameras": "Camera",
+    "Scenes": "Scene",
+}
+
 _LIGHT_MODELS: dict[str, str] = {
     LIGHT_KIND_SWITCH: "Light",
     LIGHT_KIND_LED: "LED light",
@@ -218,20 +230,19 @@ def main_device_info(entry: SmartPlaceConfigEntry) -> DeviceInfo:
 def category_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, category: str) -> DeviceInfo:
     """Sub-device grouping one family of entities under its own dashboard card.
 
-    ``category`` is both the human label (rendered as ``Smart Place
-    <category>``) and, lower-cased, the identifier suffix. Hung off the
-    main device via ``via_device_id`` so HA's auto dashboard renders it as a
-    separate card while the Devices page still nests it under Smart Place —
-    the same pattern the per-room climate sub-devices use.
-    Splitting the entities across these keeps the integration from
-    rendering as one giant 40-entity card. No area on purpose: an area-wide
-    call must not reach group buttons or door openers.
+    ``category`` is a key of ``_CATEGORY_DEVICE_NAMES`` and, lower-cased,
+    the identifier suffix. Hung off the main device via ``via_device_id``
+    so HA's auto dashboard renders it as a separate card while the Devices
+    page still nests it under Smart Place — the same pattern the per-room
+    climate sub-devices use. Splitting the entities across these keeps the
+    integration from rendering as one giant 40-entity card. No area on
+    purpose: an area-wide call must not reach scenes or door openers.
     """
     identifier = (DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")
     data.device_identifiers.add(identifier)
     return DeviceInfo(
         identifiers={identifier},
-        name=f"Smart Place {category}",
+        name=_CATEGORY_DEVICE_NAMES[category],
         manufacturer=MANUFACTURER,
         via_device_id=data.main_device_id,
     )

@@ -77,6 +77,20 @@ def async_add_discovered(
 
 
 @callback
+def async_keep_spoken_name(entity: Entity, name: str) -> None:
+    """Let the voice assistant know an entity by ``name`` alone, without its device's name.
+
+    Home Assistant's default alias stands for the full name, "<device>
+    <entity>" ("Scene Night"). It is replaced only while the alias list is
+    that untouched default: a list the user edited is left alone.
+    """
+    entry = entity.registry_entry
+    assert entry is not None
+    if entry.aliases == [er.COMPUTED_NAME]:
+        er.async_get(entity.hass).async_update_entity(entity.entity_id, aliases=[name])
+
+
+@callback
 def async_classify_scenes(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> SceneEntities:
     """Decide which scene becomes a scene entity, a switch or a level of a fan.
 

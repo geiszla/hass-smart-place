@@ -330,15 +330,24 @@ def _view(
     return {"title": title, "path": path, "icon": icon, "type": "panel", "cards": [card]}
 
 
+def _named_rows(entity_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Build rows that show the entity's own name, without its device's name in front.
+
+    The entities here share a device ("Scene", the main device); the
+    default row name would repeat it on every line ("Scene Night").
+    """
+    return [{"entity": entity_id, "name": {"type": "entity"}} for entity_id in entity_ids]
+
+
 def _scenes_view(entities: DashboardEntities) -> dict[str, Any] | None:
     cards: list[dict[str, Any]] = []
     if entities.scenes:
-        cards.append({"type": "entities", "title": "Scenes", "entities": list(entities.scenes)})
+        cards.append({"type": "entities", "title": "Scenes", "entities": _named_rows(entities.scenes)})
     if entities.switches:
-        cards.append({"type": "entities", "title": "Switches", "entities": list(entities.switches)})
+        cards.append({"type": "entities", "title": "Switches", "entities": _named_rows(entities.switches)})
     cards.extend({"type": "tile", "entity": fan, "features": [{"type": "fan-speed"}]} for fan in entities.fans)
     if entities.buttons:
-        cards.append({"type": "entities", "title": "Groups", "entities": list(entities.buttons)})
+        cards.append({"type": "entities", "title": "Groups", "entities": _named_rows(entities.buttons)})
     if not cards:
         return None
     return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": cards}
