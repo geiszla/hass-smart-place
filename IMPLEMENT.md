@@ -1346,4 +1346,3 @@ Nothing is migrated in code. After the update:
   "Weather Outdoor temperature", "Smart Place Doorbell mute").
 - With a dashboard of the user's own at `/smart-place`, the integration's
   dashboard is at `/smart-place-plan`.
-
