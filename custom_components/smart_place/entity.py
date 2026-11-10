@@ -2,7 +2,7 @@
 
 The Smart Place server re-broadcasts the full sensor set roughly twice a
 second even when nothing has changed, and ``__init__.py``'s
-``_notify_listeners`` fans every parsed frame out to *all* entities. Writing
+``async_notify_listeners`` fans every parsed frame out to *all* entities. Writing
 on every callback therefore re-reported each entity ~2x/s. Those writes fire
 ``state_reported`` events that flood the event bus and feed duplicate samples
 into downstream consumers — most visibly a Statistics helper, whose rolling

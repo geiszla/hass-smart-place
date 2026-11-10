@@ -469,13 +469,14 @@ def test_blind_and_setpoint_values_keep_their_raw_payload() -> None:
 
 
 def test_session_state_reset_connection_keeps_installation_facts() -> None:
-    """A new connection starts from scratch; the charts are not per connection."""
+    """A new connection starts from scratch; the chart units and the last range request stay."""
     state = SessionState()
     state.on_discovery_frame(GoToLinkSSL("h", 8770, "/Start1", "Leer"))
     state.on_app_open()
     state.on_app_frame(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima"))
     state.on_app_frame(NamedFields(name="MainMenuFinished", fields=()))
     state.chart_ids.add(49)
+    state.chart_units[49] = "KWh"
     state.chart_range_request = 1783893600
     assert state.phase is SessionPhase.BOOTSTRAPPED
 
@@ -484,8 +485,22 @@ def test_session_state_reset_connection_keeps_installation_facts() -> None:
     assert state.phase is SessionPhase.DISCOVERY_OPEN
     assert state.route is None
     assert state.main_menu_loaded is False
-    assert state.chart_ids == {49}
+    assert state.chart_units == {49: "KWh"}
     assert state.chart_range_request == 1783893600
+
+
+def test_session_state_lists_the_charts_per_connection() -> None:
+    """A chart deleted on the server is not polled again after a reconnect.
+
+    Every bootstrap lists the charts; a chart id kept from an earlier
+    connection would be read once a minute until the next restart.
+    """
+    state = SessionState()
+    state.chart_ids.update({49, 337})
+
+    state.reset_connection()
+
+    assert state.chart_ids == set()
 
 
 def test_session_state_lists_the_plans_per_connection() -> None:

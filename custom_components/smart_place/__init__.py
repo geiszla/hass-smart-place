@@ -27,6 +27,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.event import async_call_later
 import probatio
 
 from .const import (
@@ -61,8 +62,9 @@ from .smart_place_client import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
-    from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
+    from homeassistant.core import CALLBACK_TYPE, HomeAssistant, ServiceCall, ServiceResponse
     from homeassistant.helpers.typing import ConfigType
 
     from .dashboard import SmartPlaceDashboard
@@ -140,6 +142,9 @@ class SmartPlaceData:
     # id) that became fans in this run; see ``entity.async_classify_scenes``.
     scene_switch_ids: set[int] = field(default_factory=set)
     level_group_ids: set[int] = field(default_factory=set)
+    # True once the values that follow the first main-menu reply had
+    # ``SETUP_OBSERVATION_WINDOW`` to arrive; see ``devices_listed``.
+    first_reply_observed: bool = False
 
     @property
     def is_healthy(self) -> bool:
@@ -157,9 +162,23 @@ class SmartPlaceData:
 
         The platforms create the control entities then, not per frame:
         room suggestions need every heating zone and scene grouping needs
-        every scene.
+        every scene. After the first reply it stays False for the
+        observation window: a name that depends on a count (wind alarms,
+        intercoms, doorbell mutes) needs the value frames, and those
+        follow the reply.
         """
-        return self.client.state.main_menu_loaded
+        return self.first_reply_observed and self.client.state.main_menu_loaded
+
+    @callback
+    def async_notify_listeners(self) -> None:
+        """Let every entity look at the state again."""
+        # Isolate each entity: a raised listener (e.g. a bad native_value)
+        # must not stop the remaining entities from seeing this update.
+        for listener in list(self.listeners):
+            try:
+                listener()
+            except Exception:
+                _LOGGER.exception("Smart Place entity update listener raised; continuing")
 
     @callback
     def async_plan_changed(self) -> None:
@@ -362,11 +381,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         nonlocal notified_status
         data.state.clear_control_values()
         notified_status = (False, False)
-        _notify_listeners()
+        # The next connection's main-menu reply starts the window again.
+        stop_observation()
+        data.async_notify_listeners()
 
     async def plan_image_changed() -> None:
         # No frame arrives with a fetched image; wake the image entities.
-        _notify_listeners()
+        data.async_notify_listeners()
         data.async_plan_changed()
 
     client = SmartPlaceClient.live(
@@ -399,17 +420,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
     data.device_identifiers.add((DOMAIN, entry.entry_id))
     entry.runtime_data = data
 
-    def _notify_listeners() -> None:
-        # Isolate each entity: a raised listener (e.g. a bad native_value)
-        # must not stop the remaining entities from seeing this update.
-        for listener in list(data.listeners):
-            try:
-                listener()
-            except Exception:
-                _LOGGER.exception("Smart Place entity update listener raised; continuing")
+    # The first main-menu reply is followed by the broadcast burst
+    # (PACKETBOX<N>, REGEN, TEMPOUT, WINDALARM<N>, SPRECHEN<N>, MUTE<N>, ...)
+    # and the chart-stand replies. Entities are enumerated once that burst
+    # had ``SETUP_OBSERVATION_WINDOW`` to land — at setup below, or later
+    # when the first bootstrap is slower than the setup waits.
+    observed = asyncio.Event()
+    cancel_observation: CALLBACK_TYPE | None = None
+
+    @callback
+    def observation_over(_now: datetime) -> None:
+        nonlocal cancel_observation
+        cancel_observation = None
+        data.first_reply_observed = True
+        observed.set()
+        data.async_notify_listeners()
+
+    @callback
+    def stop_observation() -> None:
+        nonlocal cancel_observation
+        if cancel_observation is not None:
+            cancel_observation()
+            cancel_observation = None
+
+    entry.async_on_unload(stop_observation)
 
     async def _on_frame(frame: ServerFrame) -> None:
-        nonlocal notified_status
+        nonlocal notified_status, cancel_observation
         # Chart range replies do not say which day they cover; the fold
         # stamps them with the range the client asked for.
         data.state.chart_range_request = client.state.chart_range_request
@@ -419,8 +456,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         # changes.
         status = (data.is_healthy, client.state.main_menu_loaded)
         if changed or status != notified_status:
-            _notify_listeners()
+            data.async_notify_listeners()
         notified_status = status
+        if client.state.main_menu_loaded and not data.first_reply_observed and cancel_observation is None:
+            cancel_observation = async_call_later(hass, SETUP_OBSERVATION_WINDOW, observation_over)
 
     client.subscribe(_on_frame)
 
@@ -447,17 +486,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         if reg_entry.domain == Platform.BINARY_SENSOR and reg_entry.unique_id.startswith(retired_unique_id_prefixes):
             registry.async_remove(reg_entry.entity_id)
 
-    # Wait for the bootstrap + a brief observation window so the initial
-    # broadcast pushes (TEMPIST<N>, PACKETBOX<N>, REGEN, ...) and the
-    # chart-stand replies have a chance to land before platforms
-    # enumerate entities. Failing to bootstrap doesn't abort setup —
+    # Wait for the bootstrap and its observation window so everything
+    # normally appears at once. Failing to bootstrap doesn't abort setup —
     # the connection background task keeps retrying, the connectivity
     # binary_sensor reports the WS as down, and the platforms add the
     # entities when the server delivers them.
     with contextlib.suppress(TimeoutError):
         async with asyncio.timeout(SETUP_BOOTSTRAP_TIMEOUT + SETUP_OBSERVATION_WINDOW):
-            await client.wait_for_bootstrap()
-            await asyncio.sleep(SETUP_OBSERVATION_WINDOW)
+            await observed.wait()
 
     _async_assign_zone_areas(hass, entry, data)
 

@@ -267,8 +267,9 @@ async def test_poll_charts_refires_known_chart_requests(
     """``_poll_charts`` re-sends the STAND snapshot + today's range per chart.
 
     The range read (``SingelStandUpdate:<id>:<von>:<bis>``) fires once
-    immediately — bootstrap covers the STAND snapshot but not the HT/NT
-    buckets — and again after every ``GiveMeChartStandsManuell`` round.
+    as soon as the bootstrap is complete — bootstrap covers the STAND
+    snapshot but not the HT/NT buckets — and again after every
+    ``GiveMeChartStandsManuell`` round.
     """
 
     sent: list[str] = []
@@ -282,6 +283,7 @@ async def test_poll_charts_refires_known_chart_requests(
     client = SmartPlaceClient.live(token="dummy", chart_poll_interval=1.0)
     client._ws = _FakeWS()  # type: ignore[assignment]
     client.state.chart_ids = {49, 337}
+    client._bootstrap_done.set()
 
     sleep_count = 0
 
@@ -1153,6 +1155,38 @@ async def test_reconnect_starts_from_a_clean_session_and_never_sends_on_the_disc
     assert observed == [(False, SessionPhase.DISCOVERY_OPEN, False)]
     assert first_discovery.sent == []
     assert second_discovery.sent == []
+
+
+async def test_charts_are_listed_and_polled_per_connection() -> None:
+    """After a reconnect only the charts of the new bootstrap are read.
+
+    Regression: the chart ids of earlier connections were kept, so a chart
+    deleted on the server was read once a minute until the next restart.
+    The range read goes out once the bootstrap listed the charts.
+    """
+
+    async def idle() -> None:
+        await asyncio.sleep(0.05)
+
+    chart_49 = next(frame for frame in _bootstrap_frames() if frame.startswith("SingelDiagramm49:"))
+    first = _FakeWebSocket(_bootstrap_frames(), on_drained=idle)
+    second = _FakeWebSocket([chart_49, "GiveMeMainMenuFinished"], on_drained=idle)
+    session = _FakeSession([_FakeWebSocket([_ROUTE]), first, _FakeWebSocket([_ROUTE]), second])
+    client = SmartPlaceClient.live(token="dummy", session=session, ping_interval=0, chart_poll_interval=60)  # type: ignore[arg-type]
+
+    def range_reads(socket: _FakeWebSocket) -> list[str]:
+        return [text.split(":")[1] for text in socket.sent if text.startswith("SingelStandUpdate:")]
+
+    await client._run_live_once()
+    assert len(client.state.chart_ids) == 9
+    assert sorted(range_reads(first), key=int) == [str(chart_id) for chart_id in sorted(client.state.chart_ids)]
+
+    await client._run_live_once()
+    assert client.state.chart_ids == {49}
+    assert [text for text in second.sent if text.startswith("GiveMeChartStandsManuell")] == [
+        "GiveMeChartStandsManuell49",
+    ]
+    assert range_reads(second) == ["49"]
 
 
 async def test_send_before_connect_raises_not_connected() -> None:

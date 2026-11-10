@@ -1111,15 +1111,18 @@ class SmartPlaceClient:
         ``GiveMeChartStandsManuell<id>`` (the STAND series snapshot)
         and ``SingelStandUpdate:<id>:<today>`` (the server-side HT/NT
         tariff buckets for the current local day, which drive the
-        electricity cost sensors). The range poll runs once immediately
-        — the bootstrap covers the STAND snapshot but not the range
-        buckets. Cancelled when the connection is torn down or
-        :meth:`aclose` flips ``_closing``.
+        electricity cost sensors). The range poll runs once as soon as
+        the bootstrap is complete — the bootstrap covers the STAND
+        snapshot but not the range buckets, and the charts are listed
+        per connection, so before that there is nothing to read.
+        Cancelled when the connection is torn down or :meth:`aclose`
+        flips ``_closing``.
         """
         assert self._live is not None
         interval = self._live.chart_poll_interval
         if interval <= 0:
             return
+        await self._bootstrap_done.wait()
         if not await self._poll_chart_ranges():
             return
         while not self._closing:
