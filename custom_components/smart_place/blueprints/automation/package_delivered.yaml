@@ -1,0 +1,69 @@
+blueprint:
+  name: "Smart Place: package delivered"
+  description: |
+    Sends a notification with the PIN of the parcel box when a package is delivered.
+
+    The notification goes to every phone that has the Home Assistant app. It is sent when the sensor
+    "Package delivery PIN" of the Smart Place integration gets a new PIN. A new notification replaces the
+    previous one.
+
+    Title and message can contain templates. `{{ value }}` is the PIN.
+  domain: automation
+  source_url: >-
+    https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/package_delivered.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    pin_sensor:
+      name: PIN sensor
+      description: The sensor "Package delivery PIN" of the Smart Place integration.
+      selector:
+        entity:
+          filter:
+            - integration: smart_place
+              domain: sensor
+    title:
+      name: Title
+      default: "📦 Package delivered"
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: "PIN: {{ value }}"
+      selector:
+        text: {}
+    channel:
+      name: Notification channel
+      description: Android notification channel. Leave empty to use the app's default channel.
+      default: ""
+      selector:
+        text: {}
+
+triggers:
+  - trigger: state
+    entity_id: !input pin_sensor
+    not_from: unavailable
+    not_to:
+      - unknown
+      - unavailable
+
+actions:
+  - variables:
+      channel: !input channel
+      value: "{{ trigger.to_state.state }}"
+  - repeat:
+      # Every phone with the Home Assistant app has a notify entity.
+      for_each: >
+        {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+      sequence:
+        # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's device.
+        - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+          data:
+            title: !input title
+            message: !input message
+            # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+            data: >
+              {{ {'ttl': 0, 'priority': 'high', 'tag': 'parcel-box'}
+                 | combine({'channel': channel} if channel else {}) }}
+
+mode: single

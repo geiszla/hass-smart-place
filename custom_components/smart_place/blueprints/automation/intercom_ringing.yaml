@@ -1,0 +1,238 @@
+blueprint:
+  name: "Smart Place: intercom ringing"
+  description: |
+    Sends a notification with door buttons when somebody rings at the intercom, and opens the door when a
+    button is tapped.
+
+    - The notification goes to every phone that has the Home Assistant app. It is sent when an intercom sensor
+      of the Smart Place integration gets a new caller text. A tap on it opens the page chosen below.
+    - The notification has a button for each door that is set below. If the caller text contains a word of
+      one of the doors, only that door's button is shown. The garage is looked at first, then the ground floor
+      entrance, then the front door.
+    - A tap on a button presses that door's button entity. **This opens a real door.**
+
+    Make only one automation from this blueprint, and select all intercom sensors in it: every automation made
+    from it presses the door button when a notification button is tapped.
+
+    Title and message can contain templates. `{{ value }}` is the caller text.
+  domain: automation
+  source_url: >-
+    https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/intercom_ringing.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    intercom_sensors:
+      name: Intercom sensors
+      description: The "Intercom" sensors of the Smart Place integration.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - integration: smart_place
+              domain: sensor
+    title:
+      name: Title
+      default: "🔔 Ringing from {{ value }}"
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: Tap to see the cameras
+      selector:
+        text: {}
+    tap_target:
+      name: Opened by a tap
+      description: >-
+        What a tap on the notification opens: a Home Assistant page or a web address. The default is the
+        intercom page of the Smart Place dashboard.
+      default: /smart-place/intercom
+      selector:
+        text: {}
+    channel:
+      name: Notification channel
+      description: >-
+        Android notification channel. With a channel the notification is sent with high importance. Leave
+        empty to use the app's default channel.
+      default: Smart Place - Intercom
+      selector:
+        text: {}
+    doors:
+      name: Doors
+      description: >-
+        A door whose button entity is left empty gets no button in the notification. The words are looked for
+        in the caller text; upper and lower case do not matter.
+      input:
+        ground_floor_button:
+          name: Ground floor entrance - button entity
+          description: The button "Ground floor entrance" of the Smart Place integration.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - integration: smart_place
+                  domain: button
+        ground_floor_title:
+          name: Ground floor entrance - text of the button
+          default: Open ground floor
+          selector:
+            text: {}
+        ground_floor_words:
+          name: Ground floor entrance - words in the caller text
+          default:
+            - ground
+            - building
+          selector:
+            text:
+              multiple: true
+        front_door_button:
+          name: Front door - button entity
+          description: The button "Front door" of the Smart Place integration.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - integration: smart_place
+                  domain: button
+        front_door_title:
+          name: Front door - text of the button
+          default: Open front door
+          selector:
+            text: {}
+        front_door_words:
+          name: Front door - words in the caller text
+          default:
+            - front
+            - apartment
+          selector:
+            text:
+              multiple: true
+        garage_button:
+          name: Garage entrance - button entity
+          description: The button "Garage entrance" of the Smart Place integration.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - integration: smart_place
+                  domain: button
+        garage_title:
+          name: Garage entrance - text of the button
+          default: Open garage
+          selector:
+            text: {}
+        garage_words:
+          name: Garage entrance - words in the caller text
+          default:
+            - garage
+          selector:
+            text:
+              multiple: true
+
+triggers:
+  - trigger: state
+    entity_id: !input intercom_sensors
+    not_from: unavailable
+    not_to:
+      - unknown
+      - unavailable
+    id: ring
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: SMART_PLACE_PRESS_GROUND_FLOOR_ENTRANCE
+    id: ground_floor
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: SMART_PLACE_PRESS_FRONT_DOOR
+    id: front_door
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: SMART_PLACE_PRESS_GARAGE_ENTRANCE
+    id: garage
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: ring
+        sequence:
+          - variables:
+              channel: !input channel
+              tap_target: !input tap_target
+              value: "{{ trigger.to_state.state }}"
+              ground_floor:
+                action: SMART_PLACE_PRESS_GROUND_FLOOR_ENTRANCE
+                button: !input ground_floor_button
+                title: !input ground_floor_title
+                words: !input ground_floor_words
+              front_door:
+                action: SMART_PLACE_PRESS_FRONT_DOOR
+                button: !input front_door_button
+                title: !input front_door_title
+                words: !input front_door_words
+              garage:
+                action: SMART_PLACE_PRESS_GARAGE_ENTRANCE
+                button: !input garage_button
+                title: !input garage_title
+                words: !input garage_words
+              # The garage is looked at first: "underground garage" also contains "ground".
+              buttons: >
+                {% set caller = value | lower %}
+                {% set ns = namespace(named=none, buttons=[]) %}
+                {% for door in [garage, ground_floor, front_door] %}
+                  {% if ns.named is none and door.button
+                        and door.words | map('lower') | select('in', caller) | list %}
+                    {% set ns.named = door %}
+                  {% endif %}
+                {% endfor %}
+                {% for door in [ground_floor, front_door, garage] %}
+                  {% if door.button and ns.named in [none, door] %}
+                    {% set ns.buttons = ns.buttons + [{'action': door.action, 'title': door.title}] %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.buttons }}
+          - repeat:
+              # Every phone with the Home Assistant app has a notify entity.
+              for_each: >
+                {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+              sequence:
+                # notify.send_message cannot carry "data". The app's own action can; it is named after the
+                # phone's device.
+                - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+                  data:
+                    title: !input title
+                    message: !input message
+                    # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+                    data: >
+                      {{ {'ttl': 0, 'priority': 'high', 'tag': 'intercom-ring',
+                          'clickAction': tap_target, 'actions': buttons}
+                         | combine({'channel': channel, 'importance': 'high'} if channel else {}) }}
+      - conditions:
+          - condition: trigger
+            id: ground_floor
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input ground_floor_button
+      - conditions:
+          - condition: trigger
+            id: front_door
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input front_door_button
+      - conditions:
+          - condition: trigger
+            id: garage
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input garage_button
+
+# Parallel, so that a door button is pressed at once, also while a notification is being sent.
+mode: parallel

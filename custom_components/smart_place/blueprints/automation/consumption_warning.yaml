@@ -1,0 +1,102 @@
+blueprint:
+  name: "Smart Place: consumption warning"
+  description: |
+    Sends a notification when today's consumption of a meter reaches a warning level.
+
+    The Smart Place integration rates today's consumption of each meter against its daily target in a
+    "target status" sensor: orange from 60 % of the target, red from 90 %. The notification is sent when that
+    sensor changes to the level chosen here. A tap on it opens the "target use" sensor.
+
+    Make one automation per level. A notification for red replaces the one for orange of the same meter.
+
+    Title and message can contain templates. `{{ value }}` is the value of the "target use" sensor.
+  domain: automation
+  source_url: >-
+    https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/consumption_warning.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    status_sensor:
+      name: Target status sensor
+      description: A "target status" sensor of the Smart Place integration, for example of the electricity meter.
+      selector:
+        entity:
+          filter:
+            - integration: smart_place
+              domain: sensor
+              device_class: enum
+    level:
+      name: Level
+      description: The notification is sent when the target status changes to this level.
+      default: red
+      selector:
+        select:
+          options:
+            - label: Orange
+              value: orange
+            - label: Red
+              value: red
+    use_sensor:
+      name: Target use sensor
+      description: The "target use" sensor of the same meter. It gives today's consumption in percent of the target.
+      selector:
+        entity:
+          filter:
+            - integration: smart_place
+              domain: sensor
+              unit_of_measurement: "%"
+    phones:
+      name: Phones
+      description: The phones that get the notification. They need the Home Assistant app.
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: mobile_app
+    title:
+      name: Title
+      description: The default fits the level red.
+      default: "🔴 High consumption"
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: "{{ value }}% of today's target"
+      selector:
+        text: {}
+    channel:
+      name: Notification channel
+      description: Android notification channel. Leave empty to use the app's default channel.
+      default: ""
+      selector:
+        text: {}
+
+triggers:
+  - trigger: state
+    entity_id: !input status_sensor
+    to: !input level
+    not_from:
+      - unknown
+      - unavailable
+
+actions:
+  - variables:
+      status_sensor: !input status_sensor
+      use_sensor: !input use_sensor
+      channel: !input channel
+      value: "{{ states(use_sensor) }}"
+  - repeat:
+      for_each: !input phones
+      sequence:
+        # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's device.
+        - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+          data:
+            title: !input title
+            message: !input message
+            # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+            data: >
+              {{ {'ttl': 0, 'priority': 'high', 'tag': status_sensor, 'clickAction': 'entityId:' ~ use_sensor}
+                 | combine({'channel': channel} if channel else {}) }}
+
+mode: queued
+max: 10

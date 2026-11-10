@@ -1,0 +1,71 @@
+blueprint:
+  name: "Smart Place: new info board entry"
+  description: |
+    Sends a notification when the info board of the building has a new entry.
+
+    The notification goes to every phone that has the Home Assistant app. It is sent when the sensor
+    "Infoboard" of the Smart Place integration gets a new text. A tap on the notification opens the Smart Place
+    web app.
+
+    Title and message can contain templates. `{{ value }}` is the text of the entry.
+  domain: automation
+  source_url: >-
+    https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/info_board_entry.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    info_board_sensor:
+      name: Info board sensor
+      description: The sensor "Infoboard" of the Smart Place integration.
+      selector:
+        entity:
+          filter:
+            - integration: smart_place
+              domain: sensor
+    title:
+      name: Title
+      default: "ℹ️ New information"
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: "{{ value }}"
+      selector:
+        text: {}
+    channel:
+      name: Notification channel
+      description: Android notification channel. Leave empty to use the app's default channel.
+      default: ""
+      selector:
+        text: {}
+
+triggers:
+  - trigger: state
+    entity_id: !input info_board_sensor
+    not_to:
+      - unknown
+      - unavailable
+
+actions:
+  - variables:
+      info_board_sensor: !input info_board_sensor
+      channel: !input channel
+      value: "{{ trigger.to_state.state }}"
+  - repeat:
+      # Every phone with the Home Assistant app has a notify entity.
+      for_each: >
+        {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+      sequence:
+        # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's device.
+        - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+          data:
+            title: !input title
+            message: !input message
+            # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+            # The sensor is on the Smart Place main device, whose link is the web app.
+            data: >
+              {{ {'ttl': 0, 'priority': 'high',
+                  'clickAction': device_attr(info_board_sensor, 'configuration_url')}
+                 | combine({'channel': channel} if channel else {}) }}
+
+mode: single

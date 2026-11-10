@@ -1,9 +1,9 @@
 """Tests on the capture fixtures themselves.
 
 The repository is public and the fixtures come from a real flat, so the
-first block guards what must never be in them, nor in the test modules
-and the registry examples. The second block replays the redacted
-2026-11-09 captures.
+first block guards what must never be in them, nor in the test modules,
+the registry examples and the shipped blueprints. The second block
+replays the redacted 2026-11-09 captures.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from smart_place_client import (
 
 TESTS = Path(__file__).parent
 FIXTURES = TESTS / "fixtures"
+BLUEPRINTS = TESTS.parent / "custom_components" / "smart_place" / "blueprints"
 
 # Frames that carry the installation's remote-access passwords.
 _CREDENTIAL_FRAME = re.compile(r"\b\d+Update:")
@@ -58,6 +59,18 @@ _FORBIDDEN: dict[str, re.Pattern[str]] = {
 }
 # What can be told from the shape alone, in any text: a frame, a line of a test module.
 _FORBIDDEN_SHAPES = {kind: _FORBIDDEN[kind] for kind in ("network address", "installation tag")}
+# A blueprint takes every entity and phone as an input. An entity id in it, or the notify action of a
+# phone, would be one of some home. The two actions that a blueprint names in full are not entities.
+_ENTITY_ID = re.compile(
+    r"\b(?:automation|binary_sensor|button|camera|climate|cover|device_tracker|fan|image|light|notify|person"
+    r"|scene|script|sensor|switch)\.(?!press\b|send_message\b)[a-z0-9_]+"
+)
+_FORBIDDEN_IN_BLUEPRINTS = {
+    **_FORBIDDEN_SHAPES,
+    "URL token": _URL_TOKEN,
+    "parcel PIN": _PIN,
+    "entity id": _ENTITY_ID,
+}
 
 
 def _has_customer_number(text: str) -> bool:
@@ -162,6 +175,24 @@ def test_registry_examples_contain_no_private_data() -> None:
     assert [(name, kinds) for name, example in examples if (kinds := _private_shapes(example))] == []
 
 
+def _private_blueprint_data(line: str) -> list[str]:
+    """Return what kinds of private data a line of a blueprint contains."""
+    return [kind for kind, pattern in _FORBIDDEN_IN_BLUEPRINTS.items() if pattern.search(line)]
+
+
+def test_blueprints_contain_no_private_data() -> None:
+    """No address, installation tag, token, PIN, entity id or phone in any shipped blueprint."""
+    paths = sorted(BLUEPRINTS.rglob("*.yaml"))
+    assert paths
+    leaks = [
+        (path.name, number, kinds)
+        for path in paths
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if (kinds := _private_blueprint_data(line))
+    ]
+    assert leaks == []
+
+
 # The guard's own examples: each must be recognised as the kind named. Private-looking on
 # purpose (all invented), so ``test_test_modules_contain_no_private_data`` skips this list.
 _GUARD_EXAMPLES: list[tuple[str, str]] = [
@@ -201,6 +232,34 @@ _GUARD_LINE_EXAMPLES: list[tuple[str, str]] = [
 @pytest.mark.parametrize(("line", "kind"), _GUARD_LINE_EXAMPLES)
 def test_private_data_guard_recognises_shapes_in_source_lines(line: str, kind: str) -> None:
     assert kind in _private_shapes(line)
+
+
+# The same for lines of a blueprint (all invented).
+@pytest.mark.parametrize(
+    ("line", "kind"),
+    [
+        ("    entity_id: sensor.garden_shed_temperature", "entity id"),
+        ("        - action: notify.mobile_app_some_phone", "entity id"),
+        ("      default: button.side_gate", "entity id"),
+        ("            clickAction: https://spr1.smartplace.ch:8770/Start5?abc", "URL token"),
+        ('      default: "PIN: 1234"', "parcel PIN"),
+    ],
+)
+def test_private_data_guard_recognises_private_blueprint_lines(line: str, kind: str) -> None:
+    assert kind in _private_blueprint_data(line)
+
+
+def test_private_data_guard_accepts_what_a_blueprint_needs() -> None:
+    for line in (
+        "          - action: button.press",
+        "        # notify.send_message cannot carry data.",
+        "        - action: \"notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}\"",
+        "        {{ integration_entities('mobile_app') | select('match', 'notify\\.') | list }}",
+        '      default: "PIN: {{ value }}"',
+        '      value: "{{ trigger.to_state.state }}"',
+        "    min_version: 2026.11.0",
+    ):
+        assert _private_blueprint_data(line) == []
 
 
 def test_private_data_guard_accepts_redacted_frames() -> None:

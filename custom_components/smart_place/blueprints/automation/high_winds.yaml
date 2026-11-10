@@ -1,0 +1,135 @@
+blueprint:
+  name: "Smart Place: high winds"
+  description: |
+    Shows a reminder on the chosen phones while the wind speed is above a limit, and removes it when the wind
+    is low again.
+
+    - While the wind speed is above the limit, the reminder is sent again with every new reading, without a
+      new alert. It stays when it is tapped, and a reminder that was dismissed comes back with the next
+      reading.
+    - When the wind speed falls below the lower value, the reminder is removed. The removal goes to every
+      phone that has the Home Assistant app.
+
+    The sensor can be the wind speed sensor of the Smart Place integration or a helper made from it. With a
+    Statistics helper that gives the average of 5 minutes, a short gust does not show the reminder.
+
+    Title and message can contain templates. `{{ value }}` is the wind speed and `{{ unit }}` its unit.
+  domain: automation
+  source_url: >-
+    https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/high_winds.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    wind_sensor:
+      name: Wind speed sensor
+      description: >-
+        The sensor "Wind speed" of the Smart Place integration, or a helper made from it, for example a
+        Statistics helper with the average of 5 minutes.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: wind_speed
+    limit:
+      name: Limit
+      description: The reminder is shown while the wind speed is above this value, in the unit of the sensor.
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    clear_below:
+      name: Remove below
+      description: >-
+        The reminder is removed when the wind speed falls below this value. Choose a value below the limit, so
+        that the reminder does not come and go.
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    phones:
+      name: Phones
+      description: The phones that get the reminder. They need the Home Assistant app.
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: mobile_app
+    title:
+      name: Title
+      default: "🌪️ High winds"
+      selector:
+        text: {}
+    message:
+      name: Message
+      default: "{{ value }} {{ unit }}"
+      selector:
+        text: {}
+    channel:
+      name: Notification channel
+      description: >-
+        Android notification channel. With a channel the reminder is sent with low importance, which means no
+        sound. Leave empty to use the app's default channel.
+      default: Smart Place - Silent
+      selector:
+        text: {}
+
+triggers:
+  - trigger: state
+    entity_id: !input wind_sensor
+    id: reading
+  - trigger: numeric_state
+    entity_id: !input wind_sensor
+    below: !input clear_below
+    id: clear
+
+conditions:
+  - condition: or
+    conditions:
+      - condition: trigger
+        id: clear
+      - condition: numeric_state
+        entity_id: !input wind_sensor
+        above: !input limit
+
+actions:
+  - if:
+      - condition: trigger
+        id: clear
+    then:
+      - repeat:
+          # Every phone with the Home Assistant app has a notify entity.
+          for_each: >
+            {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+          sequence:
+            - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+              data:
+                message: clear_notification
+                data:
+                  ttl: 0
+                  priority: high
+                  tag: high-winds
+    else:
+      - variables:
+          wind_sensor: !input wind_sensor
+          channel: !input channel
+          value: "{{ states(wind_sensor) }}"
+          unit: "{{ state_attr(wind_sensor, 'unit_of_measurement') }}"
+      - repeat:
+          for_each: !input phones
+          sequence:
+            # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's
+            # device.
+            - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+              data:
+                title: !input title
+                message: !input message
+                # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+                data: >
+                  {{ {'ttl': 0, 'priority': 'high', 'tag': 'high-winds',
+                      'persistent': true, 'sticky': true, 'alert_once': true}
+                     | combine({'channel': channel, 'importance': 'low'} if channel else {}) }}
+
+# Queued, so that removing the reminder waits for a reminder that is being sent and is never skipped.
+mode: queued
