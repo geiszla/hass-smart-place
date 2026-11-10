@@ -317,6 +317,19 @@ def test_update_installs_through_the_marketplace_update_entity(update_api: type[
     assert "Installing ccc3333 (installed: aaa1111)" in result.output
 
 
+def test_update_cuts_a_commit_hash_to_what_the_marketplace_records(update_api: type[_FakeUpdateApi]) -> None:
+    """A longer hash of the newest commit would be recorded as given and leave "update available" on."""
+    result = _invoke_update("--version", "ccc3333" + "0" * 33)
+    assert result.exit_code == 0, result.output
+    assert [payload["service_data"] for _, payload in update_api.calls] == [{"version": "ccc3333"}]
+
+
+def test_update_passes_a_tag_as_given(update_api: type[_FakeUpdateApi]) -> None:
+    result = _invoke_update("--version", "v1.2.3-feedbacked")
+    assert result.exit_code == 0, result.output
+    assert [payload["service_data"] for _, payload in update_api.calls] == [{"version": "v1.2.3-feedbacked"}]
+
+
 def test_update_without_a_version_installs_what_the_marketplace_offers(update_api: type[_FakeUpdateApi]) -> None:
     result = _invoke_update()
     assert result.exit_code == 0, result.output
@@ -338,3 +351,134 @@ def test_update_help_names_the_marketplace_and_its_warning() -> None:
     assert "Marketplace" in result.output
     assert "warning not accepted" in result.output
     assert "HACS" not in result.output
+
+
+# ------------------------------ output, restart, plan-config ------------------------------
+
+
+def test_printed_json_hides_the_token_of_a_smart_place_link(capsys: pytest.CaptureFixture[str]) -> None:
+    """The main device's configuration link ends with the Smart Place token."""
+    ha_live._print_json([{"name": "Smart Place", "configuration_url": "https://example.smartplace.ch:1/Start5?abc123"}])
+    printed = capsys.readouterr().out
+    assert "abc123" not in printed
+    assert "https://example.smartplace.ch:1/Start5?<REDACTED>" in printed
+
+
+class _FakeRestartApi:
+    """Stand-in for ``HassApi`` whose restart call is never answered, as on the real box."""
+
+    posts: list[str]
+
+    def __init__(self, *_args: object) -> None:
+        self._down_reported = False
+
+    async def post(self, path: str, payload: dict[str, Any] | None = None) -> Any:
+        self.posts.append(path)
+        raise TimeoutError
+
+    async def get(self, path: str) -> Any:
+        if path == "/api/config/config_entries/entry":
+            return [{"entry_id": _ENTRY_ID, "domain": "smart_place", "title": "Smart Place", "state": "loaded"}]
+        assert path == "/api/"
+        if not self._down_reported:
+            self._down_reported = True
+            raise aiohttp.ClientConnectionError
+        return {"message": "API running."}
+
+
+def test_restart_goes_on_when_the_restart_call_is_not_answered(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeRestartApi.posts = []
+    monkeypatch.setattr(ha_live, "HassApi", _FakeRestartApi)
+    result = CliRunner().invoke(ha_live.cli, ["--token", "t", "--url", "http://192.0.2.1:1", "restart"])
+    assert result.exit_code == 0, result.output
+    assert _FakeRestartApi.posts == ["/api/services/homeassistant/restart"]
+    assert "API is back up" in result.output
+    assert "config entry" in result.output
+
+
+class _FakePlanApi:
+    """Stand-in for ``HassApi`` that answers the plan action; records the WebSocket commands."""
+
+    calls: list[tuple[str, dict[str, Any]]]
+
+    def __init__(self, *_args: object) -> None:
+        pass
+
+    async def ws_command(self, command_type: str, **payload: Any) -> Any:
+        self.calls.append((command_type, payload))
+        return {"context": {}, "response": {"views": [{"title": "Lights"}]}}
+
+
+def test_plan_config_prints_what_the_action_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakePlanApi.calls = []
+    monkeypatch.setattr(ha_live, "HassApi", _FakePlanApi)
+    result = CliRunner().invoke(ha_live.cli, ["--token", "t", "--url", "http://192.0.2.1:1", "plan-config"])
+    assert result.exit_code == 0, result.output
+    assert _FakePlanApi.calls == [
+        (
+            "call_service",
+            {"domain": "smart_place", "service": "get_plan_config", "service_data": {}, "return_response": True},
+        ),
+    ]
+    assert json.loads(result.output) == {"views": [{"title": "Lights"}]}
+
+
+# ------------------------------ config-delete ------------------------------
+
+
+class _FakeConfigApi:
+    """Stand-in for ``HassApi`` holding one automation; records what was deleted."""
+
+    deleted: list[str]
+
+    def __init__(self, *_args: object) -> None:
+        pass
+
+    async def get(self, path: str) -> Any:
+        assert path == "/api/config/automation/config/123"
+        return {"id": "123", "alias": "Old one", "triggers": [], "actions": []}
+
+    async def delete(self, path: str) -> None:
+        self.deleted.append(path)
+
+
+def _invoke_config_delete(*args: str) -> Any:
+    return CliRunner().invoke(ha_live.cli, ["--token", "t", "--url", "http://192.0.2.1:1", "config-delete", *args])
+
+
+def test_config_delete_saves_the_config_before_it_deletes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _FakeConfigApi.deleted = []
+    monkeypatch.setattr(ha_live, "HassApi", _FakeConfigApi)
+    backup = tmp_path / "old.json"
+    result = _invoke_config_delete("automation", "123", "--backup", str(backup), "--yes")
+    assert result.exit_code == 0, result.output
+    assert json.loads(backup.read_text(encoding="utf-8"))["alias"] == "Old one"
+    assert _FakeConfigApi.deleted == ["/api/config/automation/config/123"]
+
+
+def test_config_delete_deletes_nothing_when_not_confirmed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _FakeConfigApi.deleted = []
+    monkeypatch.setattr(ha_live, "HassApi", _FakeConfigApi)
+    result = CliRunner().invoke(
+        ha_live.cli,
+        [
+            "--token",
+            "t",
+            "--url",
+            "http://192.0.2.1:1",
+            "config-delete",
+            "automation",
+            "123",
+            "--backup",
+            str(tmp_path / "b"),
+        ],
+        input="n\n",
+    )
+    assert result.exit_code != 0
+    assert _FakeConfigApi.deleted == []
+
+
+def test_config_delete_refuses_a_key_that_is_not_a_bare_path_segment() -> None:
+    result = _invoke_config_delete("automation", "../x", "--backup", "b", "--yes")
+    assert result.exit_code != 0
+    assert "bare config path segment" in result.output

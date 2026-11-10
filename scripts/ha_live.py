@@ -4,9 +4,10 @@ A read-mostly CLI over the HA REST + WebSocket APIs, scoped to the
 ``smart_place`` integration. It fetches data — config entry status,
 devices, entities and their states, system logs, a live state stream —
 and leaves any judgement about health to the caller. The mutating
-commands are ``reload``, ``restart``, ``update`` and ``config-set``; all
-affect the HA instance only, never the building directly (``config-set``
-writes automation/scene/script config — it cannot itself call a service).
+commands are ``reload``, ``restart``, ``update``, ``config-set`` and
+``config-delete``; all affect the HA instance only, never the building
+directly (``config-set`` and ``config-delete`` write or remove
+automation/scene/script config — they cannot themselves call a service).
 
 One command calls a service on a Smart Place entity: ``call``. It only
 does so while the integration runs in dry run (the Connection sensor
@@ -15,7 +16,11 @@ sending them to the building), and never on a door button. The service
 must belong to the entity's domain or to ``smart_place``, and the service
 data must not name further targets. The raw ``ws`` hatch refuses the
 WebSocket commands that make Home Assistant act, and a payload that would
-replace the command.
+replace the command. ``plan-config`` calls the integration's read-only
+action ``smart_place.get_plan_config``, which only returns data.
+
+Printed JSON never contains the Smart Place token: the main device's
+configuration link carries it, and the output replaces it.
 
 Authentication uses a long-lived access token from an admin HA user
 (HA UI → your user → Security → Long-lived access tokens). Put it in
@@ -94,6 +99,15 @@ SERVICE_TARGET_KEYS = frozenset({"entity_id", "device_id", "area_id", "floor_id"
 # 2026.11) provides this update entity for the integration's repository.
 MARKETPLACE_UPDATE_ENTITY = "update.smart_place_update"
 
+# The Marketplace records a commit as its first 7 characters and compares
+# that text with the newest one: a longer hash of the same commit would
+# leave "update available" on for good.
+MARKETPLACE_COMMIT_LENGTH = 7
+LONG_COMMIT_HASH = re.compile(r"[0-9a-f]{8,40}")
+
+# The main device's configuration link ends with the Smart Place token.
+SMART_PLACE_LINK_TOKEN = re.compile(r"(smartplace\.ch[^\s\"?]*\?)[^\s\"]+")
+
 REST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 WS_TIMEOUT = 15.0
 # The Marketplace downloads the repository before ``update.install`` returns.
@@ -139,6 +153,11 @@ class HassApi:
             if response.content_type == "application/json":
                 return await response.json()
             return await response.text()
+
+    async def delete(self, path: str) -> None:
+        """DELETE a REST resource."""
+        async with self._session.delete(f"{self.url}{path}", headers=self._headers) as response:
+            response.raise_for_status()
 
     async def ws_command(self, command_type: str, *, max_wait: float = WS_TIMEOUT, **payload: Any) -> Any:
         """Send one WebSocket command and return its ``result`` payload."""
@@ -191,9 +210,14 @@ class HassApi:
         return json.loads(msg.data)
 
 
+def _scrub(text: str) -> str:
+    """Return ``text`` without the token of a Smart Place link in it."""
+    return SMART_PLACE_LINK_TOKEN.sub(r"\1<REDACTED>", text)
+
+
 def _print_json(data: Any) -> None:
     """Pretty-print a JSON-serializable value."""
-    print(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+    print(_scrub(json.dumps(data, indent=2, default=str, ensure_ascii=False)))
 
 
 def _print_config_diff(current: Any, new: Any) -> None:
@@ -629,7 +653,11 @@ def restart(obj: dict[str, str]) -> None:
 
     async def handler(api: HassApi) -> None:
         print("Restarting Home Assistant core...")
-        await api.post("/api/services/homeassistant/restart")
+        # The core often stops answering before it has replied to this call.
+        try:
+            await api.post("/api/services/homeassistant/restart")
+        except (TimeoutError, aiohttp.ClientConnectionError):
+            print("  no reply to the restart call — waiting for the API to go down and come back")
 
         went_down = False
         deadline = time.monotonic() + RESTART_DOWN_TIMEOUT
@@ -668,7 +696,7 @@ def get_cmd(obj: dict[str, str], path: str) -> None:
     async def handler(api: HassApi) -> None:
         result = await api.get(path)
         if isinstance(result, str):
-            print(result)
+            print(_scrub(result))
         else:
             _print_json(result)
 
@@ -743,12 +771,37 @@ def call_cmd(obj: dict[str, str], service: str, entity_id: str, data: tuple[str,
     _execute(obj, handler)
 
 
+@cli.command(name="plan-config")
+@click.pass_obj
+def plan_config(obj: dict[str, str]) -> None:
+    """Print the dashboard configuration the integration builds (smart_place.get_plan_config).
+
+    The action only returns data; nothing is sent to the building, so it
+    does not need dry run.
+    """
+
+    async def handler(api: HassApi) -> None:
+        result = await api.ws_command(
+            "call_service",
+            domain=DOMAIN,
+            service="get_plan_config",
+            service_data={},
+            return_response=True,
+        )
+        _print_json(result["response"])
+
+    _execute(obj, handler)
+
+
 @cli.command()
 @click.option(
     "--version",
     "version",
     default=None,
-    help="Git ref (commit, tag) to install; default: the version the Marketplace offers.",
+    help=(
+        "Git ref (commit, tag) to install; default: the version the Marketplace offers. "
+        "A commit hash is cut to the 7 characters the Marketplace records."
+    ),
 )
 @click.pass_obj
 def update(obj: dict[str, str], version: str | None) -> None:
@@ -762,6 +815,9 @@ def update(obj: dict[str, str], version: str | None) -> None:
     token belongs to has opened Settings > Marketplace once and accepted
     its warning. It also refuses a version that is already installed.
     """
+
+    if version and LONG_COMMIT_HASH.fullmatch(version):
+        version = version[:MARKETPLACE_COMMIT_LENGTH]
 
     async def handler(api: HassApi) -> None:
         try:
@@ -867,6 +923,47 @@ def config_set(
             "This changes the live building's Home Assistant config.",
             abort=True,
         )
+
+    _execute(obj, handler)
+
+
+@cli.command(name="config-delete")
+@click.argument("config_domain", metavar="DOMAIN")
+@click.argument("config_key")
+@click.option("--backup", required=True, help="File the current config is saved to before it is deleted.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.pass_obj
+def config_delete(obj: dict[str, str], config_domain: str, config_key: str, backup: str, assume_yes: bool) -> None:
+    """Delete an editable HA config item (automation/scene/script).
+
+    Saves the item's current config to --backup first, then DELETEs
+    /api/config/DOMAIN/config/CONFIG_KEY, the endpoint the GUI editors use.
+    HA removes the item and reloads that domain. To restore it, write the
+    backup back:
+
+      ./scripts/ha-live config-set DOMAIN CONFIG_KEY --file <backup>
+    """
+    for name, value in (("DOMAIN", config_domain), ("CONFIG_KEY", config_key)):
+        if not CONFIG_PATH_SEGMENT.fullmatch(value):
+            raise click.BadArgumentUsage(
+                f"{name} must be a bare config path segment (letters, digits, '_' or '-'); got {value!r}"
+            )
+
+    path = f"/api/config/{config_domain}/config/{config_key}"
+
+    async def handler(api: HassApi) -> None:
+        current = await api.get(path)
+        text = json.dumps(current, indent=2, ensure_ascii=False) + "\n"
+        await asyncio.to_thread(Path(backup).write_text, text, encoding="utf-8")
+        label = current.get("alias") or current.get("name") or config_key
+        if not assume_yes:
+            click.confirm(
+                f"Delete {config_domain} “{label}” ({config_key}) from {obj['url']}?\n"
+                "This changes the live building's Home Assistant config.",
+                abort=True,
+            )
+        await api.delete(path)
+        print(f"Deleted {config_domain} “{label}” ({config_key}); its config is saved in {backup}")
 
     _execute(obj, handler)
 

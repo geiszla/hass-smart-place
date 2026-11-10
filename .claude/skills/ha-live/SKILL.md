@@ -40,18 +40,20 @@ echo 'HASS_URL=http://192.168.1.x:8123' >> .env
 | Command | What it returns |
 | --- | --- |
 | `status` | HA version, config entry state (+ failure reason), device/entity counts, Connection sensor value (and whether dry run is on), any unavailable entities |
-| `devices` | Device-registry entries: main Smart Place device + its sub-devices (zones, lights, blinds, categories) |
+| `devices` | Device-registry entries: main Smart Place device + its sub-devices (zones, lights, blinds, categories). The main device's configuration link carries the Smart Place token; every JSON output of the tool replaces it with `<REDACTED>` |
 | `entities` | Every entity with its current value and name (`--disabled` to include disabled ones) |
 | `state <entity_id>...` | Full state object(s) as JSON: value, all attributes, timestamps |
 | `logs` | smart_place system-log entries with tracebacks (`--all` for the whole buffer) |
 | `watch --seconds N` | Live stream of Smart Place state changes (default 60 s) |
 | `reload` | Reload the config entry — re-runs the integration's setup |
-| `restart` | Restart HA core, wait for it to come back, print entry state |
+| `restart` | Restart HA core, wait for it to come back, print entry state. The core usually stops answering before it replies to the restart call; the tool then goes on waiting |
+| `plan-config` | The dashboard configuration the integration builds (the read-only action `smart_place.get_plan_config`); works with and without dry run |
 | `update [--version <git ref>]` | Install a version of the integration through its Marketplace update entity (`update.smart_place_update`); needs a `restart` afterwards. Fails with "warning not accepted" until the Marketplace warning was accepted in the UI (see below) |
 | `call <domain.service> <entity_id> [key=value ...]` | Call a service on a Smart Place entity — **only while the integration is in dry run**, never on a door button. The service must be of the entity's own domain or of `smart_place`; the data must not name further targets (see below) |
 | `get <path>` | Raw REST GET, e.g. `get /api/config` |
 | `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list`. Refuses `call_service`, `execute_script`, `fire_event` and the other commands that make HA act, and a JSON payload with the key `type` or `id` |
 | `config-set <domain> <key> --file <f>` | Create/update an automation, scene, or script (writes HA config; see below) |
+| `config-delete <domain> <key> --backup <f>` | Delete an automation, scene, or script after saving its config to the backup file; `config-set` with that file restores it |
 
 `status`, `devices`, `entities`, and `logs` accept `--json` for
 machine-readable output — prefer that when parsing programmatically.
@@ -89,18 +91,21 @@ real `friendly_name`/attributes with `state <entity_id>`.
     Home Assistant checks that this user has accepted it, so the user
     `HASS_TOKEN` belongs to has to open **Settings → Marketplace** once
     and accept. Only the user can do this, in the UI.
-  - **This repository has no releases, so the Marketplace installs the
-    default branch.** A requested version does not select another branch
-    or an older commit.
+  - **This repository has no releases, so the Marketplace follows the
+    default branch** and records a commit as its first 7 characters.
   - **The Marketplace looks for new commits only every 48 hours** (for a
     repository added from a link, and only while GitHub is connected).
     `update.install` refuses when the requested version equals the
     installed one. To install right after a push, before the Marketplace
     has noticed the new commit, name it:
-    `./scripts/ha-live update --version <new commit>`. The version then
-    differs from the installed one, and the Marketplace installs the
-    current default branch. This is read from the Home Assistant 2026.11.1
-    source; it has not been tried on the box yet.
+    `./scripts/ha-live update --version <new commit>` (tried on the box on
+    2026-11-10).
+  - **A commit is recorded exactly as it was requested.** A full
+    40-character hash was recorded as such, and the update entity then
+    offered an "update" to the same commit, because it compares the text
+    with the 7-character form. `update` therefore cuts a commit hash to 7
+    characters before it asks for it. Any other ref (a tag, a branch) is
+    passed as given and installed as that ref.
 
 - **Check a specific value or its configuration**: `entities` to find the
   entity_id, then `state sensor.smart_place_outdoor_temperature` for the full
@@ -123,9 +128,14 @@ real `friendly_name`/attributes with `state <entity_id>`.
   ```bash
   ./scripts/ha-live call light.turn_on light.kitchen_lights
   ./scripts/ha-live call climate.set_temperature climate.bedroom temperature=22
-  ./scripts/ha-live get /api/hassio/core/logs | grep "dry run: would send"
+  ./scripts/ha-live get '/api/hassio/core/logs?lines=200&no_colors' | grep "dry run: would send"
   ./scripts/ha-live state light.kitchen_lights   # shows the expected state for ~3 s, then the server value again
   ```
+
+  Count dry-run lines in the core journal as above, not in `logs`: Home
+  Assistant's system log merges repeated warnings into one entry and
+  keeps only the last few messages, so "no second line was logged"
+  cannot be seen there.
 - **Confirm live pushes are flowing**: `watch --seconds 60` — climate/weather
   sensors update on server pushes; the stream prints each change.
 - **Anything not covered**: use the escape hatches, e.g. entity registry dump
