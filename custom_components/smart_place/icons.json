@@ -11,6 +11,11 @@
         "default": "mdi:lightbulb-group"
       }
     },
+    "image": {
+      "floor_plan": {
+        "default": "mdi:floor-plan"
+      }
+    },
     "sensor": {
       "chart_target_status": {
         "default": "mdi:traffic-light"
@@ -52,6 +57,9 @@
   "services": {
     "adjust_setpoint": {
       "service": "mdi:thermometer-lines"
+    },
+    "get_plan_config": {
+      "service": "mdi:floor-plan"
     }
   }
 }

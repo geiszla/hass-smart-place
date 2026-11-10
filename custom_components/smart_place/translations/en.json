@@ -66,6 +66,16 @@
           "description": "Number of whole degrees to move: positive raises, negative lowers."
         }
       }
+    },
+    "get_plan_config": {
+      "name": "Get plan dashboard configuration",
+      "description": "Returns the configuration of the Smart Place dashboard (floor plan views for lights, blinds and climate, and the scenes view), for use in a dashboard of your own.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Smart Place entry",
+          "description": "The Smart Place installation. Only needed when more than one is set up."
+        }
+      }
     }
   }
 }

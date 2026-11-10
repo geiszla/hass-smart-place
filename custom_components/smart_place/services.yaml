@@ -13,3 +13,11 @@ adjust_setpoint:
           max: 8
           step: 1
           mode: box
+
+get_plan_config:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: smart_place

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
+from homeassistant.core import SupportsResponse, callback
 from homeassistant.helpers import (
     area_registry as ar,
     config_validation as cv,
@@ -60,9 +61,10 @@ from .smart_place_client import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
     from homeassistant.helpers.typing import ConfigType
 
+    from .dashboard import SmartPlaceDashboard
     from .smart_place_client import BlindConfig, LightConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,7 +72,9 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SERVICE_ADJUST_SETPOINT = "adjust_setpoint"
+SERVICE_GET_PLAN_CONFIG = "get_plan_config"
 ATTR_STEPS = "steps"
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -79,6 +83,7 @@ PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
     Platform.COVER,
     Platform.FAN,
+    Platform.IMAGE,
     Platform.LIGHT,
     Platform.SCENE,
     Platform.SENSOR,
@@ -128,6 +133,8 @@ class SmartPlaceData:
     # Identifiers of the devices this run created entities for. A device
     # outside this set is no longer provided and may be deleted by the user.
     device_identifiers: set[tuple[str, str]] = field(default_factory=set)
+    # The sidebar dashboard, ``None`` if it could not be set up.
+    dashboard: SmartPlaceDashboard | None = None
 
     @property
     def is_healthy(self) -> bool:
@@ -148,6 +155,12 @@ class SmartPlaceData:
         every scene.
         """
         return self.client.state.main_menu_loaded
+
+    @callback
+    def async_plan_changed(self) -> None:
+        """Note that entities or plan images changed: the dashboard may look different now."""
+        if self.dashboard is not None:
+            self.dashboard.async_schedule_refresh()
 
 
 def main_device_info(entry: SmartPlaceConfigEntry) -> DeviceInfo:
@@ -281,6 +294,21 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema={probatio.Required(ATTR_STEPS): int},
         func="async_adjust_setpoint",
     )
+
+    async def get_plan_config(call: ServiceCall) -> ServiceResponse:
+        # Lazy import: the builder pulls in every platform's helpers.
+        from .plan_view import async_build_plan_config  # noqa: PLC0415
+
+        entry = service.async_get_config_entry(call.hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID))
+        return async_build_plan_config(call.hass, entry)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_PLAN_CONFIG,
+        get_plan_config,
+        schema=probatio.Schema({probatio.Optional(ATTR_CONFIG_ENTRY_ID): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
     return True
 
 
@@ -318,6 +346,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         notified_status = (False, False)
         _notify_listeners()
 
+    async def plan_image_changed() -> None:
+        # No frame arrives with a fetched image; wake the image entities.
+        _notify_listeners()
+        data.async_plan_changed()
+
     client = SmartPlaceClient.live(
         token=token,
         session=session,
@@ -325,6 +358,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         chart_poll_interval=CHART_POLL_INTERVAL,
         on_reauth=trigger_reauth,
         on_disconnect=trigger_disconnect_notify,
+        on_plan_image=plan_image_changed,
         dry_run=DRY_RUN,
     )
 
@@ -410,7 +444,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
     _async_assign_zone_areas(hass, entry, data)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _async_setup_dashboard(hass, entry, data)
     return True
+
+
+@callback
+def _async_setup_dashboard(hass: HomeAssistant, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
+    """Add the sidebar dashboard; a failure costs the dashboard only.
+
+    It is built on Home Assistant internals (see ``dashboard.py``), so
+    both the import and the registration are allowed to fail.
+    """
+    try:
+        from .dashboard import async_register_dashboard  # noqa: PLC0415
+
+        data.dashboard = async_register_dashboard(hass, entry)
+    except Exception:  # noqa: BLE001 - HA internals; whatever fails, only the dashboard is lost
+        _LOGGER.warning(
+            "The Smart Place dashboard could not be set up; everything else works. "
+            "The smart_place.get_plan_config action still returns its configuration",
+            exc_info=True,
+        )
 
 
 def _async_assign_zone_areas(hass: HomeAssistant, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
@@ -433,8 +487,15 @@ def _async_assign_zone_areas(hass: HomeAssistant, entry: SmartPlaceConfigEntry, 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> bool:
-    """Unload a Smart Place config entry — clean up the client and platforms."""
-    await entry.runtime_data.client.aclose()
+    """Unload a Smart Place config entry — clean up the client, dashboard and platforms."""
+    data = entry.runtime_data
+    await data.client.aclose()
+    if data.dashboard is not None:
+        try:
+            data.dashboard.async_remove()
+        except Exception:  # noqa: BLE001 - HA internals; the unload must go on
+            _LOGGER.warning("The Smart Place dashboard could not be removed", exc_info=True)
+        data.dashboard = None
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

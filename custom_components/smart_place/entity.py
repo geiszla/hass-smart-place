@@ -65,6 +65,7 @@ def async_add_discovered(
         if new:
             known.update(found)
             async_add_entities(new)
+            data.async_plan_changed()
 
     discover()
     data.listeners.append(discover)
