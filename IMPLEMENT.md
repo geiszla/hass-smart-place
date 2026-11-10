@@ -560,7 +560,7 @@ documented as best-effort/latched (state.py / sensor.py).
 
 From `StartWebPhone()` in `javallg.js` (JsSIP):
 - **Endpoint:** `wss://<GSASERVER>:<port>/asterisk/ws`, where `GSASERVER`
-  = `GlobalGsa` field [2] (this building: **`172.16.0.10`** — a LAN IP)
+  = `GlobalGsa` field [2] (this building: a LAN address on a vendor-managed subnet)
   and `port` = `8089` for an on-LAN/panel client (or routed-port + 2 for
   a remote one). **LAN-scoped** — reachable from the HA Pi (on the
   building LAN), *not* from the internet (which is why the remote browser
@@ -583,7 +583,7 @@ Feasibility verdict: **plausible from the on-LAN Pi** (LAN-reachable,
 credential scheme derivable) but needs `SPID` + an Asterisk-side
 extension/`max_contacts` decision; it is a real SIP client (aiosip/
 similar over the asterisk WSS), not a pure WS add-on. Reachability to
-`172.16.0.10:8089` can only be tested from the Pi (no SSH today).
+that address on port `8089` can only be tested from the Pi (no SSH today).
 
 ## 2026-07-13 — Electricity price + cost sensors (EWZ tariff model)
 
@@ -718,3 +718,205 @@ charts, incl. the backfill) + the live today value from the server
 buckets — dashboard-consistent and restart-proof. Prefix re-read every
 15 min; `recorder` added to manifest dependencies. The helper was deleted
 (its entity_id is inherited by the new sensor after the next deploy).
+
+## 2026-11-10 — Control entities, plan view, fixes, modernisation
+
+Branch `control-entities-and-plan-view`. Adds everything the vendor system
+offers that Home Assistant did not have yet (lights, sockets, blinds,
+heating, scenes, ventilation, group buttons, doorbell mute, floor plan),
+fixes the defects found while planning it, and brings the Home Assistant
+side up to 2026.11. **No command was sent to the vendor server at any
+point; the control entities have never switched a real device.** They are
+verified against the redacted captures, the vendor JavaScript and a real
+Home Assistant core with scripted sockets (below). The protocol points
+that only a live test can settle are listed at the end.
+
+### What was added
+
+- **Client library:** typed device descriptions (`devices.py`), folded into
+  `SmartPlaceState` with change flags; control commands with checked
+  encoders and a `write` flag; pure helpers `expected.py`, `motion.py`,
+  `conversions.py`, `rooms.py`, `scenes.py`, `plan.py`; plan image fetch;
+  dry run; `sp-cli --allow-send`.
+- **Integration:** platforms `light`, `switch`, `cover`, `climate`, `scene`,
+  `fan`, `image`; group buttons; actions `smart_place.adjust_setpoint` and
+  `smart_place.get_plan_config`; the sidebar dashboard; diagnostics;
+  `icons.json`; translated errors; `entry.runtime_data`; dynamic entity
+  discovery; `async_remove_config_entry_device`.
+- **Tooling:** `ha-live call` (dry run only), `ha-live update` (HACS),
+  blocked `ws` commands.
+
+### Defects fixed (cause → fix)
+
+1. **A command could be written to the discovery socket during a
+   reconnect.** The client kept the discovery socket in the attribute
+   `send()` writes to, and the session phase of the previous connection
+   (READY) was never reset, so the integration looked healthy while it was
+   rediscovering. → `send()` only knows the app socket; the discovery
+   socket lives in its own attribute; `SessionState.reset_connection()` and
+   the bootstrap event are reset at the start of every attempt.
+2. **Door buttons reported success when the send failed**, and only caught
+   `RuntimeError` (aiohttp raises `ClientConnectionResetError` on a closing
+   socket). → `send()` raises one typed `SmartPlaceNotConnectedError`
+   (aiohttp errors are mapped to it); entities turn it into a translated
+   `HomeAssistantError`. Heartbeat and chart polls catch the same error.
+3. **The write gate ignored platform attributes** (it compared name, state
+   and `extra_state_attributes`). → it compares
+   `Entity._async_calculate_state()`.
+4. **Setup deleted every registry entry whose unique id starts with
+   `<entry>_scene_`**, in every domain — it would have deleted the new
+   scene entities on every start. → limited to `binary_sensor`.
+5. **`main_menu_loaded` and the bootstrap event were set once per process**,
+   so nothing could tell that a reconnect had finished its main-menu reply.
+   → both are per connection.
+6. **A slow first bootstrap left entities missing until a manual reload.**
+   → every platform adds entities when their key first appears.
+7. **Unknown frames left no trace on the box.** → logged at DEBUG.
+8. **`ha-live ws` could call services.** → refused; see `ha-live call`.
+9. **`send()` wrote to the capture file before the connection check.** → a
+   frame is captured after it was transmitted.
+10. **The two tariff sensors were unavailable since 2026-10-27**
+    (`via_device`). Cause: Home Assistant reports the deprecated
+    `via_device` through `report_usage`, which logs when it finds the
+    integration in the call stack and **raises** when it does not. A
+    platform's entities are added one after the other in one coroutine.
+    That coroutine starts inside the integration's `async_add_entities`
+    call, so the first entities have the integration in their stack. The
+    monthly cost sensor awaits a recorder job in `async_added_to_hass`;
+    after that real suspension the coroutine is resumed by the event loop,
+    without the integration in the stack. The two entities added after it
+    — the high and low tariff sensors — hit the raise. No other entity was
+    affected, but any entity added after a suspending one would have been.
+    → the main device is registered first and every sub-device passes
+    `via_device_id`. No deprecated device-registry argument is left.
+11. **Credential frames were not redacted** (`144Update:` / `145Update:`).
+    → the parser drops their value; `scrub_secrets` redacts them in log
+    records, the capture file and the unknown-frame log.
+12. **`strings.json` duplicated `translations/en.json`.** → removed;
+    hassfest (run locally from the core checkout) accepts the integration
+    without it. The HACS action could not be run locally.
+13. Docs: scene command name, removed binary sensors, file list, scp.
+
+### Monthly cost "drops at the start of each day"
+
+Cause, from the box's history and the recorder source:
+
+- The monthly sensor is *statistics prefix + live today*. It read the
+  prefix with `statistics_during_period(start, end, ..., "day", ...)` and
+  `end` = today's midnight. For the period `"day"` the recorder moves
+  `end` to the **end of the day that contains it**. So the "prefix"
+  included today's statistics up to the last full hour, and the sensor
+  showed *true prefix + today (statistics) + today (live)*: today was
+  counted about twice, growing through the day.
+- At midnight the live part went back to zero and the value fell by about
+  the cost of the day that had just ended — down to the correct figure.
+  That fall is the reported drop. Example from the box: 9.10 CHF at 23:48
+  on 5 November, 7.71 at 00:00:27, 7.88 at 00:02 (the correct total).
+- A second, smaller effect: the reply to the range read arrives as one
+  frame per series. Right after midnight the daily sensor showed the new
+  day's high-tariff bucket next to the old day's low-tariff bucket for
+  one write, stamped with the new day's `last_reset`.
+
+Fix: the prefix is read with the period `"hour"` up to the midnight of the
+day the buckets cover (not the wall clock); `MonthToDateCost` only adds
+prefix and live part when both belong to the same day, so the value
+stands still for about 90 seconds after midnight instead of dropping;
+range replies are published in one step (`_commit_chart_range`), stamped
+with the day they were asked for; the daily sensor's `last_reset` and
+rates follow that day. The high/low tariff sensors only needed the
+one-step publishing.
+
+Recorded data: the **monthly sensor's own history and statistics are
+distorted** for the time before the fix — inflated during each day, with
+a negative change in the first hour of each day. Its day-to-day net change
+is right. The daily cost sensor's statistics are clean (checked for 6–7
+November), and so is everything the Energy dashboard uses. When the fix is
+installed the monthly value steps down once to the correct figure. The
+old statistics could be recomputed from the daily sensor's statistics;
+that was not done.
+
+Not part of this defect but visible in the same data: the high and low
+tariff sensors have been unavailable since 2026-10-27 (defect 10), so the
+Energy dashboard has no grid consumption for that period.
+
+### Decisions and divergences from the plan
+
+- **Level-group fan device.** The plan puts the fan on a category device
+  "Ventilation" and names the entity after the group. Both together would
+  read "Smart Place Ventilation Ventilation". Each level group gets a
+  category device named after the group and the entity takes that name.
+- **Plan image availability.** The image entity is available once the
+  image was fetched, also while the connection is down (the picture does
+  not depend on the connection), like the price sensor.
+- **Remote-access frames.** Every numbered `<n>Update:` frame is treated
+  as a credential frame, not only 144 and 145.
+- **`ha-live ws`** also refuses `webhook/handle`, `conversation/process`
+  and `assist_pipeline/run`: they make Home Assistant act as well.
+- **Outage logging.** The first failed attempt of an outage is logged at
+  WARNING (it shows up in `ha-live logs`), further ones at DEBUG, the
+  recovery at INFO.
+- **Config flow** imports `probatio` instead of `voluptuous` (Home
+  Assistant's validation library since 2026.9; the old name is only an
+  alias and fails type checking).
+- **`main_device_info`** only carries the identifier now; name,
+  manufacturer and configuration URL are set where the device is
+  registered.
+- **`IndividuellStart`** is registered as `MainMenuEntry` (was
+  `QuickStartTile`).
+- **Private data in older commits.** The installation tag, the customer
+  number and a LAN address were in tests and docs before this branch.
+  They are replaced by placeholders at the tip; the git history still
+  has them.
+
+### How the Home Assistant side was checked
+
+The project does not depend on `homeassistant`. Two throwaway setups
+outside the repository were used:
+
+- **Type check:** a copy of `custom_components/` checked with pyright in
+  a Python 3.14 environment with `homeassistant==2026.11.1` installed
+  (the project's `pyproject.toml` excludes the HA modules even when they
+  are named on the command line, so the check has to run on a copy with
+  its own config). Result: 0 errors.
+- **Runtime:** the same environment plus `pytest-homeassistant==2026.11.1`
+  (Home Assistant's own test plugin) and the frontend package. The
+  integration was set up on a real Home Assistant core with the client's
+  HTTP session replaced by scripted sockets that play
+  `tests/fixtures/control-bootstrap.ndjson`. 33 checks: all platforms come
+  up; rooms; toggle rule and expected state; unknown state after a
+  reconnect; cover commands, direction and the scene-restore rule;
+  climate modes and `adjust_setpoint`; scenes and the fan; buttons;
+  plan image, dashboard over the real `lovelace/config` WebSocket command
+  and `get_plan_config`; dry run; late bootstrap; device removal; the cost
+  sensors across a simulated midnight. The recorder fixture of the plugin
+  did not run on this Python, so the copy ran without the recorder
+  dependency and the statistics query was faked.
+- **hassfest** from the core checkout, run on the integration: valid.
+
+### Protocol points that need a live test
+
+Each one uses the safe assumption named here.
+
+| Point | Assumption in the code |
+| --- | --- |
+| Echo of a single light tap | The normal `leuchte<n>:<level>` frame (seen for a scene, not for a tap). Without an echo the entity falls back to the server value after 3 s. |
+| `DIMleuchte<n>` on a switch-type light | Not sent. If it works, absolute commands could replace the toggle rule. |
+| A repeated up/down while a blind moves | Not used as stop. There is no stop. |
+| What vent does exactly | Sent as is for tilt-open; no tilt position is reported. |
+| Blind commands during a weather alarm | Sent (the vendor app sends them too); the server decides. |
+| Setpoint echo, and what 18 and 26 do | Echo expected as `TEMPSOLL<n>:<v>`; 18 is shown as Off; 26 is an ordinary target. |
+| Pressing the active ventilation level again | Never sent: it might switch ventilation off. |
+| What the "All lights" group message does | Unknown, so the button is disabled by default. |
+| Doorbell mute echo | Expected as `MUTE<n>:00|01`. |
+| Dimmer lights | No dimmer exists here; the entity follows the vendor JavaScript. |
+
+Also untested on a real box: the dashboard in a browser (layout and tap
+targets on the plan), the device-area dialog for the new devices, and the
+`update` command.
+
+### First live test
+
+Install with `DRY_RUN = True` (the last commit of the branch sets it).
+`./scripts/ha-live status` then shows "(dry run ...)". Commands are logged
+as `dry run: would send <name> (<wire>)` and not sent, so every entity can
+be exercised with `ha-live call`. Revert that commit before real use.

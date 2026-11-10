@@ -1,10 +1,10 @@
-# Deploying Smart Place to Home Assistant OS on a Raspberry Pi
+# Installing Smart Place on Home Assistant
 
-End-to-end instructions for installing this custom integration on a fresh
-Home Assistant OS install and getting your first entities into the UI.
+Instructions for installing this custom integration on a Home Assistant
+instance and getting the entities into the UI.
 
-Assumes Home Assistant OS is already up and running on the Pi and reachable
-on your LAN (e.g. `http://homeassistant.local:8123/`).
+Requires Home Assistant **2026.11** or newer, reachable on your network (e.g.
+`http://homeassistant.local:8123/`).
 
 ---
 
@@ -12,7 +12,7 @@ on your LAN (e.g. `http://homeassistant.local:8123/`).
 
 You authenticate with the secret token that lives in the URL your
 Smart Place app gives you. Treat it like a password — anyone with the
-token can drive your building.
+token can control your home.
 
 1. Open the Smart Place web app in a desktop browser (the same URL you
    normally use from the mobile app). The address bar will look like:
@@ -29,12 +29,20 @@ token can drive your building.
 
 ---
 
-## 2. Install the integration files on the Pi
+## 2. Before the first start: entity ids
 
-You need to drop `custom_components/smart_place/` into the Home Assistant
-`/config/` directory. Pick **one** of the three paths below.
+By default Home Assistant puts the area name in front of new entity ids
+(`light.living_room_dining_room_kitchen_kitchen_lights`). The integration
+gives every light, socket and blind its own device and suggests an area for
+it, so the ids get long. If you prefer `light.kitchen_lights`, remove "area"
+from Home Assistant's "Entity ID format" setting now. Entities that already
+exist keep their ids.
 
-### Option A — HACS (recommended once published)
+---
+
+## 3. Install the integration files
+
+### Option A — HACS (recommended)
 
 1. If HACS isn't already installed, follow
    [the HACS install guide](https://hacs.xyz/docs/use/download/download/).
@@ -42,61 +50,30 @@ You need to drop `custom_components/smart_place/` into the Home Assistant
 3. Add `https://github.com/geiszla/hass-smart-place` with category
    **Integration**.
 4. Find **Smart Place** in the HACS integrations list → **Download**.
-5. Skip to step 3 (restart).
 
-### Option B — Samba share (easiest for one-off installs)
+### Option B — copy the folder by hand
 
-1. Install the **Samba share** add-on (Settings → Add-ons → Add-on store →
-   Samba share). Start it.
-2. From your computer, browse to `\\homeassistant\config\` (Windows) or
-   `smb://homeassistant.local/config/` (macOS/Linux).
-3. Create `custom_components/` if it doesn't exist.
-4. Copy the entire `custom_components/smart_place/` folder from this repo
-   into it. The final layout must be:
+Home Assistant OS has no SSH by default. Use the **Samba share** add-on
+(Settings → Add-ons → Add-on store), the File editor add-on or Studio Code
+Server.
 
-   ```
-   /config/custom_components/smart_place/
-       __init__.py
-       manifest.json
-       config_flow.py
-       const.py
-       sensor.py
-       binary_sensor.py
-       button.py
-       strings.json
-       translations/en.json
-       smart_place_client/         # bundled WebSocket client library
-           __init__.py
-           client.py
-           commands.py
-           messages.py
-           protocol.py
-           state.py
-   ```
-
-### Option C — SSH
-
-1. Install the **Advanced SSH & Web Terminal** add-on and start it.
-2. From your workstation:
-
-   ```bash
-   scp -r custom_components/smart_place root@homeassistant.local:/config/custom_components/
-   ```
-
-   (Use `homeassistant.local` or the Pi's IP, whichever resolves on your
-   LAN.)
+1. Open the `config` share (`\\homeassistant\config\` on Windows,
+   `smb://homeassistant.local/config/` on macOS/Linux).
+2. Create `custom_components/` if it doesn't exist.
+3. Copy the **whole** `custom_components/smart_place/` folder from this
+   repository into it, with all its files and sub-folders
+   (`smart_place_client/`, `translations/`, `brand/`). Do not pick single
+   files: the integration needs all of them.
 
 ---
 
-## 3. Restart Home Assistant
+## 4. Restart Home Assistant
 
 Settings → System → top-right ⋮ → **Restart Home Assistant** → Restart.
 
-Wait ~30 seconds for the front-end to come back.
-
 ---
 
-## 4. Add the integration via the UI
+## 5. Add the integration via the UI
 
 1. Settings → **Devices & Services** → **Add Integration**.
 2. Search for **Smart Place** and click it.
@@ -109,68 +86,82 @@ the entry if it succeeded. If it fails you'll see one of:
 | Error | Meaning | Fix |
 |---|---|---|
 | *The token was rejected by Smart Place.* | Token is wrong or expired. | Re-copy from the Smart Place URL. Tokens can rotate — paste the latest one. |
-| *Could not reach the Smart Place server.* | Network or DNS issue from the Pi. | Try `ping spr1.smartplace.ch` from the Pi's SSH terminal. |
-| *Unexpected error. Check the Home Assistant log for details.* | Anything else. | Settings → System → Logs (token is auto-redacted from the log). |
+| *Could not reach the Smart Place server.* | Network or DNS issue from the Home Assistant machine, or the token is wrong (the server does not answer a wrong token). | Check the token and the internet connection. |
+| *Unexpected error. Check the Home Assistant log for details.* | Anything else. | Settings → System → Logs (the token is removed from the log). |
+
+After the entry is created, Home Assistant may ask for the area of the new
+devices. The areas are filled in from the room names of your heating zones
+(see "Rooms" in the README); change them there if you like.
 
 ---
 
-## 5. Confirm everything came up
+## 6. Confirm everything came up
 
 Open **Settings → Devices & Services → Smart Place**. You should see:
 
-- A **Smart Place** device with the bulk of the entities.
-- One **`<room>` climate** sub-device per climate zone (temperature +
-  humidity grouped together).
-- A **Connection** diagnostic binary sensor — should read **Connected**.
-  This is the one entity that stays *available* even when the WS is down,
-  so you can build automations on it (e.g. notify when it flips Off).
-- Sensors for outdoor temperature, wind speed, package delivery PIN,
-  consumption charts, intercom, infoboard, person info — whichever the
-  server pushed during the 2-second observation window after bootstrap.
-- Binary sensors for rain / hail / wind alarms, scenes, and the
-  `Any light on` / `Any blind closed` group rollups.
+- A **Smart Place** device with the **Connection** diagnostic sensor — it
+  should read **Connected**. This is the one entity that stays *available*
+  even when the connection is down, so you can build automations on it
+  (e.g. notify when it flips Off). The floor plan image is here too.
+- One device per **heating zone**, named after the room: a climate entity,
+  the temperature sensor and a (disabled) humidity sensor.
+- One device per **light**, **socket** and **blind**, named as in the Smart
+  Place app.
+- Category devices: **Scenes** (scenes and scene switches), one per level
+  group such as **Ventilation** (a fan), **Groups** ("All blinds up/down";
+  "All lights" is disabled by default), **Intercom** (doorbell mute),
+  **Weather**, **Energy**, **Cameras**, and **Doors**.
 - Four **door** buttons (Front door, Ground floor entrance, Garage
-  entrance, Mailbox) — these *send* `OEFFNER<n>` commands when pressed,
-  so don't press them by accident. They're greyed out while the WS is
-  disconnected.
+  entrance, Mailbox) — disabled by default. They *send* `OEFFNER<n>` when
+  pressed and open real doors; enable only the ones you want.
+- A **Smart Place** entry in the sidebar: the plan dashboard.
 
-Entity discovery is one-shot: it happens during integration setup from
-whatever state the server has pushed. If a sensor ID first shows up
-hours later, you'll need to reload the integration to surface it
-(Devices & Services → Smart Place → ⋮ → Reload).
+Entities are added when the server first delivers their device or value —
+normally all at once at setup. A device added in the Smart Place app later
+appears after the next reconnect or restart. A device removed there keeps its
+entity; delete the device in Home Assistant when you no longer want it.
 
 ---
 
-## 6. Day-to-day operation
+## 7. Day-to-day operation
 
 - **Disconnects:** the client reconnects automatically with backoff.
-  While disconnected, all entities except **Connection** show as
-  *Unavailable* so dashboards don't display stale numbers.
+  While disconnected, all entities except **Connection** (and the price
+  sensor and the plan image) show as *Unavailable* so dashboards don't
+  display stale numbers. One warning is logged when the connection is
+  lost.
+- **After a reconnect** lights, blinds and heating read *Unknown* for a
+  moment, until the server has sent their states again. A turn-on or
+  turn-off in that moment is refused.
 - **Heartbeat:** every 60 s the client pings the server; if no pong
-  arrives within 30 s it tears the WS down and reconnects — no action
-  needed from you.
+  arrives within 30 s it tears the connection down and reconnects — no
+  action needed from you.
 - **Token rotation:** if Smart Place ever invalidates your token you'll
   see a **Repairs** notification asking to *Re-authenticate Smart Place*.
   Paste the new token and that's it.
-- **Logs:** Settings → System → Logs. Tokens are redacted from anything
-  the integration writes — but if you turn on `homeassistant.components`
-  debug logging you should still spot-check the output before sharing.
+- **Logs:** Settings → System → Logs. Tokens and the installation's
+  remote-access passwords are removed from anything the integration
+  writes. Commands sent to Smart Place are logged at INFO level
+  (`command issued: ...`) under the logger `smart_place_client`.
 
 ---
 
-## 7. Upgrading
+## 8. Upgrading
 
 - **HACS:** HACS → Smart Place → **Update**, then restart Home Assistant.
-- **Samba/SSH:** overwrite `/config/custom_components/smart_place/` with
-  the new version of the folder, then restart Home Assistant.
+  From this repository's checkout: `./scripts/ha-live update` followed by
+  `./scripts/ha-live restart`.
+- **By hand:** overwrite `/config/custom_components/smart_place/` with
+  the new version of the whole folder, then restart Home Assistant.
 
 The config entry persists across upgrades; you won't need to re-enter
-the token.
+the token. Existing entities keep their ids.
 
 ---
 
-## 8. Uninstalling
+## 9. Uninstalling
 
 1. Settings → Devices & Services → Smart Place → ⋮ → **Delete**.
 2. Restart Home Assistant.
-3. (Optional) delete `/config/custom_components/smart_place/`.
+3. (Optional) remove the repository in HACS or delete
+   `/config/custom_components/smart_place/`.

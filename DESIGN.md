@@ -630,16 +630,21 @@ Server prefix hints in the JS show likely entity families:
 - Covers/blinds: `JALUP<ID>`, `JALDOW<ID>`, `JALLUE<ID>`, `JALICO...`.
 - Climate / sensors: `TEMPIST<ID>`, `TEMPSOLL<ID>`, `FEUCHTEIST<ID>`,
   `KLIMASINFO...`, `FanCoilMode...`.
-- Scenes/settings/alarms/audio: `SZENE<ID>`, `SETTINGS...EINAUS`,
+- Scenes/settings/alarms/audio: `SZENEN<ID>`, `SETTINGS...EINAUS`,
   `SETTINGS...SLIDER`, `Alarme...`, `Lautsprecher...`, `Vol<ID>:...`.
 - Door/intercom/media controls: `SPRECHEN...`, `MUTE...`, `OEFFNER...`,
   `CALLS...`, media playback/select commands.
 
 Write-looking commands include `leuchte<ID>`, `DIMleuchte<ID>:<value>`,
 `JALUP/JALDOW/JALLUE<ID>`, `TEMPSOLL<ID>:<value>`, `SETTINGS...EINAUS`,
-`SETTINGS...SLIDER`, `SZENE<ID>`, `OEFFNER<ID>`, media play/select commands,
+`SETTINGS...SLIDER`, `SZENEN<ID>`, `OEFFNER<ID>`, media play/select commands,
 Smart Garden runtime/threshold setters, and sauna temperature/humidity
 setpoints. Do not send these during discovery/state-capture work.
+
+Correction (2026-11-09): the scene command is `SZENEN<ID>`, not `SZENE<ID>`
+as this inventory first said. The vendor app has a helper `UpdateSZENE`
+that would send `SZENE<ID>`, but the scene tiles call
+`UpdateSINGLE('SZENEN<ID>')`, which sends the frame as it is.
 
 ### 2026-05-28 (HAR-derived registry expansion)
 
@@ -698,7 +703,9 @@ noted; per-id families collapse with a `\d+` regex):
 - *Per-id comma configs* (`prefix<N>:f1,f2,...`): `LightConfig`,
   `BlindConfig`, `ClimateConfig`, `SceneConfig`, `MediacenterConfig`,
   `MediaPanelConfig`, `VolumeConfig`, `LightSubMenu`, `BlindSubMenu`,
-  `SpeakerSubMenu`, `QuickStartTile`, `Floorplan`.
+  `SpeakerSubMenu`, `MainMenuEntry` (wire `IndividuellStart<n>`; first
+  registered as `QuickStartTile`, but it is an extra main-menu entry),
+  `Floorplan`.
 - *Charts*: `ChartPointUpdate`, `ChartDefinition`, `ChartStand`,
   `ChartSumResponse`.
 - *Other*: `PlaySlot` (`PLAYSLOT-<n><...<...` — `<` delimiter).
@@ -824,17 +831,149 @@ command registry so callers can opt in explicitly. Per the
 on its own. The HA integration surfaces them as ``button`` entities
 so the user can press one to send the matching command.
 
+The control commands added 2026-11 (lights, blinds, heating, scenes,
+group buttons, doorbell mute) are listed in "Control protocol" below.
+Every command carries a ``write`` flag; ``client.issue`` withholds
+write commands in dry-run mode.
+
+### Control protocol (2026-11-09)
+
+Worked out from two fresh observe-only captures (a 45 s bootstrap and a
+10 min session in which somebody triggered the "Night" scene from the
+vendor app), the vendor JavaScript, and a read-only walk through the
+vendor app. Evidence marks: [L] seen in the captures, [JS] read from the
+vendor JavaScript, [I] inferred, [U] untested — no command was sent to
+find any of this out. The untested points are listed in IMPLEMENT.md for
+live tests. Redacted fixtures: ``tests/fixtures/control-bootstrap.ndjson``
+and ``tests/fixtures/scene-echo.ndjson``.
+
+**General**
+
+- All config frames arrive in the reply to ``GiveMeMainmenu``, before
+  ``GiveMeMainMenuFinished`` [L]. Value frames for every device follow
+  about 0.15–0.5 s after ``SocketConnected:1``; no marker ends that
+  burst [L].
+- The server replays all values to every session whenever any client
+  connects, and rebroadcasts unchanged values to the primary session about
+  2–3 times per second [L]. Real changes arrive as single frames.
+- **Position fields are ``top,left`` (vertical first)**, whole numbers
+  with ``px`` [L][JS].
+- No frame has a room field. Rooms only appear inside device names.
+
+**Lights and sockets**
+
+- Config ``INHALTLeuchten<id>:name,top,left,kind,actuator,dimcurve,Uebersicht<plan>,rotate,memory``.
+  ``kind`` is ``schalter``, ``dimmer``, ``steckdose`` or ``led``.
+- Value ``leuchte<id>:<n>``: 0 = off, above 0 = on. 250 and 255 both occur
+  and both mean on [L].
+- Command ``leuchte<id>`` (no value) = toggle, for all kinds [JS].
+  ``DIMleuchte<id>:<0..255>`` = absolute level, wired only to ``dimmer``
+  [JS]. Whether the server accepts it for a switch-type light is [U].
+
+**Blinds**
+
+- Config ``INHALTJalousien<id>:name,top,left,kind,actuator,runtime_s,Uebersicht<plan>``.
+  ``kind`` is ``jalousie`` (slatted), ``jalousiestoff`` (fabric) or
+  ``markise`` (awning).
+- Value ``JALICO<id>:<a>-<b>``. ``<a>`` = position percent, **0 = fully
+  up, 100 = fully down**, sent about once per second while moving, with
+  gaps [L]. ``<a>`` may instead be ``regenalarm``, ``windalarm`` or
+  ``hagelalarm``; then no position is known [L for ``regenalarm``].
+  ``<b>`` is ``00`` or ``01``, probably slats closed/open [I]; not
+  exposed.
+- Commands ``JALUP<id>``, ``JALDOW<id>`` for every blind; ``JALLUE<id>``
+  ("vent") only for ``jalousie`` [JS]. No value, single shot. The vendor
+  app has no stop and no go-to-position command.
+
+**Heating**
+
+- Config ``INHALTKlimas<id>:name,top,left,mode,actuator,colour,Uebersicht<plan>,FanCoilOn|FanCoilOff``.
+- Values ``TEMPIST<id>:<float>``, ``TEMPSOLL<id>:<int>``,
+  ``KLIMASINFO<id>:null|heizen|kuehlen`` (``heizen`` = the zone calls for
+  heat) [L].
+- Command ``TEMPSOLL<id>:<value>``, absolute, whole numbers 18–26 [JS].
+  The vendor app labels 18 "forced off" and 26 "forced on".
+
+**Scenes**
+
+- Config ``INHALTSZENEN<id>:`` with 18 comma fields: 0 name, 1 top,
+  2 left, 3 icon file, 4 type (``OnOn`` = trigger only, ``OnOff`` = real
+  on/off), 5 ``Remove``/``NoRemove``, 6 pop-up reference, 7–10 timer
+  fields, 11 PIN flag (``NoPw``/``Pw``), 12–15 sunrise/sunset flags,
+  16 display flag, 17 tile shape [JS][L].
+- Value ``SZENEN<id>:00|01``. For ``OnOff`` it is the real state. For
+  ``OnOn`` it is set on activation and stays latched, so it is not a
+  state [L].
+- Command ``SZENEN<id>`` (no value): toggles an ``OnOff`` scene, triggers
+  an ``OnOn`` scene [JS]. A ``Pw`` scene needs a PIN exchange
+  (``EnteredPinCode:SZENENENTERPIN:...``); not implemented.
+- Observed echo of a trigger scene [L]: ``SZENEN11:01``, 0.2 s later the
+  affected ``leuchte`` frames, 0.7 s later blind position frames.
+
+**Group buttons, mute, plan**
+
+- ``UnterMenuLeuchten<n>:name,top,left,icon,OnOn|OnOff,<group message>,Uebersicht<plan>``;
+  the group message (``LEUCHTENZENTRAL<n>``) is sent back as a command
+  without value. What it does (all off, all on, toggle) is [U].
+- ``UnterMenuJalousien<n>:...,JALZENTRAL<n>,Uebersicht<plan>``; the
+  commands are ``JALUPZENTRAL<plan>`` and ``JALDOWZENTRAL<plan>`` — the
+  number is the plan id [JS].
+- The value frames ``LEUCHTENZENTRAL<n>`` and ``JALZENTRAL<n>`` are
+  placeholders and stay ignored.
+- ``MUTE<n>:00|01``, ``01`` = doorbell muted; command ``MUTE<n>`` =
+  toggle [JS].
+- ``Floorplan<id>:<label>,<top>,<left>,<functions>``; ``functions`` is a
+  ``-``-joined list such as ``Leuchten-Jalousien-Klima``.
+  ``Uebersicht<n>`` in a device config names plan n. The label can be an
+  installation tag; it is never shown or logged.
+- Plan image: ``GET https://<routed host>:<routed port>/uebersichten/upload/Floorplan<id>.png``,
+  no login, works right after a discovery handshake [L]. It is on the
+  routed port, not the camera port. Only ids from ``Floorplan<n>`` frames
+  are fetched, with a timeout: other ids return a vendor sample image or
+  hang. The push frame ``FloorGedreht`` means the image was rotated [JS].
+- The vendor app draws the plan image unscaled at page position left 10,
+  top 54. Marker centre in image pixels: light or socket
+  ``(left + 56.5, top − 74.5)``; blind state icon ``(left + 10, top − 84)``
+  with the Down / Vent / Up buttons 60 px left / at / 57 px right of it,
+  50 px below; climate ``(left + 88, top − 13.5)``.
+
+**Credential frames**
+
+``144Update:<value>`` and ``145Update:<value>`` carry the installation's
+remote-access passwords and arrive unrequested on every session. The
+parser drops the value, and the client redacts the frames in logs, the
+capture file and the unknown-frame log. ``PwReset1``, ``PwReset2`` and
+``>ShowMeTheRight>`` are never sent.
+
 ---
 
 ## 11. HA entity mapping (2026-05-28)
 
-Translates the WS dispatch into the canonical HA entity types. One
-device per config entry; all entities share `identifiers={(DOMAIN,
-entry_id)}`. Discovery is observation-based: `async_setup_entry`
-waits for `wait_for_bootstrap` plus a brief window so the initial
-broadcasts and chart-stand replies land before platforms enumerate.
-New IDs that arrive after platforms have been forwarded require an
-HA reload to surface.
+Translates the WS dispatch into the canonical HA entity types
+(sensors: 2026-05-28; control entities: 2026-11-09).
+
+**Devices.** `async_setup_entry` registers the main device
+(`identifiers={(DOMAIN, entry_id)}`) and every other device links to it
+with `via_device_id`: one device per heating zone
+(`<entry_id>_zone_<n>`), one per light or socket (`<entry_id>_light_<n>`),
+one per blind (`<entry_id>_blind_<n>`), and category devices
+(`<entry_id>_cat_<name>`: Weather, Energy, Scenes, Groups, Intercom,
+Doors, Cameras, and one per level group such as Ventilation). The
+deprecated identifier-based `via_device` must not be used: Home Assistant
+raises on it whenever it cannot attribute the call to an integration,
+which made the two tariff sensors unavailable (IMPLEMENT.md, 2026-11-10).
+
+**Areas.** Lights, sockets and blinds get `suggested_area` from the
+heating zones (`smart_place_client.rooms`): name match first, nearest
+plan marker second. Category devices have no area on purpose.
+
+**Discovery** is dynamic (`entity.async_add_discovered`): every platform
+maps what the state snapshot holds to entity factories, and an entity is
+added when its key first appears. `async_setup_entry` still waits for
+`wait_for_bootstrap` plus a brief window so that everything normally
+appears at once and count-dependent names ("Wind alarm" vs "Wind alarm
+1") stay stable. Control entities are created after a complete main-menu
+reply. Nothing is removed automatically.
 
 ### sensor
 
@@ -846,8 +985,8 @@ HA reload to surface.
 | `StandsSingelChartUpdate<id>:STAND1:<v>` | `SmartPlaceChartSensor` (per non-SUMME chart) | `ENERGY` / `WATER` | kWh / L | `TOTAL_INCREASING` |
 | `PERSINFO:<…PIN:N…>` | `SmartPlacePackageDeliveryPinSensor` (singleton) | — | — | (text state) |
 | (wall clock + `tariff.py` rate table) | `SmartPlaceElectricityPriceSensor` | — | CHF/kWh | — |
-| `SingelStandUpdate<id>:97/96:<kWh>` (today range poll) | `SmartPlaceElectricityCostTodaySensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` local midnight) |
-| (recorder statistics prefix + today range poll) | `SmartPlaceElectricityCostMonthSensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` month start) |
+| `SingelStandUpdate<id>:97/96:<kWh>` (today range poll) | `SmartPlaceElectricityCostTodaySensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` = midnight of the day the buckets cover) |
+| (recorder statistics prefix + today range poll) | `SmartPlaceElectricityCostMonthSensor` | `MONETARY` | CHF | `TOTAL` (+ `last_reset` month start); the two parts are only added when they belong to the same day (`MonthToDateCost`) |
 | `SingelStandUpdate<id>:97:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (high) | `ENERGY` | kWh | `TOTAL_INCREASING` |
 | `SingelStandUpdate<id>:96:<kWh>` | `SmartPlaceElectricityTariffEnergySensor` (low) | `ENERGY` | kWh | `TOTAL_INCREASING` |
 
@@ -881,7 +1020,7 @@ Chart **names** come from `ChartDefinition.label` — the first
 `;`-field of the SingelDiagramm payload, with German tokens
 translated (`Elektro` → `Electricity`, `Wärme` → `Heating`,
 `Kaltwasser I` → `Cold water I`, etc.) and the trailing site code
-(`XX00-00-00`) stripped. SUMME charts (`category == "Summe"`) are
+(an installation tag of the form `XX00-00-00`) stripped. SUMME charts (`category == "Summe"`) are
 filtered out — we surface the per-meter sub-charts instead, since
 the SUMME is just their sum.
 
@@ -930,22 +1069,111 @@ their own. Re-add once the bootstrap response can give us labels.
 
 | Source frame | Entity | device_class | Notes |
 | ------------ | ------ | ------------ | ----- |
-| (WS phase) | `SmartPlaceConnectionSensor` | `CONNECTIVITY` | Diagnostic, always present. |
-| `REGEN:<code>` | `SmartPlaceRainSensor` | `MOISTURE` | `00` = off, else on. |
-| `HAGEL:<code>` | `SmartPlaceHailSensor` | `PROBLEM` | `00` = off, else on. |
+| (WS phase) | `SmartPlaceConnectionSensor` | `CONNECTIVITY` | Diagnostic, always available. Attribute `dry_run: true` while dry run is on. |
+| `REGEN:<code>` | `SmartPlaceRainSensor` | `PROBLEM` | `00` = off, else on. Hidden by default. |
+| `HAGEL:<code>` | `SmartPlaceHailSensor` | `PROBLEM` | `00` = off, else on. Hidden by default. |
 | `JALWARTUNG:<code>` | `SmartPlaceBlindsMaintenanceSensor` | `PROBLEM` (diagnostic) | `00` = off, else on. |
-| `WINDALARM<N>:<code>` | `SmartPlaceWindAlarmSensor` (per zone) | `PROBLEM` | `00` = off, else on. |
-| `SZENEN<N>:<code>` + `SceneConfig` name | `SmartPlaceSceneSensor` (per scene) | — | `01` = active. Skipped when no name known. |
-| `LEUCHTENZENTRAL<N>:<code>` | `SmartPlaceAnyLightOnSensor` (per group) | — | `00` = none on, else at least one. |
-| `JALZENTRAL<N>:<code>` | `SmartPlaceAnyBlindClosedSensor` (per group) | — | Best-effort: empty / `00` = none, else some. |
+| `WINDALARM<N>:<code>` | `SmartPlaceWindAlarmSensor` (per zone) | `PROBLEM` | `00` = off, else on. Hidden by default. |
+
+The scene, "any light on" and "any blind closed" binary sensors that
+existed until 2026-06 are gone (their flags are not states; setup removes
+their registry entries, in the `binary_sensor` domain only).
+
+### light, switch
+
+| Source | Entity | Notes |
+| ------ | ------ | ----- |
+| `INHALTLeuchten<N>` kind `schalter` / `led` + `leuchte<N>` | `SmartPlaceLight` | `ColorMode.ONOFF`; on = level above 0. |
+| kind `dimmer` | `SmartPlaceDimmer` | `ColorMode.BRIGHTNESS`; a brightness sends `DIMleuchte<N>:<level>`. Untested on a real dimmer. |
+| kind `steckdose` | `SmartPlaceSocket` (`switch`, `OUTLET`) | A switch so that "all lights off" does not cut socket power. |
+| `INHALTSZENEN<N>` type `OnOff` + `SZENEN<N>` | `SmartPlaceSceneSwitch` | Not for members of a level group. |
+| `MUTE<N>` | `SmartPlaceMuteSwitch` | On = doorbell muted. |
+
+All of these only have a toggle command. `SmartPlaceToggleEntity`
+decides turn-on and turn-off against the effective state: the expected
+state while one is pending (`smart_place_client.expected`, 3 s), else the
+last server value. Already in the wanted state: nothing is sent. State
+not known yet: the call raises `state_unknown`. The server value is
+unknown after every reconnect until the server replays it
+(`clear_control_values`).
+
+### cover
+
+One `SmartPlaceCover` per `INHALTJalousien<N>`. Device class: `jalousie`
+→ `BLIND`, `jalousiestoff` → `SHADE`, `markise` → `AWNING`. Features are
+set explicitly: `OPEN | CLOSE`, plus `OPEN_TILT` on slatted blinds (vent).
+No stop, no set-position. `current_cover_position = 100 − <a>`;
+`is_closed` when 0. During a weather alarm both are `None` and the
+attribute `weather_alarm` holds `rain`, `wind` or `hail`.
+`assumed_state` is set: the position is the server's own estimate, and
+Home Assistant then keeps both direction buttons enabled.
+
+`is_opening` / `is_closing` come from `smart_place_client.motion`: the
+sign of the change between two distinct positions, ended at 0 or 100, by
+a missing position, and by a timer 3 s after the last change.
+
+"Up is just up": Home Assistant's scene restore calls `open_cover` and
+then `open_cover_tilt` for a cover stored as open. Sent to the vendor
+that would be up followed by vent. A tilt-open within 2 s after an open
+on the same entity is therefore ignored.
+
+### climate
+
+One `SmartPlaceClimate` per `INHALTKlimas<N>`, on the zone device.
+`hvac_modes = [HEAT, OFF]`; vendor setpoint 18 is `OFF`. Target range
+19–26, step 1; the measured value keeps its decimal. Features:
+`TARGET_TEMPERATURE` only — no turn-on/turn-off, so a broad "turn off"
+cannot reach the heating. `hvac_action` from `KLIMASINFO<N>`. Switching
+to `HEAT` from off sends the remembered setpoint (the last 19–26 value
+seen or sent, restored across restarts, 21 if none). The setpoint uses
+the expected-state helper, so two quick steps add up.
+
+Entity action `smart_place.adjust_setpoint` (`steps`, a whole number)
+moves along the vendor scale 18–26, clamped. It is registered in
+`async_setup` with `service.async_register_platform_entity_service`.
+
+### scene, fan
+
+`smart_place_client.scenes.classify_scenes` decides per scene, after a
+complete main-menu reply: `Pw` → nothing; `OnOn` → `SmartPlaceScene`
+(activation sends `SZENEN<N>`; the latched flag is not exposed); `OnOff`
+→ switch, unless it is one level of a level group. A level group is three
+or more on/off scenes whose names differ only in a trailing number 1..N
+(compared ignoring case). It becomes one `SmartPlaceLevelFan` with N
+speeds on a device named after the group (the vendor default "Lüftung
+Stufe" reads "Ventilation"). Selecting level k sends the scene of level k
+unless it is already the active one; 0 % raises (there is no off); with
+no level active the fan is off and turn-on selects level 1. A scene that
+already is a switch in the entity registry is never moved into a group.
+
+### image and the plan dashboard
+
+One `SmartPlacePlanImage` per `Floorplan<N>` serves the PNG the client
+fetched; its timestamp moves only when the bytes change.
+`smart_place_client.plan.build_dashboard` turns plans, devices and entity
+ids into `picture-elements` views (positions in percent of the image
+size): Lights, Blinds, Climate, plus a Scenes view with built-in cards.
+Devices that cannot be placed are listed below the plan.
+`plan_view.py` resolves entity ids from the registry by unique id and
+leaves disabled entities out. `dashboard.py` registers the result as a
+read-only sidebar dashboard through the lovelace integration's internal
+`LovelaceConfig` class and a built-in frontend panel; `__init__.py`
+guards it so that a change in those internals disables the dashboard
+only. The action `smart_place.get_plan_config` returns the same
+configuration.
 
 ### button
 
 The four `OEFFNER<n>` write commands surface as `Button` entities so
 the user can press one from the HA UI to open the corresponding
-door. `async_press` calls `client.send(OPEN_<...>)`. If the WS isn't
-open yet, the press is logged and skipped — there's no command
-queue.
+door (disabled by default). `async_press` issues the command; if it
+cannot be sent the press raises a translated `HomeAssistantError`
+(`not_connected`) — there is no command queue.
+
+`SmartPlaceGroupButton`: per lights sub-menu one button that sends the
+sub-menu's group message (disabled by default, its effect is untested);
+per blinds sub-menu "all up" and "all down" (`JALUPZENTRAL<plan>` /
+`JALDOWZENTRAL<plan>`).
 
 ### Polling
 
@@ -979,13 +1207,13 @@ that would require either probing `GiveMeSingelDiagramm<id>`
 sensor entity names are kept generic — "Electricity chart 49",
 "Water chart 337" — until labels are confirmed.
 
-### Notably **not** mapped (yet)
+### Notably **not** mapped
 
-- `ChartTarget` / `ChartDefinition` / `ChartStand` — would surface
-  per-chart goals/series metadata; not needed for v1.
-- `LightState` / `BlindState` / `ClimateInfo` / `SceneState` — the
-  client parses them but the integration doesn't expose them as HA
-  entities because we have no write coverage yet and the user wants
-  observe-first.
+- Scenes that need a PIN (`Pw`).
+- Changing the daily consumption targets (`CHARTZIEL` / `ZielUpdate`).
+- Media and speakers, ring and speak volume, RGB lights, fan coils,
+  alarm devices, sauna.
+- A blind's second value part (`<b>` of `JALICO`), probably the slat
+  state.
 - `BasicInfos` / `GsaConfig` — contain PII / LAN info and aren't
   user-facing state.
