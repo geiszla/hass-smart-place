@@ -209,7 +209,10 @@ class SmartPlaceClimate(SmartPlacePushEntity, ClimateEntity, RestoreEntity):
         """Send a vendor setpoint unless it already is the effective one."""
         if setpoint == self._setpoint():
             return
-        await self._async_issue(Commands.Setpoint, self._zone_id, setpoint)
+        await self._async_issue_expecting(
+            Commands.Setpoint,
+            (self._zone_id, setpoint),
+            (self._expected_setpoint, setpoint, self._data.state.setpoints.get(self._zone_id)),
+        )
         if not heating_is_off(setpoint):
             self._heating_setpoint = setpoint
-        self._async_expect(self._expected_setpoint, setpoint)

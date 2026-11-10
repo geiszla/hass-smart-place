@@ -113,6 +113,9 @@ class SmartPlaceDimmer(SmartPlaceLight):
         if level is None:
             await super().async_turn_on(**kwargs)
             return
-        await self._async_issue(Commands.LightDim, self._light_id, level)
-        self._expected_level.expect(level)
-        self._async_expect(self._expected_on, True)
+        await self._async_issue_expecting(
+            Commands.LightDim,
+            (self._light_id, level),
+            (self._expected_level, level, self._data.state.light_levels.get(self._light_id)),
+            (self._expected_on, True, self._server_is_on()),
+        )

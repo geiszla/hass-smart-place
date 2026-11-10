@@ -44,7 +44,7 @@ from .devices import (
     SubMenuConfig,
     blinds_menu_plan,
 )
-from .expected import EXPECTED_STATE_TIMEOUT, ExpectedState
+from .expected import EXPECTED_STATE_TIMEOUT, GROUP_SETTLE_TIME, ExpectedState, SettleTime
 from .messages import KNOWN_MESSAGES, parse_frame
 from .motion import BLIND_MOTION_TIMEOUT, BlindMotion
 from .plan import (
@@ -109,6 +109,7 @@ __all__ = [
     "CHART_RANGE_SERIES_TOTAL",
     "DISCOVERY_ORIGIN",
     "EXPECTED_STATE_TIMEOUT",
+    "GROUP_SETTLE_TIME",
     "KNOWN_COMMANDS",
     "KNOWN_MESSAGES",
     "LIGHT_KIND_DIMMER",
@@ -150,6 +151,7 @@ __all__ = [
     "ServerFrame",
     "SessionPhase",
     "SessionState",
+    "SettleTime",
     "SmartPlaceAuthError",
     "SmartPlaceClient",
     "SmartPlaceNotConnectedError",

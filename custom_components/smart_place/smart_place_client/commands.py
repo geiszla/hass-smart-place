@@ -62,6 +62,10 @@ class CommandDefinition:
             (lights, blinds, heating, scenes, doors). Defaults to ``True``
             so a new command is treated as a write unless declared a
             read; ``client.issue`` withholds writes in dry-run mode.
+        changes_others: Whether the command changes devices that have
+            entities of their own (a scene, a group button). Their values
+            follow a moment later, so ``client.issue`` starts the settle
+            time during which no toggle is decided (``expected.SettleTime``).
         audit: Whether issuing this command is logged at INFO as an
             audit-trail line (``client.issue``). Defaults to ``True`` so
             new commands are recorded by default — the audit log should
@@ -78,6 +82,7 @@ class CommandDefinition:
     audit: bool = True
     example_args: tuple[object, ...] = ()
     write: bool = True
+    changes_others: bool = False
 
 
 def _static(wire: str) -> Callable[[], str]:
@@ -371,6 +376,7 @@ class Commands:
         encode=_encode_blinds_group_up,
         example="JALUPZENTRAL1",
         example_args=(1,),
+        changes_others=True,
     )
     BlindsGroupDown = CommandDefinition(
         name="BlindsGroupDown",
@@ -378,6 +384,7 @@ class Commands:
         encode=_encode_blinds_group_down,
         example="JALDOWZENTRAL1",
         example_args=(1,),
+        changes_others=True,
     )
     # -- Heating (write) ----------------------------------------------------
     Setpoint = CommandDefinition(
@@ -402,6 +409,7 @@ class Commands:
         encode=_encode_scene,
         example="SZENEN11",
         example_args=(11,),
+        changes_others=True,
     )
     # -- Group and intercom buttons (write) ---------------------------------
     GroupMessage = CommandDefinition(
@@ -414,6 +422,7 @@ class Commands:
         encode=_encode_group_message,
         example="LEUCHTENZENTRAL1",
         example_args=("LEUCHTENZENTRAL1",),
+        changes_others=True,
     )
     BlindsGroupMessage = CommandDefinition(
         name="BlindsGroupMessage",
@@ -427,6 +436,7 @@ class Commands:
         encode=_encode_blinds_group_message,
         example="JALZENTRAL2",
         example_args=("JALZENTRAL2",),
+        changes_others=True,
     )
     MuteToggle = CommandDefinition(
         name="MuteToggle",

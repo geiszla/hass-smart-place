@@ -22,6 +22,7 @@ import aiohttp
 import pytest
 
 from smart_place_client import (
+    GROUP_SETTLE_TIME,
     CapturedFrame,
     Commands,
     GlobalConfig,
@@ -1235,6 +1236,52 @@ async def test_without_dry_run_write_commands_are_sent() -> None:
     client._ws = ws  # type: ignore[assignment]
     await client.issue(Commands.BlindVent, 8)
     assert ws.sent == ["JALLUE8"]
+
+
+# ----------------------- settle time after a scene -----------------------
+
+
+async def test_scene_and_group_commands_start_the_settle_time() -> None:
+    """Their echoes change other devices a moment later; a toggle is decided after that."""
+    for command, args in (
+        (Commands.Scene, (11,)),
+        (Commands.GroupMessage, ("LEUCHTENZENTRAL1",)),
+        (Commands.BlindsGroupMessage, ("JALZENTRAL2",)),
+        (Commands.BlindsGroupUp, (1,)),
+        (Commands.BlindsGroupDown, (1,)),
+    ):
+        ws = _FakeWebSocket([])
+        client = SmartPlaceClient.live(token="dummy")
+        client._ws = ws  # type: ignore[assignment]
+        assert client.settle.remaining() == 0.0
+        await client.issue(command, *args)
+        assert len(ws.sent) == 1
+        assert 0.0 < client.settle.remaining() <= GROUP_SETTLE_TIME, command.name
+
+
+async def test_commands_for_one_device_do_not_start_the_settle_time() -> None:
+    ws = _FakeWebSocket([])
+    client = SmartPlaceClient.live(token="dummy")
+    client._ws = ws  # type: ignore[assignment]
+    await client.issue(Commands.LightToggle, 13)
+    await client.issue(Commands.BlindDown, 1)
+    await client.issue(Commands.Setpoint, 5, 21)
+    await client.issue(Commands.MuteToggle, 1)
+    await client.issue(Commands.Ping)
+    assert len(ws.sent) == 5
+    assert client.settle.remaining() == 0.0
+
+
+async def test_settle_time_starts_in_dry_run_but_not_for_a_command_that_was_not_sent() -> None:
+    """Dry run behaves as if the command had been sent; a failed send changes nothing."""
+    dry = SmartPlaceClient.live(token="dummy", dry_run=True)
+    await dry.issue(Commands.Scene, 11)
+    assert dry.settle.remaining() > 0.0
+
+    disconnected = SmartPlaceClient.live(token="dummy")
+    with pytest.raises(SmartPlaceNotConnectedError):
+        await disconnected.issue(Commands.Scene, 11)
+    assert disconnected.settle.remaining() == 0.0
 
 
 # ----------------------- credential redaction -------------------------

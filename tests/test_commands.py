@@ -144,6 +144,21 @@ def test_write_commands_are_audited() -> None:
     assert all(defn.audit for defn in KNOWN_COMMANDS if defn.write)
 
 
+def test_commands_that_change_other_devices_are_flagged() -> None:
+    """Scenes and group buttons start the settle time; a command for one device does not.
+
+    Listed by hand like the writes: a new scene or group command belongs here.
+    """
+    assert {defn.name for defn in KNOWN_COMMANDS if defn.changes_others} == {
+        "Scene",
+        "GroupMessage",
+        "BlindsGroupMessage",
+        "BlindsGroupUp",
+        "BlindsGroupDown",
+    }
+    assert CommandDefinition(name="X", description="d", encode=lambda: "X", example="X").changes_others is False
+
+
 def test_control_commands_encode_vendor_wire_strings() -> None:
     """The control commands produce the frames the vendor app sends."""
     assert Commands.LightToggle.encode(13) == "leuchte13"

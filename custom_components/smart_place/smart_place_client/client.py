@@ -37,6 +37,7 @@ from typing import Any, Final, Literal, Self
 import aiohttp
 
 from .commands import CommandDefinition, Commands
+from .expected import SettleTime
 from .messages import parse_frame
 from .plan import png_size
 from .protocol import (
@@ -317,6 +318,9 @@ class SmartPlaceClient:
     dry_run: bool = False
     # Latest image per floor plan id, fetched after every main-menu reply.
     plan_images: dict[int, PlanImage] = field(default_factory=dict)
+    # Runs after every issued command that changes other devices (a scene,
+    # a group button); a toggle is decided once it is over.
+    settle: SettleTime = field(default_factory=SettleTime)
     _capture_handle: object | None = None
     _unknown_handle: object | None = None
     # The app WebSocket only. The short-lived discovery socket is kept
@@ -578,18 +582,21 @@ class SmartPlaceClient:
 
         In dry-run mode a command flagged ``write`` is not transmitted:
         it is logged at WARNING and the call returns as if it had been
-        sent. Raises :class:`SmartPlaceNotConnectedError` when the command
+        sent. A command flagged ``changes_others`` starts :attr:`settle`.
+        Raises :class:`SmartPlaceNotConnectedError` when the command
         cannot be transmitted, ``ValueError`` when ``args`` are invalid.
         """
         wire = command.encode(*args)
         if self.dry_run and command.write:
             _LOGGER.warning("dry run: would send %s (%s)", command.name, wire)
-            return
-        # Send first: if the WS isn't open ``send`` raises and we must
-        # NOT claim the command was issued (the door press didn't fire).
-        await self.send(wire)
-        if command.audit:
-            _LOGGER.info("command issued: %s (%s)", command.name, wire)
+        else:
+            # Send first: if the WS isn't open ``send`` raises and we must
+            # NOT claim the command was issued (the door press didn't fire).
+            await self.send(wire)
+            if command.audit:
+                _LOGGER.info("command issued: %s (%s)", command.name, wire)
+        if command.changes_others:
+            self.settle.start()
 
     async def send(self, text: str) -> None:
         """Send a text frame to the server (live) or log it (replay).

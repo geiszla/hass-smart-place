@@ -15,6 +15,7 @@ would actually write and skips the write when it is unchanged, so
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Hashable
 import contextlib
 from typing import TYPE_CHECKING, Any
@@ -143,21 +144,37 @@ class SmartPlacePushEntity(Entity):
         except SmartPlaceNotConnectedError as err:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_connected") from err
 
-    @callback
-    def _async_expect(self, expected: ExpectedState[Any], value: object) -> None:
-        """Show ``value`` at once and look again when the expectation times out.
+    async def _async_issue_expecting(
+        self,
+        command: CommandDefinition,
+        args: tuple[object, ...],
+        *expectations: tuple[ExpectedState[Any], object, object],
+    ) -> None:
+        """Issue a command and show the state it leads to at once.
 
-        No frame arrives at the timeout, so a timer writes the state then.
+        Each expectation is ``(holder, expected value, current server
+        value)``. They are set before the send is awaited, so a call that
+        arrives meanwhile is decided against them, and dropped again if the
+        send fails. No frame arrives when an expectation times out, so a
+        timer writes the state then.
         """
-        expected.expect(value)
+        for expected, value, server_value in expectations:
+            expected.expect(value, server_value)
         if self._sp_expectation_timer is not None:
             self._sp_expectation_timer()
         self._sp_expectation_timer = async_call_later(
             self.hass,
-            expected.timeout + _EXPECTATION_TIMER_MARGIN,
+            max(expected.timeout for expected, _, _ in expectations) + _EXPECTATION_TIMER_MARGIN,
             self._async_expectation_ended,
         )
         self._handle_frame_update()
+        try:
+            await self._async_issue(command, *args)
+        except HomeAssistantError:
+            for expected, _, _ in expectations:
+                expected.clear()
+            self._handle_frame_update()
+            raise
 
     @callback
     def _async_expectation_ended(self, _now: datetime) -> None:
@@ -191,7 +208,9 @@ class SmartPlaceToggleEntity(SmartPlacePushEntity):
     Home Assistant asks for a target ("turn on"), the vendor only flips.
     Every call is therefore decided against the *effective* state: the
     state expected from the commands already sent, else the last server
-    value. Mix in before the platform's entity class.
+    value. Without a server value (after a reconnect, until the server
+    replays it) the state is unknown and an expectation is dropped. Mix
+    in before the platform's entity class.
     """
 
     def __init__(self) -> None:
@@ -220,6 +239,10 @@ class SmartPlaceToggleEntity(SmartPlacePushEntity):
         await self._async_switch(on=False)
 
     async def _async_switch(self, *, on: bool) -> None:
+        # A scene or group command issued a moment ago is about to change
+        # values: a toggle decided now could undo what it switches.
+        if (delay := self._data.client.settle.remaining()) > 0:
+            await asyncio.sleep(delay)
         current = self.is_on
         if current is None:
             # A toggle against an unknown state could switch the wrong way.
@@ -227,5 +250,4 @@ class SmartPlaceToggleEntity(SmartPlacePushEntity):
         if current is on:
             return
         command, vendor_id = self._toggle_command()
-        await self._async_issue(command, vendor_id)
-        self._async_expect(self._expected_on, on)
+        await self._async_issue_expecting(command, (vendor_id,), (self._expected_on, on, self._server_is_on()))

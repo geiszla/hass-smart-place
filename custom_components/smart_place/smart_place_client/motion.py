@@ -1,7 +1,7 @@
 """Direction of a moving blind, derived from its reported positions.
 
 The server reports a blind's position about once per second while it
-moves and says nothing when it stops. :class:`BlindMotion` turns that
+moves, with gaps of up to four seconds, and says nothing when it stops. :class:`BlindMotion` turns that
 stream into "opening" / "closing" / not moving: the direction is the sign
 of the change between two distinct successive positions, and it ends at
 either end stop, on a value without a position (weather alarm, unknown)
@@ -19,7 +19,10 @@ from dataclasses import dataclass
 import time
 from typing import Final, Literal
 
-BLIND_MOTION_TIMEOUT: Final = 3.0
+# Longer than the longest gap between two position frames of a moving
+# blind (4.0 s in the 2026-11-09 capture): a shorter timeout reports "at
+# rest" in the middle of a run.
+BLIND_MOTION_TIMEOUT: Final = 6.0
 
 _FULLY_CLOSED: Final = 0
 _FULLY_OPEN: Final = 100

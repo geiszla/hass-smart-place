@@ -139,5 +139,8 @@ class SmartPlaceLevelFan(SmartPlacePushEntity, FanEntity):
     async def _async_select(self, level: int) -> None:
         if level == self._known_level():
             return
-        await self._async_issue(Commands.Scene, self._scene_ids[level - 1])
-        self._async_expect(self._expected_level, level)
+        await self._async_issue_expecting(
+            Commands.Scene,
+            (self._scene_ids[level - 1],),
+            (self._expected_level, level, self._server_level()),
+        )
