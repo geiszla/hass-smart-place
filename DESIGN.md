@@ -1553,6 +1553,11 @@ image and their sizes did not.
   and on the Climate view the ventilation fans (moved from the Scenes
   view; the view also exists for a fan alone). The Scenes view no longer
   lists these buttons in a "Groups" card (user decision, 2026-11-10).
+- The Scenes view is one `entities` card (user decision, 2026-11-10;
+  before: "Scenes" and "Switches" as two cards): scene entities and the
+  switches of on/off scenes in the order of `SmartPlaceState.scene_configs`,
+  which is the order of the server's scene frames, then the doorbell
+  mutes.
 
 A protected
 socket's marker gets the icon `mdi:lock` and no tap action (`none`; a

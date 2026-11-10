@@ -93,13 +93,17 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         climates={
             zone_id: found for zone_id in state.climate if (found := entity_id(Platform.CLIMATE, f"climate_{zone_id}"))
         },
-        scenes=existing([entity_id(Platform.SCENE, f"scene_{scene_id}") for scene_id in scenes.triggers]),
-        switches=existing(
+        # Scenes and on/off scenes as one list, in the order the server lists them.
+        scenes=existing(
             [
-                *(entity_id(Platform.SWITCH, f"scene_switch_{scene_id}") for scene_id in scenes.switches),
-                *(entity_id(Platform.SWITCH, f"mute_{mute_id}") for mute_id in sorted(state.mutes)),
+                entity_id(Platform.SCENE, f"scene_{scene_id}")
+                if scene_id in scenes.triggers
+                else entity_id(Platform.SWITCH, f"scene_switch_{scene_id}")
+                for scene_id in state.scene_configs
+                if scene_id in scenes.triggers or scene_id in scenes.switches
             ],
         ),
+        mutes=existing([entity_id(Platform.SWITCH, f"mute_{mute_id}") for mute_id in sorted(state.mutes)]),
         fans=existing([entity_id(Platform.FAN, f"level_group_{group.scene_ids[0]}") for group in scenes.level_groups]),
         light_buttons=existing(
             [entity_id(Platform.BUTTON, "all_lights_off"), entity_id(Platform.BUTTON, "all_lights_on")],

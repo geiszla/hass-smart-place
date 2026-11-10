@@ -179,17 +179,19 @@ class DashboardEntities:
     """Entity ids the dashboard may use; anything missing is left out.
 
     The three mappings are keyed by vendor id (a socket's switch entity
-    sits in ``lights`` next to the light entities). The three
-    ``..._buttons`` are the buttons that act on all lights, all blinds
-    and all heating zones. ``doors`` are the door buttons, in the order
-    to show them; ``cameras`` the intercom cameras.
+    sits in ``lights`` next to the light entities). ``scenes`` are the
+    scene entities and the switches of on/off scenes, in the order to show
+    them; ``mutes`` the doorbell mutes. The three ``..._buttons`` are the
+    buttons that act on all lights, all blinds and all heating zones.
+    ``doors`` are the door buttons, in the order to show them; ``cameras``
+    the intercom cameras.
     """
 
     lights: Mapping[int, str] = field(default_factory=dict)
     blinds: Mapping[int, str] = field(default_factory=dict)
     climates: Mapping[int, str] = field(default_factory=dict)
     scenes: Sequence[str] = ()
-    switches: Sequence[str] = ()
+    mutes: Sequence[str] = ()
     fans: Sequence[str] = ()
     light_buttons: Sequence[str] = ()
     blind_buttons: Sequence[str] = ()
@@ -624,14 +626,12 @@ def _fan_tile(entity_id: str) -> dict[str, Any]:
 
 
 def _scenes_view(entities: DashboardEntities) -> dict[str, Any] | None:
-    cards: list[dict[str, Any]] = []
-    if entities.scenes:
-        cards.append({"type": "entities", "title": "Scenes", "entities": _named_rows(entities.scenes)})
-    if entities.switches:
-        cards.append({"type": "entities", "title": "Switches", "entities": _named_rows(entities.switches)})
-    if not cards:
+    """Build the Scenes view: one list of the scenes, the on/off scenes among them, then the doorbell mutes."""
+    rows = [*entities.scenes, *entities.mutes]
+    if not rows:
         return None
-    return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": cards}
+    card = {"type": "entities", "title": "Scenes", "entities": _named_rows(rows)}
+    return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": [card]}
 
 
 def _markers(

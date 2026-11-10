@@ -570,7 +570,9 @@ because the markers would overlap otherwise:
   While a zone calls for heat, a flame stands before its target and both are
   in the heating colour. Below the plan: "All heating off", "Heating back on"
   and the ventilation.
-- **Scenes** — scenes, scene switches and the doorbell mute.
+- **Scenes** — one list of the scenes, in the order Smart Place lists them: a
+  scene to activate has a button, a scene with an on/off state a switch. The
+  doorbell mute is the last row.
 - **Intercom** — one block per door: its name, the cameras that show it and a
   wide button that opens the door. A camera is put with the door whose name
   starts like the camera's ("Garage camera" and "Garage entrance camera" both

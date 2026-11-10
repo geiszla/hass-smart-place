@@ -46,8 +46,8 @@ def _flat_entities(state: SmartPlaceState) -> DashboardEntities:
         },
         blinds={blind.id: f"cover.blind_{blind.id}" for blind in state.blinds.values()},
         climates={zone.id: f"climate.zone_{zone.id}" for zone in state.climate.values()},
-        scenes=["scene.night", "scene.evening"],
-        switches=["switch.blinds", "switch.doorbell_mute"],
+        scenes=["scene.night", "switch.blinds", "scene.evening"],
+        mutes=["switch.doorbell_mute"],
         fans=["fan.ventilation"],
         light_buttons=["button.all_lights_off", "button.all_lights_on"],
         blind_buttons=["button.all_blinds_up", "button.all_blinds_down"],
@@ -446,9 +446,13 @@ def _rows(*entity_ids: str) -> list[dict[str, Any]]:
 def test_scenes_view_uses_built_in_cards(flat_state: SmartPlaceState) -> None:
     """Each row shows the entity's own name: the shared device's name ("Scene Night") is left out."""
     view = _views(_flat_dashboard(flat_state))["scenes"]
+    # One list: the on/off scene stands among the scenes, in the given order; the doorbell mute is last.
     assert view["cards"] == [
-        {"type": "entities", "title": "Scenes", "entities": _rows("scene.night", "scene.evening")},
-        {"type": "entities", "title": "Switches", "entities": _rows("switch.blinds", "switch.doorbell_mute")},
+        {
+            "type": "entities",
+            "title": "Scenes",
+            "entities": _rows("scene.night", "switch.blinds", "scene.evening", "switch.doorbell_mute"),
+        },
     ]
     # The buttons for all lights and all blinds are on their plan pages only.
     assert "button." not in repr(view)

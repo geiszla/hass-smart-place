@@ -1475,3 +1475,10 @@ The user had the "Groups" card removed from the Scenes view: the buttons
 for all lights and all blinds are on their plan pages now. Checked with
 the repository tests and the runtime checks (the group button of a blinds
 sub-menu other than "All" is looked for on the Blinds page instead).
+
+### Follow-up: one list on the Scenes view
+
+The user wanted scenes and on/off scenes not separated. The view is one
+card now: scenes and on/off scenes in the server's order
+(`scene_configs`), the doorbell mute last. `DashboardEntities.switches`
+became `mutes`.
