@@ -164,6 +164,9 @@ class SmartPlaceData:
     # id) that became fans in this run; see ``entity.async_classify_scenes``.
     scene_switch_ids: set[int] = field(default_factory=set)
     level_group_ids: set[int] = field(default_factory=set)
+    # Heating zones "All heating off" switched off; "Heating back on"
+    # switches exactly these on again (``button.py``).
+    heating_switched_off: set[int] = field(default_factory=set)
     # What each plan image depicts, measured once per fetched image: the
     # image's digest and the box around its non-transparent part (``None``
     # if it has none or cannot be read). The dashboard shows only that part.

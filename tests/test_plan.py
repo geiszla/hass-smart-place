@@ -49,7 +49,9 @@ def _flat_entities(state: SmartPlaceState) -> DashboardEntities:
         scenes=["scene.night", "scene.evening"],
         switches=["switch.blinds", "switch.doorbell_mute"],
         fans=["fan.ventilation"],
-        buttons=["button.all_blinds_up", "button.all_blinds_down"],
+        light_buttons=["button.all_lights_off", "button.all_lights_on"],
+        blind_buttons=["button.all_blinds_up", "button.all_blinds_down"],
+        climate_buttons=["button.all_heating_off", "button.heating_back_on"],
     )
 
 
@@ -79,6 +81,19 @@ def _cards(view: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _anchor(element: dict[str, Any]) -> tuple[str, str]:
     return element["style"]["left"], element["style"]["top"]
+
+
+def _press_tile(entity_id: str) -> dict[str, Any]:
+    press = {"action": "perform-action", "perform_action": "button.press", "target": {"entity_id": entity_id}}
+    return {
+        "type": "tile",
+        "entity": entity_id,
+        "name": {"type": "entity"},
+        "hide_state": True,
+        "tap_action": press,
+        "icon_tap_action": press,
+        "grid_options": {"columns": 6},
+    }
 
 
 def _elements_of(view: dict[str, Any], entity_id: str) -> list[dict[str, Any]]:
@@ -135,7 +150,9 @@ def test_lights_view_has_one_toggle_icon_per_light_and_socket(flat_state: SmartP
     view = _views(_flat_dashboard(flat_state))["lights"]
     # One column: at most 500 px wide on a desktop, the screen's width on a phone.
     assert (view["type"], view["max_columns"]) == ("sections", 1)
-    (card,) = _cards(view)
+    card, *below = _cards(view)
+    # Below the plan: the two buttons for all lights, side by side.
+    assert below == [_press_tile("button.all_lights_off"), _press_tile("button.all_lights_on")]
     assert card["type"] == "picture-elements"
     assert card["image_entity"] == "image.smart_place_floor_plan"
     assert card["grid_options"] == {"columns": "full"}
@@ -176,51 +193,78 @@ def test_protected_socket_shows_a_lock_and_cannot_be_toggled(flat_state: SmartPl
     assert actions.count("toggle") == 14
 
 
-def test_blinds_view_has_position_text_and_direction_buttons(flat_state: SmartPlaceState) -> None:
+def test_blinds_view_has_a_position_gauge_and_direction_buttons(flat_state: SmartPlaceState) -> None:
     view = _views(_flat_dashboard(flat_state))["blinds"]
     slatted = next(blind for blind in flat_state.blinds.values() if blind.name == "Office balcony door blinds")
     fabric = next(blind for blind in flat_state.blinds.values() if blind.name == "Bedroom blinds")
 
     elements = _elements_of(view, f"cover.blind_{slatted.id}")
-    labels = [element for element in elements if element["type"] == "state-label"]
-    buttons = {element["title"]: element for element in elements if element["type"] == "icon"}
-    assert [label.get("attribute") for label in labels] == ["current_position", None]
-    assert all(label["tap_action"] == {"action": "more-info"} for label in labels)
-    assert {title for title, button in buttons.items() if button["tap_action"]["action"] == "perform-action"} == {
+    icons = {element["title"]: element for element in elements if element["type"] == "icon"}
+    assert {title for title, icon in icons.items() if icon["tap_action"]["action"] == "perform-action"} == {
         "Down",
         "Vent",
         "Up",
     }
-    assert buttons["Down"]["tap_action"] == {
+    assert icons["Down"]["tap_action"] == {
         "action": "perform-action",
         "perform_action": "cover.close_cover",
         "target": {"entity_id": f"cover.blind_{slatted.id}"},
     }
-    assert buttons["Vent"]["tap_action"]["perform_action"] == "cover.open_cover_tilt"
-    assert buttons["Up"]["tap_action"]["perform_action"] == "cover.open_cover"
-    # One marker around the vendor's state icon centre (415, 590): 122 px wide, 32 px high.
-    assert _anchor(labels[0]) == (
-        "clamp(min(63px, 15.29vw), 41.5%, calc(100% - min(63px, 15.29vw)))",
+    assert icons["Vent"]["tap_action"]["perform_action"] == "cover.open_cover_tilt"
+    assert icons["Up"]["tap_action"]["perform_action"] == "cover.open_cover"
+
+    # One marker around the vendor's state icon centre (415, 590): 116 px wide, 32 px high.
+    up = icons["Fully up"]
+    assert _anchor(up) == (
+        "clamp(min(60px, 14.56vw), 41.5%, calc(100% - min(60px, 14.56vw)))",
         "clamp(min(18px, 4.37vw), 83.1%, calc(100% - min(18px, 4.37vw)))",
     )
-    assert labels[0]["style"]["min-width"] == "min(122px, 29.61vw)"
-    assert "var(--card-background-color)" in labels[0]["style"]["background"]
+    assert up["style"]["min-width"] == "min(116px, 28.16vw)"
     # The buttons share the anchor and lie on the right part of the marker, in the vendor's order.
-    assert {_anchor(button) for button in buttons.values()} == {_anchor(labels[0])}
-    assert buttons["Down"]["style"]["transform"] == "translate(calc(-50% - min(7px, 1.7vw)), -50%)"
-    assert buttons["Vent"]["style"]["transform"] == "translate(calc(-50% + min(19px, 4.61vw)), -50%)"
-    assert buttons["Up"]["style"]["transform"] == "translate(calc(-50% + min(45px, 10.92vw)), -50%)"
+    assert {_anchor(icons[title]) for title in ("Down", "Vent", "Up")} == {_anchor(up)}
+    assert icons["Down"]["style"]["transform"] == "translate(calc(-50% - min(10px, 2.43vw)), -50%)"
+    assert icons["Vent"]["style"]["transform"] == "translate(calc(-50% + min(16px, 3.88vw)), -50%)"
+    assert icons["Up"]["style"]["transform"] == "translate(calc(-50% + min(42px, 10.19vw)), -50%)"
 
     fabric_buttons = {
         e["title"]: e["style"]["transform"]
         for e in _elements_of(view, f"cover.blind_{fabric.id}")
         if e["type"] == "icon" and e["tap_action"]["action"] == "perform-action"
     }
-    # Without Vent the marker is 96 px wide.
+    # Without Vent the marker is 90 px wide.
     assert fabric_buttons == {
-        "Down": "translate(calc(-50% + min(6px, 1.46vw)), -50%)",
-        "Up": "translate(calc(-50% + min(32px, 7.77vw)), -50%)",
+        "Down": "translate(calc(-50% + min(3px, 0.73vw)), -50%)",
+        "Up": "translate(calc(-50% + min(29px, 7.04vw)), -50%)",
     }
+
+
+def test_blind_position_is_a_gauge_with_three_levels(flat_state: SmartPlaceState) -> None:
+    """One window outline, its opening drawn as closed by half or fully: "partly" and "down" must not look alike."""
+    view = _views(_flat_dashboard(flat_state))["blinds"]
+    blind = next(blind for blind in flat_state.blinds.values() if blind.name == "Bedroom blinds")
+    entity_id = f"cover.blind_{blind.id}"
+    icons = {element["title"]: element for element in _elements_of(view, entity_id) if element["type"] == "icon"}
+
+    def position(**limits: int) -> list[dict[str, Any]]:
+        return [{"condition": "numeric_state", "entity": entity_id, "attribute": "current_position", **limits}]
+
+    # Home Assistant's scale: 100 is fully up.
+    assert _conditions_of(view, entity_id, "Fully up") == position(above=99)
+    assert _conditions_of(view, entity_id, "Partly down") == position(above=0, below=100)
+    assert _conditions_of(view, entity_id, "Fully down") == position(below=1)
+    backdrop = "color-mix(in srgb, var(--card-background-color) 85%, transparent)"
+    box = "linear-gradient(currentColor, currentColor) min(14px, 3.4vw) min(13px, 3.16vw) / min(8px, 1.94vw)"
+    assert icons["Fully up"]["style"]["background"] == backdrop
+    assert icons["Partly down"]["style"]["background"] == f"{box} min(6px, 1.46vw) no-repeat, {backdrop}"
+    assert icons["Fully down"]["style"]["background"] == f"{box} min(11px, 2.67vw) no-repeat, {backdrop}"
+    for title in ("Fully up", "Partly down", "Fully down"):
+        icon = icons[title]
+        assert icon["icon"] == "mdi:window-shutter-open"
+        assert icon["entity"] == entity_id
+        assert icon["tap_action"] == {"action": "more-info"}
+        # Not the colour of the buttons beside it.
+        assert icon["style"]["color"] == "var(--primary-color)"
+        assert _anchor(icon) == _anchor(icons["Fully up"])
 
 
 def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlaceState) -> None:
@@ -234,7 +278,7 @@ def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlace
 
     elements = _elements_of(view, entity_id)
     icons = {element["title"]: element for element in elements if element["type"] == "icon"}
-    position = next(element for element in elements if element.get("attribute") == "current_position")
+    position = icons["Fully up"]
 
     # The buttons with an action show unless blocked or unavailable, the greyed ones while blocked.
     assert _conditions_of(view, entity_id, "Down") == [
@@ -249,7 +293,7 @@ def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlace
         assert greyed["icon"] == icons[title]["icon"]
         assert greyed["style"] == {**icons[title]["style"], "opacity": "0.3"}
 
-    # One icon per known alarm at the place of the position text, one for any other word.
+    # One icon per known alarm at the place of the position gauge, one for any other word.
     assert {title: icons[title]["icon"] for title in ("Rain alarm", "Wind alarm", "Hail alarm", "Weather alarm")} == {
         "Rain alarm": "mdi:weather-pouring",
         "Wind alarm": "mdi:weather-windy",
@@ -264,9 +308,10 @@ def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlace
         attribute("weather_alarm", state_not=["rain", "wind", "hail"]),
     ]
     for title in ("Rain alarm", "Wind alarm", "Hail alarm", "Weather alarm"):
-        # Same place, size and backdrop as the position text.
-        for key in ("left", "top", "min-width", "background"):
+        # Same place, size and backdrop as the position gauge, in the warning colour.
+        for key in ("left", "top", "min-width", "background", "padding"):
             assert icons[title]["style"][key] == position["style"][key]
+        assert icons[title]["style"]["color"] == "var(--warning-color)"
         assert icons[title]["entity"] == entity_id
         assert icons[title]["tap_action"] == {"action": "more-info"}
 
@@ -285,7 +330,14 @@ def test_climate_view_has_temperatures_and_step_buttons(flat_state: SmartPlaceSt
     elements = _elements_of(view, f"climate.zone_{zone.id}")
     labels = [element for element in elements if element["type"] == "state-label"]
     buttons = {element["title"]: element for element in elements if element["type"] == "icon"}
-    assert [label.get("attribute") for label in labels] == ["current_temperature", "temperature", None, None]
+    assert [label.get("attribute") for label in labels] == [
+        "current_temperature",
+        "temperature",
+        "temperature",
+        "temperature",
+        None,
+        None,
+    ]
     assert labels[0]["suffix"] == " °C"
     assert buttons["Lower"]["tap_action"] == {
         "action": "perform-action",
@@ -304,13 +356,50 @@ def test_climate_view_has_temperatures_and_step_buttons(flat_state: SmartPlaceSt
     # The target (or the mode) is the second row; the buttons are at the sides.
     # The last element is the state of an unavailable zone, a marker of its own.
     assert {_anchor(element) for element in elements[:-1]} == {_anchor(labels[0])}
-    assert (
-        labels[1]["style"]["transform"]
-        == labels[2]["style"]["transform"]
-        == "translate(-50%, calc(-50% + min(8px, 1.94vw)))"
-    )
+    second_row = "translate(-50%, calc(-50% + min(8px, 1.94vw)))"
+    assert {label["style"]["transform"] for label in labels[1:5]} == {second_row}
     assert buttons["Lower"]["style"]["transform"] == "translate(calc(-50% - min(42px, 10.19vw)), -50%)"
     assert buttons["Raise"]["style"]["transform"] == "translate(calc(-50% + min(42px, 10.19vw)), -50%)"
+
+
+def test_zone_that_heats_shows_a_flame_before_the_target(flat_state: SmartPlaceState) -> None:
+    """The target row exists three times, by the entity's ``hvac_action``: plain, heating, cooling."""
+    view = _views(_flat_dashboard(flat_state))["climate"]
+    zone = next(zone for zone in flat_state.climate.values() if zone.room == "Large bathroom")
+    entity_id = f"climate.zone_{zone.id}"
+    heat = {"condition": "state", "entity": entity_id, "state": "heat"}
+
+    def action(**match: Any) -> dict[str, Any]:
+        return {"condition": "state", "entity": entity_id, "attribute": "hvac_action", **match}
+
+    rows = {
+        tuple(element.get("title") for element in conditional["elements"]): conditional
+        for conditional in _cards(view)[0]["elements"]
+        if any(element.get("attribute") == "temperature" for element in conditional["elements"])
+        and conditional["conditions"][0]["entity"] == entity_id
+    }
+    assert set(rows) == {(None,), (None, "Heating"), (None, "Cooling")}
+    assert rows[None,]["conditions"] == [heat, action(state_not=["heating", "cooling"])]
+    assert rows[None,]["elements"][0]["prefix"] == "→ "
+
+    for title, name, icon, colour in (
+        ("Heating", "heating", "mdi:fire", "var(--state-climate-heat-color)"),
+        ("Cooling", "cooling", "mdi:snowflake", "var(--state-climate-cool-color)"),
+    ):
+        conditional = rows[None, title]
+        assert conditional["conditions"] == [heat, action(state=name)]
+        target, sign = conditional["elements"]
+        # The sign stands where the arrow was; the target makes room for it and has its colour.
+        assert target["prefix"] == ""
+        assert target["style"]["padding-left"] == "min(16px, 3.88vw)"
+        assert target["style"]["color"] == colour
+        assert sign["icon"] == icon
+        assert sign["entity"] == entity_id
+        assert sign["tap_action"] == {"action": "more-info"}
+        assert sign["style"]["color"] == colour
+        assert sign["style"]["--mdc-icon-size"] == "min(16px, 3.88vw)"
+        assert sign["style"]["transform"] == "translate(calc(-50% - min(18px, 4.37vw)), calc(-50% + min(8px, 1.94vw)))"
+        assert _anchor(sign) == _anchor(target)
 
 
 def test_unavailable_zone_shows_only_its_state(flat_state: SmartPlaceState) -> None:
@@ -325,18 +414,16 @@ def test_unavailable_zone_shows_only_its_state(flat_state: SmartPlaceState) -> N
     conditionals = [
         element for element in _cards(view)[0]["elements"] if element["conditions"][0]["entity"] == entity_id
     ]
-    assert [conditional["conditions"] for conditional in conditionals] == [
-        state(state_not="unavailable"),
-        state(state="heat"),
-        state(state_not=["heat", "unavailable"]),
-        state(state="unavailable"),
-    ]
-    assert [element.get("title") for element in conditionals[0]["elements"]] == [None, "Lower", "Raise"]
-    (alone,) = conditionals[3]["elements"]
-    assert alone["type"] == "state-label"
-    assert "attribute" not in alone
-    assert "transform" not in alone["style"]
-    assert "var(--card-background-color)" in alone["style"]["background"]
+    first, *_targets, mode, alone = conditionals
+    assert first["conditions"] == state(state_not="unavailable")
+    assert [element.get("title") for element in first["elements"]] == [None, "Lower", "Raise"]
+    assert mode["conditions"] == state(state_not=["heat", "unavailable"])
+    assert alone["conditions"] == state(state="unavailable")
+    (label,) = alone["elements"]
+    assert label["type"] == "state-label"
+    assert "attribute" not in label
+    assert "transform" not in label["style"]
+    assert "var(--card-background-color)" in label["style"]["background"]
 
 
 def test_unavailable_blind_shows_only_its_state(flat_state: SmartPlaceState) -> None:
@@ -362,9 +449,44 @@ def test_scenes_view_uses_built_in_cards(flat_state: SmartPlaceState) -> None:
     assert view["cards"] == [
         {"type": "entities", "title": "Scenes", "entities": _rows("scene.night", "scene.evening")},
         {"type": "entities", "title": "Switches", "entities": _rows("switch.blinds", "switch.doorbell_mute")},
-        {"type": "tile", "entity": "fan.ventilation", "features": [{"type": "fan-speed"}]},
-        {"type": "entities", "title": "Groups", "entities": _rows("button.all_blinds_up", "button.all_blinds_down")},
+        {
+            "type": "entities",
+            "title": "Groups",
+            "entities": _rows(
+                "button.all_lights_off", "button.all_lights_on", "button.all_blinds_up", "button.all_blinds_down"
+            ),
+        },
     ]
+
+
+def test_buttons_for_all_and_the_ventilation_are_below_their_plan(flat_state: SmartPlaceState) -> None:
+    views = _views(_flat_dashboard(flat_state))
+    assert _cards(views["blinds"])[1:] == [_press_tile("button.all_blinds_up"), _press_tile("button.all_blinds_down")]
+    assert _cards(views["climate"])[1:] == [
+        _press_tile("button.all_heating_off"),
+        _press_tile("button.heating_back_on"),
+        {
+            "type": "tile",
+            "entity": "fan.ventilation",
+            "features": [{"type": "fan-speed"}],
+            "grid_options": {"columns": "full"},
+        },
+    ]
+
+
+def test_ventilation_without_a_heating_zone_still_gets_the_climate_view() -> None:
+    config = build_dashboard(
+        plans={},
+        images={},
+        lights={},
+        blinds={},
+        zones={},
+        entities=DashboardEntities(fans=["fan.ventilation"]),
+        temperature_unit="°C",
+    )
+    (view,) = config["views"]
+    assert (view["title"], view["path"]) == ("Climate", "climate")
+    assert [card["entity"] for card in _cards(view)] == ["fan.ventilation"]
 
 
 def test_disabled_entities_are_left_out(flat_state: SmartPlaceState) -> None:
@@ -492,9 +614,9 @@ def test_marker_at_the_edge_is_kept_inside_the_card() -> None:
         temperature_unit="°C",
     )
     elements = _elements_of(config["views"][0], "cover.edge")
-    position = next(element for element in elements if element.get("attribute") == "current_position")
+    position = next(element for element in elements if element.get("title") == "Fully up")
     assert _anchor(position) == (
-        "clamp(min(63px, 15.29vw), 1%, calc(100% - min(63px, 15.29vw)))",
+        "clamp(min(60px, 14.56vw), 1%, calc(100% - min(60px, 14.56vw)))",
         "clamp(min(18px, 4.37vw), 98.59%, calc(100% - min(18px, 4.37vw)))",
     )
     # Every part of the marker has the same anchor: they move together.
@@ -530,7 +652,7 @@ def test_plan_shows_the_drawing_and_the_markers_only(flat_state: SmartPlaceState
         for conditional in _cards(views["blinds"])[0]["elements"]
         for element in conditional["elements"]
     }
-    assert "clamp(min(63px, 15.29vw), 98%, calc(100% - min(63px, 15.29vw)))" in lefts
+    assert "clamp(min(60px, 14.56vw), 98%, calc(100% - min(60px, 14.56vw)))" in lefts
 
 
 def test_window_is_cut_along_the_axis_that_saves_more() -> None:

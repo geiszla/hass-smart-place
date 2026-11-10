@@ -1,6 +1,9 @@
 {
   "entity": {
     "button": {
+      "all_heating_off": {
+        "default": "mdi:radiator-off"
+      },
       "all_lights_off": {
         "default": "mdi:lightbulb-group-off"
       },
@@ -15,6 +18,9 @@
       },
       "blinds_group_up": {
         "default": "mdi:arrow-up-box"
+      },
+      "heating_back_on": {
+        "default": "mdi:radiator"
       }
     },
     "image": {

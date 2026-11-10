@@ -57,8 +57,10 @@ _CORNER: Final = _ROW / 2
 # A light's icon is the frontend's state badge, which has this fixed size.
 _BADGE: Final = 40.0
 
-# Blind marker, one row: the position, then Down / Vent / Up as in the vendor app.
-_BLIND_TEXT: Final = 42.0
+# Blind marker, one row: an icon for the position, then Down / Vent / Up as
+# in the vendor app. The position icon is set off by a wider gap.
+_BLIND_START: Final = 6.0
+_BLIND_STATE: Final = _BLIND_START + _ICON + 6.0
 _BLIND_BUTTON_PITCH: Final = _ICON + 2.0
 _BLIND_END: Final = 4.0
 # Wide enough for "Unavailable".
@@ -68,8 +70,31 @@ _STATE_WIDTH: Final = 92.0
 # − / + buttons left and right of both.
 _CLIMATE_WIDTH: Final = 112.0
 _CLIMATE_BUTTON_DX: Final = _CLIMATE_WIDTH / 2 - 2.0 - _ICON / 2
+# The icon that says a zone heats (or cools) right now, left of the target.
+_ACTION_ICON: Final = 16.0
+_ACTION_ICON_DX: Final = -18.0
+_HVAC_ACTIONS: Final[dict[str, tuple[str, str, str]]] = {
+    "heating": ("mdi:fire", "Heating", "var(--state-climate-heat-color)"),
+    "cooling": ("mdi:snowflake", "Cooling", "var(--state-climate-cool-color)"),
+}
 
 _UNAVAILABLE_STATES: Final = ["unknown", "unavailable"]
+
+# A blind's position as a gauge: the outline of a window with a shutter
+# box, and drawn on its opening how far the blind is down. The stock icons
+# for "partly" and "down" look alike at this size. The opening is 8 x 11 of
+# the icon's 24 units, at (8, 9).
+_POSITION_ICON: Final = "mdi:window-shutter-open"
+_OPENING_LEFT: Final = 8.0
+_OPENING_TOP: Final = 9.0
+_OPENING_WIDTH: Final = 8.0
+# By the cover's ``current_position`` (100 is fully up): the limits of the
+# position, the rows of the opening drawn as closed, tooltip.
+_POSITIONS: Final[tuple[tuple[dict[str, int], float, str], ...]] = (
+    ({"above": 99}, 0.0, "Fully up"),
+    ({"above": 0, "below": 100}, 6.0, "Partly down"),
+    ({"below": 1}, 11.0, "Fully down"),
+)
 
 # Shown in place of a blind's position while a weather alarm blocks it,
 # by the cover's ``weather_alarm`` attribute: icon and tooltip. Any other
@@ -80,6 +105,9 @@ _ALARM_ICONS: Final[dict[str, tuple[str, str]]] = {
     "hail": ("mdi:weather-hail", "Hail alarm"),
 }
 _OTHER_ALARM_ICON: Final = ("mdi:alert", "Weather alarm")
+_ALARM_COLOUR: Final = "var(--warning-color)"
+# Sets the position gauge apart from the buttons beside it.
+_POSITION_COLOUR: Final = "var(--primary-color)"
 _BLOCKED_OPACITY: Final = "0.3"
 
 # Shown while no entity is known yet (the server has not listed the devices).
@@ -151,9 +179,10 @@ class DashboardEntities:
     """Entity ids the dashboard may use; anything missing is left out.
 
     The three mappings are keyed by vendor id (a socket's switch entity
-    sits in ``lights`` next to the light entities). ``doors`` are the
-    door buttons, in the order to show them; ``cameras`` the intercom
-    cameras.
+    sits in ``lights`` next to the light entities). The three
+    ``..._buttons`` are the buttons that act on all lights, all blinds
+    and all heating zones. ``doors`` are the door buttons, in the order
+    to show them; ``cameras`` the intercom cameras.
     """
 
     lights: Mapping[int, str] = field(default_factory=dict)
@@ -162,7 +191,9 @@ class DashboardEntities:
     scenes: Sequence[str] = ()
     switches: Sequence[str] = ()
     fans: Sequence[str] = ()
-    buttons: Sequence[str] = ()
+    light_buttons: Sequence[str] = ()
+    blind_buttons: Sequence[str] = ()
+    climate_buttons: Sequence[str] = ()
     doors: Sequence[NamedEntity] = ()
     cameras: Sequence[NamedEntity] = ()
 
@@ -288,32 +319,50 @@ def _light_elements(entity_id: str, centre: Point, window: _Window, *, protected
 
 
 def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _Window) -> list[dict[str, Any]]:
-    """Build a blind's marker: position, or the alarm that blocks it, then the direction buttons.
+    """Build a blind's marker: its position as an icon, or the alarm that blocks it, then the direction buttons.
 
-    The element that shows the position (or the alarm) is as wide as the
-    whole marker and carries its backdrop; the buttons lie on its right
-    part. The buttons exist twice, switched by the cover's ``blocked``
-    attribute: with their action, and greyed without one while a weather
-    alarm blocks the blind (the frontend compares attributes as text).
+    The icon's element is as wide as the whole marker and carries its
+    backdrop; the buttons lie on its right part. The buttons exist twice,
+    switched by the cover's ``blocked`` attribute: with their action, and
+    greyed without one while a weather alarm blocks the blind (the
+    frontend compares attributes as text).
     """
     more_info = {"action": "more-info"}
     buttons = [("mdi:arrow-down", "Down", "cover.close_cover")]
     if blind.kind == BLIND_KIND_SLATTED:
         buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt"))
     buttons.append(("mdi:arrow-up", "Up", "cover.open_cover"))
-    width = _BLIND_TEXT + len(buttons) * _BLIND_BUTTON_PITCH - (_BLIND_BUTTON_PITCH - _ICON) + _BLIND_END
+    width = _BLIND_STATE + len(buttons) * _BLIND_BUTTON_PITCH - (_BLIND_BUTTON_PITCH - _ICON) + _BLIND_END
     anchor = _anchor(centre, window, width / 2, _ROW / 2)
-    backdrop = {**anchor, **_BACKDROP, "box-sizing": "border-box", "min-width": _px(width), "text-align": "left"}
+    side = (_ROW - _ICON) / 2
+    state_style = {
+        **anchor,
+        **_BACKDROP,
+        **_GLYPH,
+        "box-sizing": "border-box",
+        "min-width": _px(width),
+        "padding": f"{_px(side)} 0 {_px(side)} {_px(_BLIND_START)}",
+        "text-align": "left",
+    }
     button_styles = [
-        {**anchor, "transform": _shift(_BLIND_TEXT + _ICON / 2 + index * _BLIND_BUTTON_PITCH - width / 2)}
+        {**anchor, "transform": _shift(_BLIND_STATE + _ICON / 2 + index * _BLIND_BUTTON_PITCH - width / 2)}
         for index in range(len(buttons))
     ]
 
     def attribute(name: str, **match: str | list[str]) -> dict[str, Any]:
         return {"condition": "state", "entity": entity_id, "attribute": name, **match}
 
-    def alarm_icon(icon: str, title: str, conditions: list[dict[str, Any]]) -> dict[str, Any]:
-        side = (_ROW - _ICON) / 2
+    def gauge(rows: float) -> dict[str, str]:
+        """Draw ``rows`` of the position icon's opening as closed, over the backdrop."""
+        if not rows:
+            return {}
+        left, top = _px(_BLIND_START + _OPENING_LEFT), _px(side + _OPENING_TOP)
+        size = f"{_px(_OPENING_WIDTH)} {_px(rows)}"
+        return {
+            "background": f"linear-gradient(currentColor, currentColor) {left} {top} / {size} no-repeat, {_BACKDROP_COLOUR}"
+        }
+
+    def state_icon(icon: str, title: str, conditions: list[dict[str, Any]], **style: str) -> dict[str, Any]:
         return {
             "type": "conditional",
             "conditions": conditions,
@@ -325,44 +374,34 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _
                     "entity": entity_id,
                     "tap_action": more_info,
                     "hold_action": more_info,
-                    "style": {
-                        **backdrop,
-                        **_GLYPH,
-                        "padding": f"{_px(side)} 0 {_px(side)} {_px(_LABEL_PADDING + side)}",
-                    },
+                    "style": {**state_style, **style},
                 },
             ],
         }
 
     return [
-        # The position attribute is missing during a weather alarm and while
-        # unavailable; a state-label on a missing attribute shows a warning.
-        {
-            "type": "conditional",
-            "conditions": [
-                {"condition": "numeric_state", "entity": entity_id, "attribute": "current_position", "above": -1},
-            ],
-            "elements": [
-                {
-                    "type": "state-label",
-                    "entity": entity_id,
-                    "attribute": "current_position",
-                    "suffix": "%",
-                    "tap_action": more_info,
-                    "style": {**backdrop, **_TEXT},
-                },
-            ],
-        },
+        # The position attribute is missing during a weather alarm and while unavailable.
+        *(
+            state_icon(
+                _POSITION_ICON,
+                title,
+                [{"condition": "numeric_state", "entity": entity_id, "attribute": "current_position", **limits}],
+                color=_POSITION_COLOUR,
+                **gauge(rows),
+            )
+            for limits, rows, title in _POSITIONS
+        ),
         _state_text(
             entity_id, centre, window, [{"condition": "state", "entity": entity_id, "state": _UNAVAILABLE_STATES}]
         ),
         *(
-            alarm_icon(icon, title, [attribute("weather_alarm", state=alarm)])
+            state_icon(icon, title, [attribute("weather_alarm", state=alarm)], color=_ALARM_COLOUR)
             for alarm, (icon, title) in _ALARM_ICONS.items()
         ),
-        alarm_icon(
+        state_icon(
             *_OTHER_ALARM_ICON,
             [attribute("blocked", state="true"), attribute("weather_alarm", state_not=list(_ALARM_ICONS))],
+            color=_ALARM_COLOUR,
         ),
         {
             "type": "conditional",
@@ -411,7 +450,9 @@ def _climate_elements(entity_id: str, centre: Point, window: _Window, unit: str)
     """Build a heating zone's marker: measured temperature, target below it, − and + at the sides.
 
     The measured temperature's element is as large as the whole marker
-    and carries its backdrop.
+    and carries its backdrop. While the zone calls for heat (the climate
+    entity's ``hvac_action``) a flame stands in place of the arrow before
+    the target, and both have the theme's heating colour.
     """
     more_info = {"action": "more-info"}
     anchor = _anchor(centre, window, _CLIMATE_WIDTH / 2, _ROW / 2 + _LABEL_LINE / 2)
@@ -419,6 +460,20 @@ def _climate_elements(entity_id: str, centre: Point, window: _Window, unit: str)
 
     def state(**match: str | list[str]) -> list[dict[str, Any]]:
         return [{"condition": "state", "entity": entity_id, **match}]
+
+    def action(**match: str | list[str]) -> dict[str, Any]:
+        return {"condition": "state", "entity": entity_id, "attribute": "hvac_action", **match}
+
+    def target(prefix: str, **style: str) -> dict[str, Any]:
+        return {
+            "type": "state-label",
+            "entity": entity_id,
+            "attribute": "temperature",
+            "prefix": prefix,
+            "suffix": f" {unit}",
+            "tap_action": more_info,
+            "style": {**second_row, **style},
+        }
 
     return [
         {
@@ -457,19 +512,34 @@ def _climate_elements(entity_id: str, centre: Point, window: _Window, unit: str)
         },
         {
             "type": "conditional",
-            "conditions": state(state="heat"),
-            "elements": [
-                {
-                    "type": "state-label",
-                    "entity": entity_id,
-                    "attribute": "temperature",
-                    "prefix": "→ ",
-                    "suffix": f" {unit}",
-                    "tap_action": more_info,
-                    "style": second_row,
-                },
-            ],
+            "conditions": [*state(state="heat"), action(state_not=list(_HVAC_ACTIONS))],
+            "elements": [target("→ ")],
         },
+        *(
+            {
+                "type": "conditional",
+                "conditions": [*state(state="heat"), action(state=name)],
+                "elements": [
+                    target("", color=colour, **{"padding-left": _px(_ACTION_ICON)}),
+                    {
+                        "type": "icon",
+                        "icon": icon,
+                        "title": title,
+                        "entity": entity_id,
+                        "tap_action": more_info,
+                        "hold_action": more_info,
+                        "style": {
+                            **anchor,
+                            "transform": _shift(_ACTION_ICON_DX, _LABEL_LINE / 2),
+                            "--mdc-icon-size": _px(_ACTION_ICON),
+                            "line-height": "0",
+                            "color": colour,
+                        },
+                    },
+                ],
+            }
+            for name, (icon, title, colour) in _HVAC_ACTIONS.items()
+        ),
         # Off has no target temperature; show the mode instead.
         {
             "type": "conditional",
@@ -488,8 +558,9 @@ def _view(
     window: _Window | None,
     elements: list[dict[str, Any]],
     unplaced: list[str],
+    below: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build one plan view: the plan with its markers, unplaced entities listed below.
+    """Build one plan view: the plan with its markers, then the cards ``below``, then the unplaced entities.
 
     One column: the card is then at most 500 px wide, so the plan fits a
     desktop window without scrolling, and as wide as a phone's screen.
@@ -506,6 +577,7 @@ def _view(
                 "grid_options": {"columns": "full"},
             }
         )
+    cards.extend(below)
     if unplaced:
         cards.append({"type": "entities", "entities": unplaced, "grid_options": {"columns": "full"}})
     return {
@@ -527,15 +599,38 @@ def _named_rows(entity_ids: Sequence[str]) -> list[dict[str, Any]]:
     return [{"entity": entity_id, "name": {"type": "entity"}} for entity_id in entity_ids]
 
 
+def _press_tile(entity_id: str) -> dict[str, Any]:
+    """Build a half-width tile that presses a button entity on a tap."""
+    press = _perform("button.press", entity_id)
+    return {
+        "type": "tile",
+        "entity": entity_id,
+        # The entity's own name; its state is only when it was last pressed.
+        "name": {"type": "entity"},
+        "hide_state": True,
+        "tap_action": press,
+        "icon_tap_action": press,
+        "grid_options": {"columns": 6},
+    }
+
+
+def _fan_tile(entity_id: str) -> dict[str, Any]:
+    return {
+        "type": "tile",
+        "entity": entity_id,
+        "features": [{"type": "fan-speed"}],
+        "grid_options": {"columns": "full"},
+    }
+
+
 def _scenes_view(entities: DashboardEntities) -> dict[str, Any] | None:
     cards: list[dict[str, Any]] = []
     if entities.scenes:
         cards.append({"type": "entities", "title": "Scenes", "entities": _named_rows(entities.scenes)})
     if entities.switches:
         cards.append({"type": "entities", "title": "Switches", "entities": _named_rows(entities.switches)})
-    cards.extend({"type": "tile", "entity": fan, "features": [{"type": "fan-speed"}]} for fan in entities.fans)
-    if entities.buttons:
-        cards.append({"type": "entities", "title": "Groups", "entities": _named_rows(entities.buttons)})
+    if groups := [*entities.light_buttons, *entities.blind_buttons]:
+        cards.append({"type": "entities", "title": "Groups", "entities": _named_rows(groups)})
     if not cards:
         return None
     return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": cards}
@@ -614,7 +709,9 @@ def build_dashboard(
     card, so it stays reachable; devices of an unknown plan are listed in
     the first plan's views. With several plans the views repeat per plan
     with the plan label in the title; with one plan the label is not shown.
-    The Scenes view and the Intercom view follow the plan views.
+    Below the plan of the first plan's views are the buttons for all
+    lights, all blinds and all heating zones, and on the Climate view the
+    ventilation. The Scenes view and the Intercom view follow the plan views.
     Without any entity the dashboard has one view that says so. A light or
     socket whose vendor id is in ``protected_lights`` shows a lock and has
     no tap action; a long press opens its details.
@@ -629,11 +726,13 @@ def build_dashboard(
         strays = plan_id == plan_ids[0]
         # One window for the plan's three views: the plan keeps its size from tab to tab.
         window = _window(image, _centres(plan_id, image, lights, blinds, zones)) if image is not None else None
+        # The cards that are not tied to a plan are on the first plan's views only.
         kinds = (
             (
                 "Lights",
                 "lights",
                 "mdi:lightbulb-group",
+                [_press_tile(button) for button in entities.light_buttons] if strays else [],
                 _markers(
                     lights,
                     entities.lights,
@@ -652,6 +751,7 @@ def build_dashboard(
                 "Blinds",
                 "blinds",
                 "mdi:blinds",
+                [_press_tile(button) for button in entities.blind_buttons] if strays else [],
                 _markers(
                     blinds,
                     entities.blinds,
@@ -668,6 +768,12 @@ def build_dashboard(
                 "Climate",
                 "climate",
                 "mdi:thermostat",
+                [
+                    *(_press_tile(button) for button in entities.climate_buttons),
+                    *(_fan_tile(fan) for fan in entities.fans),
+                ]
+                if strays
+                else [],
                 _markers(
                     zones,
                     entities.climates,
@@ -684,9 +790,9 @@ def build_dashboard(
             ),
         )
         views.extend(
-            _view(f"{title}{label}", f"{slug}{path}", icon, image, window, elements, unplaced)
-            for title, slug, icon, (elements, unplaced) in kinds
-            if elements or unplaced
+            _view(f"{title}{label}", f"{slug}{path}", icon, image, window, elements, unplaced, below)
+            for title, slug, icon, below, (elements, unplaced) in kinds
+            if elements or unplaced or below
         )
 
     views.extend(

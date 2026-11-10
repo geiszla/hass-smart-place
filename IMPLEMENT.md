@@ -1417,3 +1417,54 @@ hard to read on the white walls; the heating texts overlap on a phone.
   fills the window needs a small frontend card shipped with the
   integration (a JavaScript module registered with
   `frontend.add_extra_js_url`); the user decides.
+
+## 2026-11-10 (sixth entry) — Plan pages: buttons for all, heating sign, position gauge, heating buttons
+
+Asked for by the user after the fifth entry was installed.
+
+### What changed
+
+- New buttons "All heating off" and "Heating back on"
+  (`SmartPlaceAllHeatingButton`, `button.py`; DESIGN.md §11). The user
+  chose "on" to switch back on only what "off" switched off.
+- Plan pages (`smart_place_client/plan.py`): tiles below the plan for
+  "all lights", "all blinds", "all heating"; the ventilation moved from
+  the Scenes view to the Climate view; a flame before the target of a
+  zone that calls for heat; a blind's position as a gauge in place of the
+  percentage (user decision: icon only). `DashboardEntities.buttons` is
+  split into `light_buttons`, `blind_buttons` and `climate_buttons`.
+
+### Findings
+
+- The stock icons `mdi:roller-shade` and `mdi:roller-shade-closed` cannot
+  be told apart at 24 px on the plan. The gauge is therefore drawn: one
+  outline icon and a background layer over its opening. The icon's path
+  was read from the frontend (opening 8 x 11 units at 8, 9).
+- Home Assistant requires an entity class that overrides
+  `async_added_to_hass` to opt in to in-place entity id changes
+  (`async_entity_id_changed`); the runtime check for that caught the new
+  button class.
+
+### How it was checked
+
+- Preview in Chrome as in the fifth entry (configuration in the page's
+  memory only, nothing clicked). The real flat had every blind up and no
+  zone calling for heat, so a second preview forced single markers into
+  the other states by replacing their conditions: the three gauge levels,
+  a rain alarm, a zone that heats and one that cools.
+- `./scripts/lint-check`: pass. `./scripts/test`: 574 passed. Type check
+  against `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
+- Runtime checks on a real Home Assistant core: 162 passed, eight of them
+  new: the two buttons; off then on restores exactly the zones that
+  heated, at their targets, and leaves the zone that was off; on without
+  off sends nothing; a zone switched on by hand in between is left alone;
+  every zone is switched with the button's context; an unavailable zone
+  stays remembered; the remembered zones survive a reload; the tiles on
+  the three plan pages and no fan on the Scenes view.
+
+### Not seen
+
+- A real partly lowered or lowered blind, a real weather alarm and a
+  zone that really calls for heat on the installed pages (seen with
+  forced conditions only).
+- A press of the two heating buttons on the box: the box is live.

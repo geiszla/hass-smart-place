@@ -244,6 +244,7 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Scene with on/off state | `switch` | |
 | Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds, if exactly one of them is on when the integration first sees them. Otherwise they become switches |
 | All lights | `button` | "All lights off" and "All lights on" switch every light and socket that is not in that state yet, one after the other. A [protected socket](#protected-sockets) is never switched. Smart Place's own "All" button of the lights page is not used: what it does is not known |
+| All heating | `button` | "All heating off" switches off every heating zone that heats. "Heating back on" switches exactly those zones on again, each at the target it had. A zone that was already off stays off, and without a preceding "All heating off" the button does nothing. The zones to switch back on are kept across restarts |
 | Group buttons of the blinds page | `button` | "All blinds up", "All blinds down"; the button of a blinds group other than "All" is disabled by default |
 | Doorbell mute | `switch` | |
 | Door openers | `button` | They open real doors; not offered to the voice assistant by default |
@@ -301,7 +302,7 @@ integration's devices are named for that:
 
 | Device | What is on it |
 | --- | --- |
-| **Smart Place** | Connection, floor plan image, doorbell mute, "All lights off", "All lights on", the blinds group buttons, intercom caller, parcel PIN, info board |
+| **Smart Place** | Connection, floor plan image, doorbell mute, "All lights off", "All lights on", "All heating off", "Heating back on", the blinds group buttons, intercom caller, parcel PIN, info board |
 | One per heating zone, named after the room | Thermostat, temperature, humidity |
 | One per light, socket and blind, named as in the Smart Place app | The light, switch or cover; for a blind also "Lower after weather alarm" |
 | **Scene** | Every scene and every scene switch |
@@ -559,13 +560,18 @@ because the markers would overlap otherwise:
 
 - **Lights** — an icon per light and socket. Tap toggles, hold opens the
   details. A [protected socket](#protected-sockets) shows a lock, and a tap
-  does nothing.
-- **Blinds** — the position of each blind, and buttons for down, vent (slatted
-  blinds) and up. A [blocked blind](#blinds-and-weather-alarms) shows its
-  alarm instead, with grey buttons.
+  does nothing. Below the plan: "All lights off" and "All lights on".
+- **Blinds** — per blind a small window that shows its position (empty: fully
+  up, half filled: partly down, filled: fully down; a tap opens the details
+  with the percentage), and buttons for down, vent (slatted blinds) and up.
+  A [blocked blind](#blinds-and-weather-alarms) shows its alarm instead, with
+  grey buttons. Below the plan: "All blinds up" and "All blinds down".
 - **Climate** — measured and target temperature per zone, and − / + buttons.
-- **Scenes** — scenes, scene switches, ventilation, doorbell mute, "All
-  lights off", "All lights on" and the blinds group buttons.
+  While a zone calls for heat, a flame stands before its target and both are
+  in the heating colour. Below the plan: "All heating off", "Heating back on"
+  and the ventilation.
+- **Scenes** — scenes, scene switches, doorbell mute, "All lights off", "All
+  lights on" and the blinds group buttons.
 - **Intercom** — one block per door: its name, the cameras that show it and a
   wide button that opens the door. A camera is put with the door whose name
   starts like the camera's ("Garage camera" and "Garage entrance camera" both

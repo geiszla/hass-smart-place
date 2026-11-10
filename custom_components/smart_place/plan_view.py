@@ -101,16 +101,18 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
             ],
         ),
         fans=existing([entity_id(Platform.FAN, f"level_group_{group.scene_ids[0]}") for group in scenes.level_groups]),
-        buttons=existing(
+        light_buttons=existing(
+            [entity_id(Platform.BUTTON, "all_lights_off"), entity_id(Platform.BUTTON, "all_lights_on")],
+        ),
+        blind_buttons=existing(
             [
-                entity_id(Platform.BUTTON, "all_lights_off"),
-                entity_id(Platform.BUTTON, "all_lights_on"),
-                *(
-                    entity_id(Platform.BUTTON, f"blinds_group_{kind}{menu_id}")
-                    for menu_id in sorted(state.blind_sub_menus)
-                    for kind in ("up_", "down_", "")
-                ),
+                entity_id(Platform.BUTTON, f"blinds_group_{kind}{menu_id}")
+                for menu_id in sorted(state.blind_sub_menus)
+                for kind in ("up_", "down_", "")
             ],
+        ),
+        climate_buttons=existing(
+            [entity_id(Platform.BUTTON, "all_heating_off"), entity_id(Platform.BUTTON, "heating_back_on")],
         ),
         doors=[
             NamedEntity(found, door.name) for door in DOORS if (found := entity_id(Platform.BUTTON, f"door_{door.key}"))

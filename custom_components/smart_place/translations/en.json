@@ -45,11 +45,17 @@
   },
   "entity": {
     "button": {
+      "all_heating_off": {
+        "name": "All heating off"
+      },
       "all_lights_off": {
         "name": "All lights off"
       },
       "all_lights_on": {
         "name": "All lights on"
+      },
+      "heating_back_on": {
+        "name": "Heating back on"
       }
     },
     "sensor": {

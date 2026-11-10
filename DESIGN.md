@@ -1530,11 +1530,29 @@ image and their sizes did not.
   icon within 24 px). That element has the marker's width (`min-width`)
   and, for a heating zone, room for the second row (`padding-bottom`).
   A light's backdrop is a disc drawn as a gradient inside the badge.
-- Blind: one row, 32 px high: position, then Down / Vent / Up; 96 px wide
-  without Vent, 122 px with. Heating zone: two rows, 112 x 48 px:
-  measured temperature above the target (or the mode), − and + at the
-  sides. An unavailable device shows its state alone on a backdrop; its
-  buttons are hidden.
+- Blind: one row, 32 px high: a position gauge, then Down / Vent / Up;
+  90 px wide without Vent, 116 px with. Heating zone: two rows,
+  112 x 48 px: measured temperature above the target (or the mode), − and
+  + at the sides. An unavailable device shows its state alone on a
+  backdrop; its buttons are hidden.
+- Position gauge (user decision, 2026-11-10: an icon in place of the
+  percentage, three levels). The stock icons for a half-lowered and a
+  lowered shade look alike at 24 px, so the gauge is one icon,
+  `mdi:window-shutter-open` (a window outline with a shutter box), in the
+  theme's primary colour, and its opening is drawn as closed with a
+  background layer: nothing for position 100, the upper half for 1 to 99,
+  all of it for 0 (`numeric_state` on `current_position`). The colour
+  sets it apart from the buttons beside it. An alarm icon stands in the
+  same place in the warning colour.
+- Heating sign: the climate entity's `hvac_action` (from `KLIMASINFO`)
+  says whether a zone calls for heat. The target row exists three times,
+  switched by it: "→ 21 °C", or a flame (`mdi:fire`) or a snowflake before
+  the target, sign and target in the theme's heating or cooling colour.
+- Below the plan of the first plan's views are tiles that press the
+  buttons for all lights, all blinds and all heating zones (two per row),
+  and on the Climate view the ventilation fans (moved from the Scenes
+  view; the view also exists for a fan alone). The Scenes view keeps the
+  "Groups" card with the light and blind buttons.
 
 A protected
 socket's marker gets the icon `mdi:lock` and no tap action (`none`; a
@@ -1624,6 +1642,22 @@ purpose (user decision), unlike in Home Assistant's own calls for all
 lights. Names come from `translations/en.json`
 (`entity.button.all_lights_off` / `all_lights_on`), unique ids
 `<entry_id>_all_lights_off` / `_all_lights_on`.
+
+`SmartPlaceAllHeatingButton` (user decision, 2026-11-10, third round):
+"All heating off" and "Heating back on" on the main device, created when
+the server lists at least one heating zone. "Off" calls
+`climate.set_hvac_mode` Off for every zone whose state is `heat`, one
+after the other, with the button's context, and adds the zone to
+`SmartPlaceData.heating_switched_off`. "On" calls it with Heat for
+exactly the zones in that set that are still off, and takes a zone out
+of the set when it heats again, by this press or because the user
+switched it on in between. A zone that is unavailable at the press stays
+in the set. Each zone returns to its own target: the climate entity
+remembers its last heating setpoint. Chosen over "switch every zone on":
+a zone the user keeps off (a bathroom) must not come on. Without a
+preceding "off" the "on" button does nothing. The "off" button stores
+the set as extra restore data, so it survives a restart. Unique ids
+`<entry_id>_all_heating_off` / `_heating_back_on`.
 
 `SmartPlaceGroupButton`, on the main device: the blinds sub-menu that
 covers its whole plan (group message `JALZENTRAL<plan>`) gets "all up"
