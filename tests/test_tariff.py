@@ -15,6 +15,7 @@ import pytest
 from smart_place_client.tariff import (
     TARIFF_TZ,
     TARIFFS,
+    MonthToDateCost,
     energy_cost_chf,
     is_high_tariff,
     local_day_start,
@@ -162,3 +163,65 @@ def test_local_period_starts() -> None:
     # queried from after the DST switch (March 31 is CEST)
     start = local_month_start(_zrh("2026-03-31 12:00"))
     assert start.isoformat() == "2026-03-01T00:00:00+01:00"
+
+
+# ----------------------- month-to-date cost ------------------------
+
+
+def _day(day: int, month: int = 11) -> datetime:
+    return datetime(2026, month, day, tzinfo=TARIFF_TZ)
+
+
+def test_month_to_date_needs_prefix_and_today() -> None:
+    month = MonthToDateCost()
+    assert month.update(_day(9), 1.39) is None
+    month.set_prefix(_day(9), 9.67)
+    assert month.update(_day(9), None) is None
+    assert month.update(_day(9), 1.39) == 11.06
+    assert month.value_day == _day(9)
+
+
+def test_month_to_date_does_not_drop_at_midnight() -> None:
+    """The buckets move to the new day before the prefix does; the value stands still meanwhile.
+
+    Figures from the live box, night of 5 to 6 November 2026: 7.7144 CHF
+    up to the 5th, 1.3889 CHF on the 5th. The old sum showed 7.7144 right
+    after midnight.
+    """
+    month = MonthToDateCost()
+    month.set_prefix(_day(5), 6.4942)
+    assert month.update(_day(5), 1.3889) == 7.8831
+    # First poll of the 6th answered: the buckets cover the 6th, the prefix still ends at the 5th.
+    assert month.update(_day(6), 0.0) == 7.8831
+    assert month.update(_day(6), 0.0033) == 7.8831
+    assert month.value_day == _day(5)
+    # Statistics of the 5th are complete: the prefix now ends at the 6th.
+    month.set_prefix(_day(6), 7.8831)
+    assert month.update(_day(6), 0.0033) == 7.8864
+    assert month.value_day == _day(6)
+
+
+def test_month_to_date_never_decreases_within_a_month() -> None:
+    month = MonthToDateCost()
+    values = []
+    prefix = 0.0
+    for day in range(1, 6):
+        month.set_prefix(_day(day), prefix)
+        values.extend(month.update(_day(day), today) for today in (0.1, 0.6, 1.2))
+        # Midnight: new-day buckets arrive before the new prefix.
+        values.append(month.update(_day(day + 1), 0.0))
+        prefix = round(prefix + 1.2, 4)
+    assert values == sorted(values)
+    assert values[-1] == 6.0
+
+
+def test_month_to_date_restarts_on_the_first() -> None:
+    """On the 1st the prefix is zero; the value restarts together with its day."""
+    month = MonthToDateCost()
+    month.set_prefix(_day(30), 40.0)
+    assert month.update(_day(30), 1.5) == 41.5
+    assert month.update(_day(1, month=12), 0.01) == 41.5
+    assert month.value_day == _day(30)
+    month.set_prefix(_day(1, month=12), 0.0)
+    assert month.update(_day(1, month=12), 0.01) == 0.01
+    assert local_month_start(month.value_day) == _day(1, month=12)

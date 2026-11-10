@@ -44,6 +44,11 @@ from datetime import datetime, timedelta
 from typing import Final
 from zoneinfo import ZoneInfo
 
+# Home Assistant writes the hourly statistics of the hour that ends at
+# midnight a few seconds after midnight. A month-to-date prefix read
+# before that misses the last hour of the day that just ended.
+STATISTICS_SETTLE: Final = timedelta(seconds=90)
+
 TARIFF_TZ: Final = ZoneInfo("Europe/Zurich")
 
 # Hochtarif window: Mon-Sat 06:00-22:00 local; Niedertarif otherwise
@@ -214,3 +219,45 @@ def today_range_epochs(now: datetime | None = None) -> tuple[int, int]:
     start = datetime(local.year, local.month, local.day, tzinfo=TARIFF_TZ)
     end = start + timedelta(days=1)
     return int(start.timestamp()), int(end.timestamp())
+
+
+@dataclass(slots=True)
+class MonthToDateCost:
+    """Month-to-date cost: the finished days of the month plus the running day.
+
+    The two parts come from different sources that roll over at different
+    moments: the cost of the running day follows the server's range
+    buckets, which switch to the new day with the first poll after
+    midnight; the cost of the finished days (the *prefix*) is read from
+    recorded statistics, which only contain the day that just ended a
+    little later. Added up naively the sum drops by a whole day's cost in
+    between.
+
+    ``update`` therefore only adds the two when the prefix runs up to the
+    midnight of the very day the buckets cover. Until the prefix for a new
+    day has been read, the last value stays.
+    """
+
+    prefix_chf: float | None = None
+    # Midnight (start) of the day the prefix runs up to.
+    prefix_day: datetime | None = None
+    value: float | None = None
+    # Day of the buckets ``value`` was computed from.
+    value_day: datetime | None = None
+
+    def set_prefix(self, day: datetime, chf: float) -> None:
+        """Store the cost of the month's days before ``day``."""
+        self.prefix_day = day
+        self.prefix_chf = chf
+
+    def update(self, day: datetime | None, today_chf: float | None) -> float | None:
+        """Fold the running day's cost and return the month-to-date value.
+
+        ``day`` is the midnight of the day the buckets cover, ``today_chf``
+        their cost. Returns the previous value while the prefix does not
+        belong to ``day`` (``None`` before the first complete pair).
+        """
+        if day is not None and today_chf is not None and self.prefix_chf is not None and self.prefix_day == day:
+            self.value = round(self.prefix_chf + today_chf, 4)
+            self.value_day = day
+        return self.value

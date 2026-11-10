@@ -85,7 +85,7 @@ from .smart_place_client import (
     next_tariff_boundary,
     rates_for,
 )
-from .smart_place_client.tariff import TARIFF_TZ, local_day_start, local_month_start
+from .smart_place_client.tariff import STATISTICS_SETTLE, TARIFF_TZ, MonthToDateCost, local_month_start
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -101,9 +101,9 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 # How often the month-to-date cost sensor re-reads its history prefix from
-# recorder statistics. The prefix only changes at local midnight (yesterday
-# rolls from "live" into "history"), so this bounds the staleness right
-# after midnight; between refreshes the live today-part keeps it current.
+# recorder statistics. The prefix only changes when the range buckets move
+# to a new day; that case triggers a read of its own, so this is the retry
+# and the pick-up for statistics corrected after the fact (a backfill).
 _COST_PREFIX_REFRESH = timedelta(minutes=15)
 
 
@@ -772,7 +772,38 @@ class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
         self._schedule_boundary_refresh()
 
 
-class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
+class _SmartPlaceElectricityCostSensor(_SmartPlaceChartScopedSensor):
+    """Shared wiring for the cost sensors: the range buckets and the day they cover."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "CHF"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+
+    def _buckets(self) -> dict[int, float]:
+        return self._data.state.chart_today_buckets.get(self._chart_id, {})
+
+    def _bucket_day(self) -> datetime | None:
+        """Return the local midnight of the day the buckets cover.
+
+        Not the wall clock: after midnight the buckets still hold the old
+        day until the first poll of the new day was answered.
+        """
+        start = self._data.state.chart_today_starts.get(self._chart_id)
+        return None if start is None else dt_util.utc_from_timestamp(start).astimezone(TARIFF_TZ)
+
+    def _today_cost(self) -> float | None:
+        """Return the cost of the buckets at their day's rates, None before the first range poll."""
+        buckets = self._buckets()
+        ht = buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)
+        nt = buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)
+        if ht is None and nt is None:
+            return None
+        tariff, _ = rates_for(self._bucket_day() or dt_util.now())
+        return energy_cost_chf(ht or 0.0, nt or 0.0, tariff)
+
+
+class SmartPlaceElectricityCostTodaySensor(_SmartPlaceElectricityCostSensor):
     """Today's grid electricity cost in CHF, from server-side tariff buckets.
 
     The client polls ``Commands.ChartStandRange`` with the current local
@@ -780,12 +811,15 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
     high/low-tariff consumption split (the same bucketing the EWZ
     invoices bill, verified against five months of invoices — see
     DESIGN.md). State = HT kWh x HT rate + NT kWh x NT rate at the
-    current year's rates.
+    rates of the buckets' year.
 
-    ``TOTAL`` + ``last_reset`` (local midnight) lets HA's long-term
-    statistics accumulate daily costs into weekly/monthly/yearly sums
-    correctly across the midnight reset AND across a 1 January rate
-    change (each day accrues at its own year's rates).
+    ``TOTAL`` + ``last_reset`` (midnight of the day the buckets cover)
+    lets HA's long-term statistics accumulate daily costs into
+    weekly/monthly/yearly sums correctly across the midnight reset AND
+    across a 1 January rate change (each day accrues at its own year's
+    rates). ``last_reset`` moves together with the values: until the
+    first reply of the new day arrives the sensor still reports the old
+    day's cost under the old day's ``last_reset``.
 
     Known bias, documented in ``smart_place_client.tariff``: the meter
     buckets include the ZEV solar allocation that EWZ bills ~20% cheaper;
@@ -794,10 +828,6 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
     attribute) is not part of the state either.
     """
 
-    _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "CHF"
-    _attr_state_class = SensorStateClass.TOTAL
-    _attr_suggested_display_precision = 2
     _name_suffix = "cost (today)"
 
     def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
@@ -805,30 +835,21 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
         super().__init__(entry, data, chart_id)
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"
 
-    def _buckets(self) -> dict[int, float]:
-        return self._data.state.chart_today_buckets.get(self._chart_id, {})
-
     @property
-    def last_reset(self) -> datetime:
-        """The buckets cover the current local day; reset is local midnight."""
-        return dt_util.now(TARIFF_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    def last_reset(self) -> datetime | None:
+        """Return the midnight of the day the buckets cover."""
+        return self._bucket_day()
 
     @property
     def native_value(self) -> float | None:
         """Return today's variable cost, or None before the first range poll."""
-        buckets = self._buckets()
-        ht = buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)
-        nt = buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)
-        if ht is None and nt is None:
-            return None
-        tariff, _ = rates_for(dt_util.now())
-        return energy_cost_chf(ht or 0.0, nt or 0.0, tariff)
+        return self._today_cost()
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         """Expose the kWh split, the rates applied, and the fixed-fee context."""
         buckets = self._buckets()
-        tariff, stale = rates_for(dt_util.now())
+        tariff, stale = rates_for(self._bucket_day() or dt_util.now())
         return {
             "high_tariff_kwh": buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF),
             "low_tariff_kwh": buckets.get(CHART_RANGE_SERIES_LOW_TARIFF),
@@ -841,75 +862,76 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
         }
 
 
-class SmartPlaceElectricityCostMonthSensor(_SmartPlaceChartScopedSensor):
+class SmartPlaceElectricityCostMonthSensor(_SmartPlaceElectricityCostSensor):
     """Month-to-date grid electricity cost in CHF.
 
     State = history prefix + live today: the prefix is the long-term
     statistics change of the daily cost sensor from the 1st of the month
-    through today's local midnight (read from HA's recorder — the same
-    statistics the Energy dashboard charts, including any backfilled
-    history), and the today part comes live from the server's tariff
-    buckets. Reading the prefix from statistics keeps this sensor exactly
-    consistent with the Energy dashboard and makes it restart-proof
+    up to the midnight of the day the range buckets cover (read from HA's
+    recorder — the same statistics the Energy dashboard charts, including
+    any backfilled history), and the today part comes live from the
+    server's tariff buckets. Reading the prefix from statistics keeps this
+    sensor consistent with the Energy dashboard and makes it restart-proof
     without any extra bookkeeping.
 
-    The prefix changes only at local midnight; it is re-read every
-    ``_COST_PREFIX_REFRESH`` so the sensor is at most that stale right
-    after the day rolls over. ``None`` (unknown) until both the first
+    The two parts roll over to a new day at different moments, so they are
+    only added when they belong to the same day (``MonthToDateCost``): the
+    value stands still for a moment after midnight instead of dropping by
+    the cost of the day that just ended. The prefix is read once the
+    statistics of that day are complete and re-read every
+    ``_COST_PREFIX_REFRESH``. ``None`` (unknown) until both the first
     statistics read and the first range poll have landed.
     """
 
-    _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "CHF"
-    _attr_state_class = SensorStateClass.TOTAL
-    _attr_suggested_display_precision = 2
     _name_suffix = "cost (this month)"
 
     def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
-        """Wire the per-chart unique_id and the prefix cache."""
+        """Wire the per-chart unique_id and the month-to-date sum."""
         super().__init__(entry, data, chart_id)
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_month"
-        self._cost_stat_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"  # unique_id; resolved to entity_id below
-        self._prefix_chf: float | None = None
-        self._prefix_through: str | None = None
+        self._cost_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"
+        self._month = MonthToDateCost()
+        # Day for which a prefix read was started as soon as it became readable.
+        self._prompted_day: datetime | None = None
         self._refresh_unsub = None
 
     @property
-    def last_reset(self) -> datetime:
-        """The month-to-date total resets on the 1st at local midnight."""
-        return local_month_start()
-
-    def _today_cost(self) -> float | None:
-        buckets = self._data.state.chart_today_buckets.get(self._chart_id, {})
-        ht = buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)
-        nt = buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)
-        if ht is None and nt is None:
-            return None
-        tariff, _ = rates_for(dt_util.now())
-        return energy_cost_chf(ht or 0.0, nt or 0.0, tariff)
+    def last_reset(self) -> datetime | None:
+        """Return the 1st of the month of the day the value covers."""
+        return None if self._month.value_day is None else local_month_start(self._month.value_day)
 
     @property
     def native_value(self) -> float | None:
         """Return history prefix + live today, or None until both are known."""
-        today = self._today_cost()
-        if self._prefix_chf is None or today is None:
-            return None
-        return round(self._prefix_chf + today, 4)
+        return self._month.value
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         """Expose the prefix/live split so the composition is inspectable."""
+        prefix_day = self._month.prefix_day
         return {
-            "history_chf": self._prefix_chf,
-            "history_through": self._prefix_through,
+            "history_chf": self._month.prefix_chf,
+            "history_through": None if prefix_day is None else prefix_day.date().isoformat(),
             "today_chf": self._today_cost(),
         }
 
+    @callback
+    def _handle_frame_update(self) -> None:
+        """Fold the running day's cost; fetch the prefix of a new day once it can be read."""
+        day = self._bucket_day()
+        self._month.update(day, self._today_cost())
+        if (
+            day is not None
+            and day not in (self._month.prefix_day, self._prompted_day)
+            and dt_util.utcnow() >= day + STATISTICS_SETTLE
+        ):
+            self._prompted_day = day
+            self.hass.async_create_task(self._async_refresh_prefix())
+        super()._handle_frame_update()
+
     async def async_added_to_hass(self) -> None:
-        """Resolve the daily cost statistic, read the prefix, start the refresh timer."""
+        """Read the prefix and start the refresh timer."""
         await super().async_added_to_hass()
-        registry = er.async_get(self.hass)
-        self._cost_stat_id = registry.async_get_entity_id("sensor", DOMAIN, self._cost_stat_id) or ""
         await self._async_refresh_prefix()
         self._refresh_unsub = async_track_time_interval(self.hass, self._async_refresh_prefix, _COST_PREFIX_REFRESH)
 
@@ -926,32 +948,37 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceChartScopedSensor):
         super().async_entity_id_changed(old_entity_id)
 
     async def _async_refresh_prefix(self, _now: datetime | None = None) -> None:
-        """Re-read the month-through-yesterday cost from recorder statistics."""
-        if not self._cost_stat_id:
+        """Re-read the cost of the month's days before the buckets' day from recorder statistics."""
+        day = self._bucket_day()
+        # Looked up on every read: the daily sensor's entity_id (its statistic id) can be renamed.
+        statistic_id = er.async_get(self.hass).async_get_entity_id("sensor", DOMAIN, self._cost_unique_id)
+        if day is None or statistic_id is None:
             return
-        start = local_month_start()
-        end = local_day_start()
-        if start >= end:
+        start = local_month_start(day)
+        if start >= day:
             prefix = 0.0  # first day of the month: no history part yet
+        elif dt_util.utcnow() < day + STATISTICS_SETTLE:
+            return
         else:
             try:
+                # Period "hour", not "day": for "day" the recorder extends the end to
+                # the end of the day that contains it, which pulled the running day in.
                 stats = await get_instance(self.hass).async_add_executor_job(
                     statistics_during_period,
                     self.hass,
                     start,
-                    end,
-                    {self._cost_stat_id},
-                    "day",
+                    day,
+                    {statistic_id},
+                    "hour",
                     None,
                     {"change"},
                 )
             except Exception:  # noqa: BLE001 - recorder may not be ready yet; retry next tick
                 _LOGGER.debug("month-cost prefix query failed; keeping previous value", exc_info=True)
                 return
-            prefix = round(sum(row.get("change") or 0.0 for row in stats.get(self._cost_stat_id, ())), 6)
-        if prefix != self._prefix_chf:
-            self._prefix_chf = prefix
-            self._prefix_through = end.date().isoformat()
+            prefix = round(sum(row.get("change") or 0.0 for row in stats.get(statistic_id, ())), 6)
+        if (day, prefix) != (self._month.prefix_day, self._month.prefix_chf):
+            self._month.set_prefix(day, prefix)
             self._handle_frame_update()
 
 
