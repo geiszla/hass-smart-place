@@ -1024,3 +1024,136 @@ check: 0 errors; runtime: the 33 earlier checks plus 30 new ones).
 - `chart_ids` in `SessionState` still only grows (a chart deleted on the
   server is polled until the next restart; one frame per minute, no
   timeout).
+
+## 2026-11-10 (third entry) — Protected sockets, blocked blinds, lowering after an alarm, leftovers
+
+Three features and the two points left open above. Still no command was
+sent to the vendor server and nothing was deployed. The decision logic is
+in the client library with tests in `tests/` (`protection.py`, `alarm.py`,
+`plan.py`); the Home Assistant side was checked with the two throwaway
+setups described above (type check: 0 errors; runtime: 107 checks — the
+63 earlier ones, a few of them adapted where the behaviour changed on
+purpose, and 44 new ones; hassfest: valid).
+
+### Protected sockets
+
+- Option `protected_sockets` (vendor light ids), set in the new options
+  flow. `SmartPlacePushEntity._command_refused` drops every command that
+  names a protected light id (`LightToggle`, `LightDim`) at the three
+  places described in DESIGN.md §11, without an error and with one INFO
+  line. The switch shows `protected` and a lock; the plan marker shows a
+  lock and opens the details.
+- `CommandDefinition.device` is new: the device family a command names.
+  The guard is written against it, so another family (blinds) could be
+  protected by adding its ids to `SmartPlaceData.protected`.
+- **Update listener.** Options take effect without a reload, so the entry
+  has an update listener that only refreshes what is shown. Home Assistant
+  2026.11.1 logs a usage report when a flow calls
+  `async_update_reload_and_abort` on an entry with an update listener
+  (an error from 2026.12), and raises for `OptionsFlowWithReload` with
+  one. The re-auth flow therefore calls `async_update_and_abort` and
+  schedules the reload itself (also for an unchanged token, as before).
+- Choices made here: the switch carries `protected: false` when it is
+  not protected (the brief only asked for `true`); a protected socket
+  whose state is unknown returns silently instead of raising
+  `state_unknown`; the options flow keeps a protected socket the server
+  has not listed in its list, labelled "Socket <id>", and aborts while
+  the entry is not loaded.
+- Not prevented, by decision: scenes and the "All lights" button of this
+  integration still send their one command; what it switches is decided
+  in the vendor system.
+
+### Blocked blinds
+
+- While its value carries a word, a blind's cover has no features, reads
+  "open" without a position and has `blocked: true` plus `weather_alarm`;
+  otherwise `blocked: false` and no `weather_alarm`. The plan shows the
+  alarm icon and greyed buttons through conditional elements on the
+  attributes.
+- **User decision:** in the gap after a reconnect, before the value has
+  arrived again, `blocked`, `weather_alarm`, the state and the feature set
+  keep the last report (`alarm.BlindAlarm`). Reason: automations are built
+  on the attribute, and the feature set then costs no registry write on a
+  reconnect.
+- Checked in the Home Assistant source: a changed feature set is written
+  to the entity registry on the next state write, counts towards a
+  warning at more than 100 changes per hour, and makes Home Assistant
+  write the state once more (a `state_reported` event). The runtime check
+  counts exactly one registry update and one such rewrite per alarm start
+  or end, and none for rebroadcasts or a reconnect.
+- The earlier table row "Blind commands during a weather alarm: sent" no
+  longer holds for the cover entity: it offers no command while blocked.
+  The group buttons still send theirs.
+
+### Lowering a blind after its alarm
+
+- `SmartPlaceLowerAfterAlarmSwitch` per blind (configuration entity, off
+  by default), state in the option `lower_after_alarm`; waiting time in
+  `lower_delay_minutes` (options flow, 0–240, default 0). Rule and its
+  limits: DESIGN.md §11. **The one place where the integration sends a
+  command without a user action at that moment.**
+- Choices made here: a blinds group button cancels a running wait like
+  the blind's own commands (a scene does not, unless it moves the blind);
+  only a change from off to on lowers at once (a repeated `turn_on` does
+  nothing); the upper limit of 240 minutes; a failed send is logged at
+  WARNING and not repeated.
+- **User decision:** the switch is unavailable while the connection is
+  down, like the other entities.
+- Hazard to know: `switch.turn_on` with `entity_id: all` turns the
+  function on for every blind and lowers every blind that is not down.
+  Area and device calls do not reach the switch (entity category).
+
+### Leftovers
+
+- **Late first bootstrap** (was "Still open"). `devices_listed` turns true
+  `SETUP_OBSERVATION_WINDOW` after the first main-menu reply, also when
+  that reply comes after setup gave up waiting. The reply starts the
+  window, setup waits for its end, a drop during the window starts it
+  again with the next reply.
+- **`chart_ids` per connection** (was "Still open"). Cleared in
+  `SessionState.reset_connection` like `plan_ids`. The chart sensors read
+  `SmartPlaceState`, which is not cleared, so they keep their values
+  across a reconnect. One thing depended on the kept ids: the poll task's
+  first read of the day's range buckets ran before any frame of its
+  connection, so on a reconnect it used the old ids — and on the very
+  first connection it had none and read nothing for a minute. It now
+  waits for the complete bootstrap, so the buckets are read right after
+  the bootstrap on every connection. `chart_units` still survives
+  reconnects (only read when a sensor is created).
+
+### Marketplace instead of HACS
+
+Home Assistant 2026.11 has a built-in Marketplace that replaced HACS. The
+install and update instructions (README, DEPLOY.md, the `ha-live` skill
+and the help of `ha-live update`) name it now; `HACS_UPDATE_ENTITY` in
+`scripts/ha_live.py` is `MARKETPLACE_UPDATE_ENTITY`, and the `update`
+command has tests. `hacs.json` stays: the Marketplace reads it. Read from
+the 2026.11.1 source (`components/marketplace/update.py`), not tried on
+the box: `update.install` refuses until the calling user has accepted the
+Marketplace warning in the UI, and refuses a version equal to the
+installed one.
+
+### How it was checked
+
+- `./scripts/lint-check` and `./scripts/test`: pass.
+- Type check of a copy against `homeassistant==2026.11.1`: 0 errors.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  options flow (list, store, merge, abort, no reload), re-auth without a
+  usage report, the guard (turn-on, turn-off, toggle, unknown state,
+  calls for all, an area and a list, a dim command, unprotect, reload),
+  the plan; the blocked cover (features, registry, direct and broad
+  calls, rebroadcast, reconnect during an alarm, an alarm that ended
+  during an outage, first start); the lowering switch (default, switch-on,
+  alarm end, waiting time and each way to cancel it, reconnects, dry run,
+  a failed send, area calls, persistence); the late first bootstrap.
+- hassfest: valid.
+
+### Needs a live test
+
+| Point | Assumption in the code |
+| --- | --- |
+| The value a blind reports when its alarm ends | A position (probably 0, fully up). With a waiting time, a blind that is still moving then is not lowered (its position changes). |
+| The down command right after an alarm end | Accepted by the server. If the server still refuses for a moment, nothing is repeated. |
+| Alarm words other than `regenalarm` | Only `regenalarm` was seen live; `windalarm` and `hagelalarm` were not. Any word blocks. |
+| The plan in a browser | Lock icon, alarm icons and greyed buttons were checked as configuration, not as pixels. |
+| `ha-live update` with the Marketplace | See above. |

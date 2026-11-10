@@ -839,6 +839,19 @@ group buttons, doorbell mute) are listed in "Control protocol" below.
 Every command carries a ``write`` flag; ``client.issue`` withholds
 write commands in dry-run mode.
 
+The client library still never sends a write command on its own. In the
+integration a write command goes out when an action is called for an
+entity — with one exception (2026-11-10): the per-blind switch "Lower
+after weather alarm" sends ``Commands.BlindDown`` when it sees the
+blind's weather alarm end. It is the one place where a command is sent
+without a user action at that moment; see §11 "switch: Lower after
+weather alarm".
+
+A command for one light, socket or blind names its device family
+(``CommandDefinition.device``: ``DEVICE_LIGHT`` / ``DEVICE_BLIND``; the
+vendor id is the first argument). ``protection.command_is_protected``
+and ``alarm.command_moves_blind`` go by it.
+
 ### Control protocol (2026-11-09)
 
 Worked out from two fresh observe-only captures (a 45 s bootstrap and a
@@ -998,12 +1011,39 @@ they are therefore not created from half a reply. The Connection sensor
 and the other entities that need nothing of that kind are created at
 once. Nothing is removed automatically.
 
-Known limit: the value frames (`WINDALARM<n>`, `SPRECHEN<n>`, `MUTE<n>`)
-arrive after the main-menu reply. In the slow case the platforms are
-already set up then and add an entity per frame, so with several wind
-zones, intercoms or mutes the first one can still get the name without a
-number. The normal setup is not affected (it waits for the observation
-window).
+The value frames (`WINDALARM<n>`, `SPRECHEN<n>`, `MUTE<n>`) arrive after
+the main-menu reply. `devices_listed` therefore only turns true
+`SETUP_OBSERVATION_WINDOW` (2 s) after the first main-menu reply
+(`SmartPlaceData.first_reply_observed`), so a name that depends on a
+count sees the whole count — at setup, and also when the first bootstrap
+is slower than the setup waits (2026-11-10; before, the slow case added
+an entity per frame, and the first wind zone, intercom or mute could get
+the name without its number). The window is started by the reply itself
+(`_on_frame`), setup waits for its end, and a connection that drops
+during the window starts it again with the next reply. Only the first
+reply waits: after a reconnect a new device is added as soon as that
+connection's main-menu reply is complete.
+
+**Options** (2026-11-10). The config entry has options, set in an options
+flow (`config_flow.SmartPlaceOptionsFlow`) and by the "Lower after
+weather alarm" switches:
+
+| Key | Value | Set by |
+| --- | ----- | ------ |
+| `protected_sockets` | vendor light ids, sorted | options flow |
+| `lower_delay_minutes` | whole minutes, 0–240 | options flow |
+| `lower_after_alarm` | vendor blind ids whose switch is on, sorted | the switches |
+
+Options take effect without a reload: whoever needs one reads
+`entry.options` at that moment, and the entry's update listener
+(`_async_entry_updated`) only lets the entities and the plan dashboard
+show the change. Home Assistant forbids an update listener together with
+its reloading helpers (an error from 2026.12): the options flow is a plain
+`OptionsFlow`, and the re-auth flow calls `async_update_and_abort` and
+schedules the reload itself. The options flow replaces the options as a
+whole, so it merges its fields into the existing ones; it keeps a
+protected socket the server has not listed (yet) in its list, and it
+aborts while the entry is not loaded (the sockets are not known then).
 
 ### sensor
 
@@ -1118,6 +1158,32 @@ their registry entries, in the `binary_sensor` domain only).
 | kind `steckdose` | `SmartPlaceSocket` (`switch`, `OUTLET`) | A switch so that "all lights off" does not cut socket power. |
 | `INHALTSZENEN<N>` type `OnOff` + `SZENEN<N>` | `SmartPlaceSceneSwitch` | Not for members of a level group. |
 | `MUTE<N>` | `SmartPlaceMuteSwitch` | On = doorbell muted. |
+| `INHALTJalousien<N>` (option `lower_after_alarm`) | `SmartPlaceLowerAfterAlarmSwitch` | A setting per blind, not a vendor state; see "switch: Lower after weather alarm". |
+
+**Protected sockets** (user decision, 2026-11-10: set in the options; a
+blocked command is skipped silently). One socket powers a home server
+and must never be switched off; the only command is a toggle, so even a
+"turn on" decided against a stale state could do that. While a socket's
+vendor light id is in `protected_sockets`, no command is sent for it.
+The guard is `SmartPlacePushEntity._command_refused`, a call of the pure
+`protection.command_is_protected(command, args, data.protected)`:
+
+- in `_async_issue`, which every command of every entity passes — the
+  rule itself;
+- in `_async_issue_expecting`, before an expected state is set;
+- at the top of `SmartPlaceToggleEntity._async_switch`, so that a
+  protected socket neither waits out the settle time nor raises
+  `state_unknown`.
+
+A refused command returns without an error (a call for many entities
+reaches the others) and writes one INFO line. `data.protected` maps a
+device family to the protected ids; only `DEVICE_LIGHT` is filled today,
+another family would be one more entry. The socket's switch has the
+attribute `protected` (true / false) and, while protected, the icon
+`mdi:lock`. Not covered, by design: commands that reach the socket
+inside the vendor system (scenes, the "All lights" group message, wall
+buttons, the vendor app) — also when this integration's scene entities or
+group button send them.
 
 All of these only have a toggle command. `SmartPlaceToggleEntity`
 decides turn-on and turn-off against the effective state: the expected
@@ -1139,17 +1205,93 @@ integration issued a scene or group command (`changes_others` in
 time, because the scene's echoes are about to change the values the
 decision is made against. No other command waits.
 
+### switch: Lower after weather alarm
+
+`SmartPlaceLowerAfterAlarmSwitch`, one per blind on the blind's device,
+entity category `CONFIG`, off by default (user decisions, 2026-11-10: one
+switch per blind; lower always; no waiting time by default, but settable;
+turning the switch on lowers at once if the blind is up). Its state is the
+option `lower_after_alarm`, not restored entity state (that store is
+written too rarely for a setting). It is unavailable while the connection
+is down, like the other entities.
+
+**This is the one place where the integration sends a command without a
+user action at that moment.** The rule is the pure
+`alarm.LowerAfterAlarm` (injectable clock, `tests/test_alarm.py`); the
+entity feeds it the blind's value on every fan-out, keeps the timer for
+the waiting time and sends `Commands.BlindDown` through `_async_issue`
+(dry run, audit log, protected devices). Rule:
+
+1. A value with an alarm word sets the note "alarm seen". A missing
+   value (the connection dropped, `clear_control_values`) drops it.
+2. A position that arrives while the note is set is the end of the alarm
+   and starts the wait (`lower_delay_minutes`, default 0). The server
+   replays every value on each connect; the note is gone by then, so a
+   replay is never taken for the end of an alarm.
+3. The wait is cancelled when the alarm is back, the value goes missing,
+   the switch is turned off, Home Assistant sends a command for the blind
+   (`alarm.command_moves_blind`: its up, down or vent, or a blinds group
+   button; reported through `SmartPlaceData.command_listeners` from
+   `_async_issue`), or the blind reports another position than at the
+   end of the alarm.
+4. When the wait is over (`due`): only if the switch is on, the
+   connection is healthy and the position is known and not fully down,
+   `JALDOW<id>` is sent once. No retry; a send that fails is logged at
+   WARNING. One INFO line names the blind and the reason.
+5. An alarm end that was not seen live lowers nothing.
+
+Turning the switch on (a change from off to on) lowers the blind at once
+if its position is known and not fully down; a blocked blind is lowered by
+rule 2 when its alarm ends. Turning it off cancels a wait and sends
+nothing. A scene sent by Home Assistant does not cancel a wait by itself;
+if it moves the blind, the position change does. The tracker lives in the
+entity: an alarm that ends in the two seconds between the first bootstrap
+and the creation of the entities is not seen.
+
+Area and device calls do not reach the switch (Home Assistant leaves
+entities with a category out of them); `entity_id: all` does.
+
 ### cover
 
 One `SmartPlaceCover` per `INHALTJalousien<N>`. Device class: `jalousie`
 → `BLIND`, `jalousiestoff` → `SHADE`, `markise` → `AWNING`. Features are
 set explicitly: `OPEN | CLOSE`, plus `OPEN_TILT` on slatted blinds (vent).
 No stop, no set-position. `current_cover_position = 100 − <a>`;
-`is_closed` when 0. During a weather alarm both are `None` and the
-attribute `weather_alarm` holds `rain`, `wind` or `hail` (or the vendor's
-own word, if the server reports an alarm that is not known here).
+`is_closed` when 0.
 `assumed_state` is set: the position is the server's own estimate, and
 Home Assistant then keeps both direction buttons enabled.
+
+**Blocked** (user decision, 2026-11-10: the standard card offers no
+buttons while blocked; the plan shows them greyed). A blind is blocked
+while `<a>` of its value is a word instead of a number (`regenalarm`,
+`windalarm`, `hagelalarm`, or any other word): the vendor system drives
+it up and refuses to lower it. While blocked the entity
+
+- declares no features (`CoverEntityFeature(0)`): the standard card has no
+  buttons, a call for an area or for all covers skips the blind, a call
+  for the blind itself raises `ServiceNotSupported`;
+- reports `is_closed = False` (state "open"), no position, no direction;
+- has the attributes `blocked: true` and `weather_alarm` (`rain`, `wind`,
+  `hail`, or the vendor's word).
+
+Not blocked: `blocked: false` and no `weather_alarm`. `blocked` is always
+present on an available blind; it is what automations are built on.
+
+Blocked is the server's last report, kept by the pure `alarm.BlindAlarm`
+through the gap after a reconnect in which the value is unknown (user
+decision, 2026-11-10). A reconnect during an alarm therefore gives no
+`blocked: false` in between, and an alarm that ended during the outage
+gives one true → false change when the fresh value arrives. Before the
+first value ever, a blind is not blocked. (The automatic lowering above
+does not use this kept value.)
+
+What a changed feature set costs in Home Assistant (2026.11.1,
+`Entity._async_write_ha_state`): on the next state write the entity
+registry entry is updated (`supported_features`), Home Assistant then
+writes the state once more by itself (same state, a `state_reported`
+event), and it logs a warning once when an entity does this more than 100
+times per hour. The write gate and the kept alarm limit it to the real
+start and end of an alarm: a rebroadcast and a reconnect write nothing.
 
 `is_opening` / `is_closing` come from `smart_place_client.motion`: the
 sign of the change between two distinct positions, ended at 0 or 100, by
@@ -1215,7 +1357,16 @@ fetched; its timestamp moves only when the bytes change.
 `smart_place_client.plan.build_dashboard` turns plans, devices and entity
 ids into `picture-elements` views (positions in percent of the image
 size): Lights, Blinds, Climate, plus a Scenes view with built-in cards.
-Devices that cannot be placed are listed below the plan.
+Devices that cannot be placed are listed below the plan. A protected
+socket's marker gets the icon `mdi:lock` and `more-info` as its tap
+action (the builder takes the protected ids; the update listener
+refreshes the dashboard when the option changes). A blind's marker
+switches on the cover's attributes with `conditional` elements (the
+frontend compares an attribute as text, so `blocked` is matched against
+`"true"`): the direction buttons exist twice, with their action while
+not blocked and greyed (`opacity`, `tap_action: none`) while blocked, and
+in place of the position text a rain, wind or hail icon shows by
+`weather_alarm`, `mdi:alert` for any other word.
 `plan_view.py` resolves entity ids from the registry by unique id and
 leaves disabled entities out. `dashboard.py` registers the result as a
 read-only sidebar dashboard through the lovelace integration's internal
@@ -1259,7 +1410,11 @@ Consumption-chart values don't push: the server only emits
 re-issues a fetch for every id in `SessionState.chart_ids` every
 `CHART_POLL_INTERVAL` (default 60 s). The poll task is started by
 `_run_live_once` after the bootstrap reads and cancelled when the
-connection ends, so it dies cleanly on reconnect.
+connection ends, so it dies cleanly on reconnect. `chart_ids` is per
+connection (2026-11-10): every bootstrap lists the charts again, so a
+chart deleted on the server is no longer polled after a reconnect. The
+task's first read of the day's range buckets waits for the complete
+bootstrap of its connection — before that no chart is known.
 
 ### Chart identification — what each `StandsSingelChartUpdate<id>` represents
 

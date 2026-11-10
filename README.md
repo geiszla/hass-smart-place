@@ -11,8 +11,10 @@ without running Home Assistant.
 > Use it at your own risk: the entities switch real lights, blinds, heating
 > and doors.
 
-Requires Home Assistant **2026.11** or newer. Install through HACS as a custom
-repository; see [`DEPLOY.md`](DEPLOY.md).
+Requires Home Assistant **2026.11** or newer. Install it from the Home
+Assistant Marketplace (*Settings → Marketplace → Add from link*); the steps are
+in [`DEPLOY.md`](DEPLOY.md). Update it under *Settings → Updates*, then restart
+Home Assistant.
 
 ## What is supported
 
@@ -23,8 +25,9 @@ again whenever the server lists a new one. Nothing is configured per home.
 | --- | --- | --- |
 | Light (switch, LED) | `light`, on/off | One device per light |
 | Light (dimmer) | `light` with brightness | Built from the vendor web app's code; not tested on a real dimmer |
-| Socket | `switch` (outlet) | A switch, so "all lights off" does not cut socket power |
-| Blind (slatted, fabric, awning) | `cover` | Open, close, reported position. Slatted blinds: "tilt open" moves to the vent position |
+| Socket | `switch` (outlet) | A switch, so "all lights off" does not cut socket power. Can be protected against switching: see [Protected sockets](#protected-sockets) |
+| Blind (slatted, fabric, awning) | `cover` | Open, close, reported position. Slatted blinds: "tilt open" moves to the vent position. No command while a weather alarm blocks the blind: see [Blinds and weather alarms](#blinds-and-weather-alarms) |
+| Per blind: "Lower after weather alarm" | `switch` (configuration) | A setting of the integration, off by default: see [Lower after weather alarm](#lower-after-weather-alarm) |
 | Heating zone | `climate` | Heat / Off, target 19–26 °C in whole degrees, measured temperature, heating or idle |
 | Scene that only triggers | `scene` | Usable from the voice assistant |
 | Scene with on/off state | `switch` | |
@@ -78,6 +81,146 @@ Good to know:
 - RGB lights, fan coils, alarm devices, sauna.
 - Two-way audio with the intercom, and a live doorbell signal.
 
+## Options
+
+*Settings → Devices & services → Smart Place → Configure* has two settings:
+
+- **Protected sockets** — see [Protected sockets](#protected-sockets).
+- **Wait before lowering (minutes)** — see
+  [Lower after weather alarm](#lower-after-weather-alarm).
+
+A change applies at once; nothing is restarted or reloaded. The settings are
+stored with the integration's entry in Home Assistant, together with the
+state of the "Lower after weather alarm" switches. They survive restarts,
+reloads and updates. They do not survive removing the integration and adding
+it again: set them again afterwards.
+
+## Protected sockets
+
+Some sockets must never be switched off, for example the one that powers a
+home server. Smart Place can only *toggle* a socket, so even a "turn on" sent
+at the wrong moment could switch it off. For a protected socket Home Assistant
+therefore sends no command at all.
+
+To protect a socket, select it under **Protected sockets** in the
+[options](#options). No socket is protected by default.
+
+While a socket is protected:
+
+- "Turn on", "turn off" and "toggle" for its switch do nothing. No command is
+  sent and no error is shown; a toggle in the UI flips back by itself. The
+  integration writes one line to the log at level INFO
+  (`<entity> is protected: LightToggle not sent`).
+- A call for several entities (`switch.turn_off` for all switches or for an
+  area, `homeassistant.turn_off`) switches the others and skips the protected
+  socket.
+- Its switch has the attribute `protected: true` and a lock icon. Every other
+  socket has `protected: false`.
+- On the plan dashboard its marker is a lock, and a tap opens the details
+  instead of toggling.
+- The switch still shows the real state of the socket.
+
+**What the integration cannot prevent.** Everything that is decided inside
+Smart Place can still switch a protected socket: a Smart Place scene, the "All
+lights" group, a wall button and the Smart Place app. This includes the scene
+entities and the "All lights" button of this integration: each sends one
+command, and Smart Place decides which devices it switches. Check that no
+scene you use contains the socket.
+
+The protection is an option of the integration. It survives restarts, reloads
+and updates, but not removing the integration and adding it again: protect the
+socket again afterwards.
+
+## Blinds and weather alarms
+
+Smart Place has rain, wind and hail alarms. While an alarm holds a blind,
+Smart Place moves it up and refuses to lower it: the blind is **blocked**.
+Smart Place reports no position for a blocked blind.
+
+While a blind is blocked, its cover entity:
+
+- has the state *open* and no position;
+- offers no command. The standard card shows no buttons. A call for an area
+  or for all covers skips the blind. A call for the blind itself is refused
+  ("does not support action ...");
+- has the attributes `blocked: true` and `weather_alarm`. `weather_alarm` is
+  `rain`, `wind` or `hail`, or the word Smart Place sent if it is none of
+  these.
+
+A blind that is not blocked has `blocked: false` and no `weather_alarm`. The
+attribute `blocked` is there whenever the blind is available, so automations
+can be built on it. Example trigger for "the alarm of this blind has ended":
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: cover.living_room_blinds
+    attribute: blocked
+    from: true
+    to: false
+```
+
+Keep the `from:` line. While the connection to Smart Place is down, the blind
+is *unavailable* and has no attributes. After a reconnect Smart Place sends
+all values again; in the moment before the blind's value has arrived,
+`blocked` keeps the value it had before the connection was lost. So a
+reconnect during an alarm does not look like a new alarm, and an alarm that
+ended while the connection was down gives one change from `true` to `false`
+when the new value arrives. Right after a start of Home Assistant, before any
+value was received, `blocked` is `false`.
+
+On the plan dashboard a blocked blind shows a rain, wind or hail icon in place
+of its position (a warning sign for any other alarm). Its buttons are grey and
+do nothing.
+
+### Lower after weather alarm
+
+An alarm leaves the blind up. Every blind has a switch **Lower after weather
+alarm** on its device, under *Configuration*, off by default. While it is on,
+the integration lowers the blind when it sees the blind's alarm end.
+
+> **This switch is the one place where the integration sends a command to
+> your home without a user action at that moment.** Everything else is sent
+> only when you, an automation or a script calls an action. Each of these
+> commands is written to the log at level INFO, with the name of the blind
+> and the reason.
+
+How it works:
+
+- "Lower" is the plain down command, also for slatted blinds.
+- Only an alarm end that the integration saw while it was connected counts.
+  If Home Assistant was stopped or was reconnecting at that moment, nothing is
+  lowered: the values Smart Place sends again after a connect are not taken
+  for the end of an alarm.
+- The blind is lowered at once. To wait first, set **Wait before lowering
+  (minutes)** in the [options](#options); it applies to all blinds. The wait
+  ends without lowering if the alarm comes back, the blind reports another
+  position (somebody moved it), Home Assistant sends a command for the blind
+  (its up, down or vent, or a blinds group button), the switch is turned off,
+  or the connection is lost.
+- When it is time, the command is sent only if the switch is on, the
+  connection is up, the blind is not blocked and it is not already fully
+  down. It is sent once and never repeated.
+- Turning the switch **on** lowers the blind at once if it is neither fully
+  down nor blocked. If it is blocked, it is lowered when the alarm ends.
+  Turning the switch **off** ends a running wait and sends nothing.
+- The switch is a configuration entity, so a call for an area or a device
+  does not include it. A call for all switches (`switch.turn_on` with
+  `entity_id: all`) does: it would turn the function on for every blind and
+  lower every blind that is not down.
+- While the connection is down the switch is unavailable. Its setting is
+  kept.
+
+To see the log lines, set the log level of the integration to `info` (Home
+Assistant shows warnings and errors by default):
+
+```yaml
+logger:
+  logs:
+    custom_components.smart_place: info
+    smart_place_client: info
+```
+
 ## Rooms
 
 Smart Place does not say which room a device is in. The integration suggests a
@@ -122,9 +265,11 @@ the places they have in the Smart Place app. There is one view per function,
 because the markers would overlap otherwise:
 
 - **Lights** — an icon per light and socket. Tap toggles, hold opens the
-  details.
+  details. A [protected socket](#protected-sockets) shows a lock, and a tap
+  opens the details.
 - **Blinds** — the position of each blind, and buttons for down, vent (slatted
-  blinds) and up.
+  blinds) and up. A [blocked blind](#blinds-and-weather-alarms) shows its
+  alarm instead, with grey buttons.
 - **Climate** — measured and target temperature per zone, and − / + buttons.
 - **Scenes** — scenes, scene switches, ventilation, doorbell mute and the
   group buttons.
@@ -180,6 +325,12 @@ An exported variable wins over `.env`. See DESIGN.md §4.
 
 ### Safety
 
+- The integration sends a command only when an action is called for one of
+  its entities — with one exception: the switch
+  ["Lower after weather alarm"](#lower-after-weather-alarm). It is the one
+  place where the integration sends a command (the blind's down command)
+  without a user action at that moment. It is off by default, and each such
+  command is logged at level INFO.
 - `sp-cli --live` prints what the server sends. Lines typed on stdin are
   **dropped** unless you start it with `--allow-send`; with that flag every
   line goes to your real building. In `--replay` mode lines are recorded and
@@ -207,7 +358,7 @@ integration made of it: devices, entities, states, logs.
 ./scripts/ha-live state <entity_id>   # full state object
 ./scripts/ha-live watch               # stream live state changes
 ./scripts/ha-live logs                # smart_place log entries + tracebacks
-./scripts/ha-live update              # install the latest version through HACS
+./scripts/ha-live update              # install the latest version through the Marketplace
 ./scripts/ha-live restart             # restart Home Assistant core
 ./scripts/ha-live call <domain.service> <entity_id> [key=value ...]
                                       # only works while the integration is in dry run

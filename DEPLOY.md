@@ -42,14 +42,29 @@ exist keep their ids.
 
 ## 3. Install the integration files
 
-### Option A — HACS (recommended)
+### Option A — the Marketplace (recommended)
 
-1. If HACS isn't already installed, follow
-   [the HACS install guide](https://hacs.xyz/docs/use/download/download/).
-2. In Home Assistant: **HACS → ⋮ → Custom repositories**.
-3. Add `https://github.com/geiszla/hass-smart-place` with category
-   **Integration**.
-4. Find **Smart Place** in the HACS integrations list → **Download**.
+Home Assistant 2026.11 has a built-in **Marketplace** for custom
+integrations. It replaces HACS, which cannot be installed on 2026.11 or
+newer. The Marketplace is for administrators and is not in the sidebar.
+
+1. Open **Settings → Marketplace**. On first use it shows a warning; read
+   and accept it. Until an administrator has accepted it, Home Assistant
+   does not install or update anything from the Marketplace.
+2. Select **Add from link** in the upper-right corner, enter
+   `https://github.com/geiszla/hass-smart-place` under **GitHub link** and
+   select **Add**. If the Marketplace asks for the type, choose the
+   integration type and select **Add** again. If GitHub is not connected
+   yet, the Marketplace asks you to connect it: select **Continue**, open
+   the GitHub link it shows, enter the code and approve.
+3. Open **Smart Place** in the list, select **Install**, check the version
+   and select **Install** again.
+
+**Coming from HACS:** there is nothing to do. When Home Assistant starts
+after the update to 2026.11, the Marketplace takes over what HACS had:
+installed content, custom repositories and update entities (with the same
+entity ids). HACS itself is removed. The old "Get HACS" installer add-on
+is no longer needed (it only prints an error).
 
 ### Option B — copy the folder by hand
 
@@ -69,7 +84,8 @@ Server.
 
 ## 4. Restart Home Assistant
 
-Settings → System → top-right ⋮ → **Restart Home Assistant** → Restart.
+Restart when the Marketplace asks for it, or: Settings → System →
+top-right ⋮ → **Restart Home Assistant** → Restart.
 
 ---
 
@@ -108,7 +124,8 @@ Open **Settings → Devices & Services → Smart Place**. You should see:
 - One device per **heating zone**, named after the room: a climate entity,
   the temperature sensor and a (disabled) humidity sensor.
 - One device per **light**, **socket** and **blind**, named as in the Smart
-  Place app.
+  Place app. Every blind's device also has the configuration switch
+  **Lower after weather alarm**, off by default (section 7).
 - One device per level group, named after it, such as **Ventilation** (a
   fan). A level group is three or more on/off scenes with the same name
   and the numbers 1..N of which exactly one is on when the integration
@@ -125,6 +142,8 @@ Open **Settings → Devices & Services → Smart Place**. You should see:
   entrance, Mailbox) — disabled by default. They *send* `OEFFNER<n>` when
   pressed and open real doors; enable only the ones you want.
 - A **Smart Place** entry in the sidebar: the plan dashboard.
+- A **Configure** button on the integration: the options (protected
+  sockets, and the waiting time of "Lower after weather alarm").
 
 Entities are added when the server first delivers their device or value —
 normally all at once at setup. A device added in the Smart Place app later
@@ -152,6 +171,21 @@ was restarted: until then the integration still provides the device.
   automation stops at that step. Use `light.turn_off` / `switch.turn_off`
   for the area, or name the entities. Heating is switched off only on the
   thermostat itself (mode *Off*).
+- **Protected sockets:** select the sockets that must never be switched
+  under **Configure → Protected sockets**. Home Assistant then sends no
+  command for them; it takes effect at once. Smart Place scenes, the "All
+  lights" group, wall buttons and the Smart Place app can still switch
+  them. See "Protected sockets" in the README.
+- **Blinds during a weather alarm:** a blind held by a rain, wind or hail
+  alarm reads *open*, has the attribute `blocked: true` and offers no
+  command until the alarm ends. See "Blinds and weather alarms" in the
+  README.
+- **Lower after weather alarm:** with this switch on for a blind, the
+  integration sends the blind's down command when it sees the alarm end
+  (at once, or after the waiting time set under **Configure**). **This is
+  the one place where the integration sends a command without a user
+  action at that moment.** It is off by default. Each such command is
+  logged at INFO level (`Lowering <blind> ...`).
 - **Heartbeat:** every 60 s the client pings the server; if no pong
   arrives within 30 s it tears the connection down and reconnects — no
   action needed from you.
@@ -161,26 +195,36 @@ was restarted: until then the integration still provides the device.
 - **Logs:** Settings → System → Logs. Tokens and the installation's
   remote-access passwords are removed from anything the integration
   writes. Commands sent to Smart Place are logged at INFO level
-  (`command issued: ...`) under the logger `smart_place_client`.
+  (`command issued: ...`) under the logger `smart_place_client`; why the
+  integration lowered a blind by itself, and that a command for a
+  protected socket was not sent, under `custom_components.smart_place`.
+  Home Assistant shows INFO lines only when the level of these loggers is
+  set to `info` (`logger:` in `configuration.yaml`).
 
 ---
 
 ## 8. Upgrading
 
-- **HACS:** HACS → Smart Place → **Update**, then restart Home Assistant.
+- **Marketplace:** the installed repository has an update entity, and an
+  update shows under **Settings → Updates**. Install it there, then restart
+  Home Assistant. The Marketplace looks for a new version of a repository
+  added from a link every 48 hours, and only while GitHub is connected.
   From this repository's checkout: `./scripts/ha-live update` followed by
   `./scripts/ha-live restart`.
 - **By hand:** overwrite `/config/custom_components/smart_place/` with
   the new version of the whole folder, then restart Home Assistant.
 
 The config entry persists across upgrades; you won't need to re-enter
-the token. Existing entities keep their ids.
+the token. Existing entities keep their ids, and the options (protected
+sockets, waiting time, "Lower after weather alarm" switches) are kept.
 
 ---
 
 ## 9. Uninstalling
 
-1. Settings → Devices & Services → Smart Place → ⋮ → **Delete**.
+1. Settings → Devices & Services → Smart Place → ⋮ → **Delete**. This also
+   deletes the options: after adding the integration again, protect your
+   sockets and turn the "Lower after weather alarm" switches on again.
 2. Restart Home Assistant.
-3. (Optional) remove the repository in HACS or delete
+3. (Optional) remove the repository in the Marketplace or delete
    `/config/custom_components/smart_place/`.
