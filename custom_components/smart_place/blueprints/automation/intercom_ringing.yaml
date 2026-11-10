@@ -208,9 +208,10 @@ actions:
                     title: !input title
                     message: !input message
                     # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+                    # The Android app reads clickAction, the iOS app url.
                     data: >
                       {{ {'ttl': 0, 'priority': 'high', 'tag': 'intercom-ring',
-                          'clickAction': tap_target, 'actions': buttons}
+                          'clickAction': tap_target, 'url': tap_target, 'actions': buttons}
                          | combine({'channel': channel, 'importance': 'high'} if channel else {}) }}
       - conditions:
           - condition: trigger

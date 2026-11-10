@@ -633,13 +633,15 @@ creates the automation.
 The notifications are sent through the Home Assistant app on the phone.
 Package, info board and intercom notifications go to every phone that has the
 app, also to a phone that is added later. The consumption warning and the wind
-reminder go to the phones you select in the form. The notification channel,
-the page opened by a tap and the persistent reminder are options of the
-Android app.
+reminder go to the phones you select in the form. The notification channel
+and the persistent reminder are options of the Android app. A tap on a
+notification opens something on Android and on iOS: for a sensor its details
+with the history, on your default dashboard.
 
 **Smart Place: package delivered.** Sends the PIN of the parcel box when a
 package is delivered, that is when the sensor "Package delivery PIN" gets a
-new value. A new notification replaces the previous one.
+new value. A new notification replaces the previous one. A tap opens the PIN
+sensor.
 
 **Smart Place: new info board entry.** Sends the text of a new entry on the
 building's info board. A tap on the notification opens the Smart Place web
@@ -667,7 +669,7 @@ it presses the door button when a notification button is tapped.
 while the wind speed is above a limit. The reminder is sent again with every
 new reading above the limit, so a reminder that was dismissed comes back. It
 is removed, on every phone that has the app, when the wind speed falls below a
-second, lower value. The sensor can be the Smart Place wind speed sensor or a
+second, lower value. A tap opens the wind sensor. The sensor can be the Smart Place wind speed sensor or a
 helper made from it, for example a Statistics helper with the average of
 5 minutes. Nothing is stored between readings, so a restart of Home Assistant
 in the middle does no harm. One case is not covered: if the wind speed falls

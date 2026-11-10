@@ -49,8 +49,11 @@ triggers:
 
 actions:
   - variables:
+      pin_sensor: !input pin_sensor
       channel: !input channel
       value: "{{ trigger.to_state.state }}"
+      # A tap opens the sensor's details on the default dashboard.
+      tap_target: "/?more-info-entity-id={{ pin_sensor }}"
   - repeat:
       # Every phone with the Home Assistant app has a notify entity.
       for_each: >
@@ -62,8 +65,9 @@ actions:
             title: !input title
             message: !input message
             # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+            # The Android app reads clickAction, the iOS app url.
             data: >
-              {{ {'ttl': 0, 'priority': 'high', 'tag': 'parcel-box'}
+              {{ {'ttl': 0, 'priority': 'high', 'tag': 'parcel-box', 'clickAction': tap_target, 'url': tap_target}
                  | combine({'channel': channel} if channel else {}) }}
 
 mode: single

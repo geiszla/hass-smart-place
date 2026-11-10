@@ -1482,3 +1482,26 @@ The user wanted scenes and on/off scenes not separated. The view is one
 card now: scenes and on/off scenes in the server's order
 (`scene_configs`), the doorbell mute last. `DashboardEntities.switches`
 became `mutes`.
+
+## 2026-11-10 (seventh entry) — Blueprints: a tap on every notification opens something
+
+The user noticed that a tap on a notification opened the old default
+dashboard. Two blueprints set no target (package delivered, high winds),
+and none set one for iOS.
+
+- Every blueprint notification now carries `clickAction` (read by the
+  Android app) and `url` (read by the iOS app) with the same value.
+- Sensor notifications (package PIN, consumption, wind) open
+  `/?more-info-entity-id=<sensor>`: the sensor's details on the default
+  dashboard. This is the form the companion app's documentation gives
+  for both systems; the consumption warning used `entityId:<sensor>`
+  before, which is documented for Android only.
+- Unchanged targets: the info board opens the Smart Place web app, the
+  intercom notification its `tap_target` input.
+- Checked: `tests/test_blueprints.py` (the pair on every blueprint, the
+  sensor targets) and the 29 run checks of the blueprints on a real Home
+  Assistant core, which capture what would be sent to a phone.
+- Not checked: a tap on a real phone.
+- A blueprint file that already exists is not overwritten by an update of
+  the integration; on the user's box the five files were saved again
+  through the blueprint API.

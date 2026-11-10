@@ -116,6 +116,8 @@ actions:
           channel: !input channel
           value: "{{ states(wind_sensor) }}"
           unit: "{{ state_attr(wind_sensor, 'unit_of_measurement') }}"
+          # A tap opens the sensor's details on the default dashboard.
+          tap_target: "/?more-info-entity-id={{ wind_sensor }}"
       - repeat:
           for_each: !input phones
           sequence:
@@ -126,8 +128,9 @@ actions:
                 title: !input title
                 message: !input message
                 # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+                # The Android app reads clickAction, the iOS app url.
                 data: >
-                  {{ {'ttl': 0, 'priority': 'high', 'tag': 'high-winds',
+                  {{ {'ttl': 0, 'priority': 'high', 'tag': 'high-winds', 'clickAction': tap_target, 'url': tap_target,
                       'persistent': true, 'sticky': true, 'alert_once': true}
                      | combine({'channel': channel, 'importance': 'low'} if channel else {}) }}
 

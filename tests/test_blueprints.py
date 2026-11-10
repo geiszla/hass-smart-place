@@ -165,3 +165,23 @@ def test_installer_copies_only_what_is_missing_and_overwrites_nothing(tmp_path: 
     assert removed.read_bytes() == _FILES[1].read_bytes()
     assert other.read_text(encoding="utf-8") == "not ours"
     assert blueprint_install.install_blueprints(tmp_path) == []
+
+
+@pytest.mark.parametrize("path", _FILES, ids=_NAMES)
+def test_a_tap_on_the_notification_opens_something_on_both_phone_systems(path: Path) -> None:
+    """Without a target a tap opens the default dashboard. Android reads ``clickAction``, iOS ``url``."""
+    text = path.read_text(encoding="utf-8")
+    assert text.count("'clickAction': tap_target, 'url': tap_target") == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "sensor"),
+    [
+        ("consumption_warning.yaml", "use_sensor"),
+        ("high_winds.yaml", "wind_sensor"),
+        ("package_delivered.yaml", "pin_sensor"),
+    ],
+)
+def test_sensor_notifications_open_the_sensors_details(name: str, sensor: str) -> None:
+    text = (_FILES[_NAMES.index(name)]).read_text(encoding="utf-8")
+    assert f'tap_target: "/?more-info-entity-id={{{{ {sensor} }}}}"' in text
