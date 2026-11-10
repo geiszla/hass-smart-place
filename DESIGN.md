@@ -974,7 +974,11 @@ and ``tests/fixtures/scene-echo.ndjson``.
   top 54. Marker centre in image pixels: light or socket
   ``(left + 56.5, top − 74.5)``; blind state icon ``(left + 10, top − 84)``
   with the Down / Vent / Up buttons 60 px left / at / 57 px right of it,
-  50 px below; climate ``(left + 88, top − 13.5)``.
+  50 px below; climate ``(left + 88, top − 13.5)``. The plan dashboard
+  uses the centres only; it lays the parts of a marker out itself.
+- The reference flat's plan image is 1000 x 710 with a transparent
+  background; the drawing fills columns 212 to 740 and rows 15 to 698.
+  Two blinds have their centre right of the drawing (up to x 788).
 
 **Credential frames**
 
@@ -1477,9 +1481,62 @@ level is unknown unless the flag of every level is known.
 One `SmartPlacePlanImage` per `Floorplan<N>` serves the PNG the client
 fetched; its timestamp moves only when the bytes change.
 `smart_place_client.plan.build_dashboard` turns plans, devices and entity
-ids into `picture-elements` views (positions in percent of the image
-size): Lights, Blinds, Climate, plus a Scenes view with built-in cards.
-Devices that cannot be placed are listed below the plan. A protected
+ids into `picture-elements` views: Lights, Blinds, Climate, plus a Scenes
+view with built-in cards. Devices that cannot be placed are listed below
+the plan.
+
+**Layout of a plan view** (2026-11-10, third round; before that a `panel`
+view with the whole image, markers as single elements at offsets in image
+pixels). Seen in a browser, the first layout had three faults: on a
+desktop the card was as wide as the window (1782 px for a 1000 x 710
+image, so 1265 px high and 24 px icons on it); on a phone the drawing was
+half the card's width because the image's empty sides were shown; and the
+parts of a marker overlapped, because their distances shrank with the
+image and their sizes did not.
+
+- The view is a `sections` view with `max_columns: 1`. The card is then
+  at most 500 px wide (the frontend's column width) and as wide as the
+  screen less 16 px on a phone. Nothing built in can size a card by the
+  window's height; a card of the integration's own would be needed for a
+  plan that fills a large window.
+- The card gets `aspect_ratio`. The frontend then shows the image as a
+  centred background that covers a box of that shape, so one axis can be
+  cut, by the same amount on both sides. `_window` picks the box: the
+  content box of the image and every marker centre on the plan, 12 px
+  around them, mirrored at the image centre, along the axis that leaves
+  less. Positions are percent of that window. The three views of a plan
+  share the window. `plan_view.image_content_box` measures the content
+  box (the non-transparent part) with Pillow, which is a requirement of
+  Home Assistant itself, in the executor, once per fetched image
+  (`SmartPlaceData.plan_contents`, keyed by the image digest). Without a
+  box the whole image is shown. The image entity serves the unchanged
+  image. Rejected: serving a cut image (the window depends on the
+  devices, which can change after the image was fetched).
+- A marker is a rigid group: every element has the same `left` / `top`
+  and its own `transform` in CSS pixels. `left` / `top` are
+  `clamp(<half the marker>, <percent>, 100% − <half the marker>)`, so
+  the browser keeps a marker at the edge inside the card and moves its
+  parts together.
+- Sizes are `min(<n>px, <n / 4.12>vw)`: full size from a 412 px wide
+  screen on, proportional below. The card's width is the screen's width
+  less a constant there, so markers that do not touch at 412 px do not
+  touch on a narrower phone. Container units are not usable: no ancestor
+  of the card is a size container. A light's icon is the frontend's
+  state badge, fixed at 40 px.
+- The backdrop is the card colour at 85 % (`color-mix`) with a 1 px
+  outline in the divider colour, on the element that shows the text: a
+  state label's hit area is its text only, so taps on the rest of the
+  backdrop go to the nearest button (the card routes a tap to the nearest
+  icon within 24 px). That element has the marker's width (`min-width`)
+  and, for a heating zone, room for the second row (`padding-bottom`).
+  A light's backdrop is a disc drawn as a gradient inside the badge.
+- Blind: one row, 32 px high: position, then Down / Vent / Up; 96 px wide
+  without Vent, 122 px with. Heating zone: two rows, 112 x 48 px:
+  measured temperature above the target (or the mode), − and + at the
+  sides. An unavailable device shows its state alone on a backdrop; its
+  buttons are hidden.
+
+A protected
 socket's marker gets the icon `mdi:lock` and no tap action (`none`; a
 long press still opens the details — it opened them on a tap until the
 second round of 2026-11-10; the builder takes the protected ids; the

@@ -574,6 +574,13 @@ because the markers would overlap otherwise:
   enabled. **A tap on the button opens the real door at once**, without a
   question.
 
+The plan is one column wide: at most 500 px on a desktop, so the whole plan
+is visible without scrolling, and as wide as the screen on a phone. Only the
+part of the image with the drawing and the markers is shown; the empty sides
+of the image from Smart Place are cut off. Every marker lies on a backdrop in
+the colour of your theme's cards, so it is readable on white walls and on dark
+floors. On a screen narrower than 412 px the markers shrink with the plan.
+
 Devices without a usable position on the plan are listed below the plan.
 Disabled entities are left out. With several floor plans the views repeat per
 plan.

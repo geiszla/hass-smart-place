@@ -1346,3 +1346,74 @@ Nothing is migrated in code. After the update:
   "Weather Outdoor temperature", "Smart Place Doorbell mute").
 - With a dashboard of the user's own at `/smart-place`, the integration's
   dashboard is at `/smart-place-plan`.
+
+## 2026-11-10 (fifth entry) — Plan pages after a look in a browser: size, empty sides, backdrops
+
+The user looked at the plan pages on the box and reported: on a desktop
+the image is far too large (scrolling) and the icons are tiny; on a phone
+the image is small with empty space beside the drawing; white text is
+hard to read on the white walls; the heating texts overlap on a phone.
+
+### What was measured (Chrome, the box's dashboard, read only)
+
+- Desktop window 2048 x 1102 CSS px: the card was 1782 px wide, the image
+  1782 x 1265, the icons 24 px.
+- The plan image is 1000 x 710, RGBA, transparent outside the drawing.
+  The drawing is columns 212 to 740 and rows 15 to 698: 53 % of the width.
+- Phone width 390: the drawing was about 205 px wide. The blind and
+  heating markers overlapped: the offsets between their parts were image
+  pixels (62 px became 24), the parts kept their size.
+- No ancestor of the card is a CSS size container, so container units
+  fall back to the viewport.
+
+### What changed
+
+- `smart_place_client/plan.py`: the plan views are `sections` views with
+  one column; `aspect_ratio` cuts the empty sides (`_window`);
+  `PlanBackground.content`; markers as rigid groups with a clamped anchor
+  (`_anchor`, `_shift`), sizes that shrink below a 412 px screen (`_px`),
+  a backdrop with an outline; new one-row blind marker and two-row
+  heating marker; an unavailable device shows its state alone, without
+  buttons (the blind buttons were shown before while unavailable).
+  DESIGN.md §11 "image and the plan dashboard" has the rules and why.
+- `plan_view.image_content_box` (Pillow, in the executor) and
+  `SmartPlaceData.plan_contents`; `plan_image_changed` in `__init__.py`
+  measures an image before it wakes the entities.
+- Not changed: the image entity (it serves the whole image), entity ids,
+  the Scenes and Intercom views, the action `smart_place.get_plan_config`
+  (it returns the new configuration).
+
+### How it was checked
+
+- In Chrome against the box, without changing the box: the new
+  configuration was built locally from the reference fixture with the
+  box's entity ids and put into the open page's memory only. Phone widths
+  came from same-origin frames 360, 390 and 412 px wide. Seen: Lights,
+  Blinds and Climate at 360, 390 and 412 px and on the desktop (card
+  500 x 591 px, no scrolling); no marker touches another at any of
+  these widths; the outline shows where a marker lies on the card beside
+  the drawing. Nothing was clicked: the box is live.
+- `./scripts/lint-check`: pass. `./scripts/test`: 566 passed.
+- Type check of a copy against `homeassistant==2026.11.1`: 0 errors.
+  hassfest: valid.
+- Runtime checks on a real Home Assistant core: 154 passed (149 earlier
+  ones, four adapted to the new view structure, and five new: the content
+  box of a transparent, an opaque, an empty and an unreadable image; the
+  dashboard's `aspect_ratio` with a real image; the whole image when it
+  cannot be measured).
+
+### Not seen
+
+- A light theme (the colours come from the theme's variables).
+- A blocked blind's marker and an unavailable device's marker.
+- The pages on a real phone and in the Home Assistant app.
+- A tap: the card routes a tap to the nearest icon within 24 px; the
+  markers' hit areas were read in the frontend source (20261028.5), not
+  tried.
+
+### Open
+
+- On a large desktop window the plan stays 500 px wide. A plan that
+  fills the window needs a small frontend card shipped with the
+  integration (a JavaScript module registered with
+  `frontend.add_extra_js_url`); the user decides.

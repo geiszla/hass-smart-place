@@ -4,16 +4,19 @@ The layout itself is pure and lives in ``smart_place_client.plan``. This
 module supplies what only Home Assistant knows: which entity belongs to
 which vendor device (resolved by unique id, disabled entities left out),
 the image entities, the temperature unit, and the door buttons and
-cameras of the Intercom view.
+cameras of the Intercom view. It also finds the part of a plan image that
+is not empty, with Pillow, which Home Assistant ships.
 """
 
 from __future__ import annotations
 
+from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import Platform
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
+from PIL import Image
 
 from .const import DOMAIN
 from .entity import async_classify_scenes
@@ -31,6 +34,19 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from . import SmartPlaceConfigEntry
+
+
+def image_content_box(content: bytes) -> tuple[int, int, int, int] | None:
+    """Return the box ``(left, top, right, bottom)`` around the part of an image that is not transparent.
+
+    ``None`` when the image is empty or cannot be read. Decodes the whole
+    image: run it in the executor.
+    """
+    try:
+        with Image.open(BytesIO(content)) as image:
+            return image.convert("RGBA").getbbox()
+    except (OSError, SyntaxError, ValueError):
+        return None
 
 
 @callback
@@ -101,8 +117,16 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         ],
         cameras=[found for camera_id in sorted(state.gsa_cameras) if (found := camera(camera_id))],
     )
+
+    def content(plan_id: int, digest: str) -> tuple[int, int, int, int] | None:
+        """Return the content box measured for exactly this image, if any."""
+        measured = data.plan_contents.get(plan_id)
+        return measured[1] if measured is not None and measured[0] == digest else None
+
     images = {
-        plan_id: PlanBackground(entity_id=found, width=image.width, height=image.height)
+        plan_id: PlanBackground(
+            entity_id=found, width=image.width, height=image.height, content=content(plan_id, image.digest)
+        )
         for plan_id, image in data.client.plan_images.items()
         if (found := entity_id(Platform.IMAGE, f"floorplan_{plan_id}"))
     }

@@ -45,7 +45,7 @@ from .const import (
     SETUP_OBSERVATION_WINDOW,
     VALUE_BURST_TIMEOUT,
 )
-from .plan_view import async_build_plan_config
+from .plan_view import async_build_plan_config, image_content_box
 from .smart_place_client import (
     BLIND_KIND_AWNING,
     BLIND_KIND_FABRIC,
@@ -164,6 +164,10 @@ class SmartPlaceData:
     # id) that became fans in this run; see ``entity.async_classify_scenes``.
     scene_switch_ids: set[int] = field(default_factory=set)
     level_group_ids: set[int] = field(default_factory=set)
+    # What each plan image depicts, measured once per fetched image: the
+    # image's digest and the box around its non-transparent part (``None``
+    # if it has none or cannot be read). The dashboard shows only that part.
+    plan_contents: dict[int, tuple[str, tuple[int, int, int, int] | None]] = field(default_factory=dict)
     # True once the value burst that follows the first main-menu reply had
     # ``SETUP_OBSERVATION_WINDOW`` to arrive, or did not come within
     # ``VALUE_BURST_TIMEOUT``. Until then no entity is available and no
@@ -467,6 +471,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         data.async_notify_listeners()
 
     async def plan_image_changed() -> None:
+        # A copy: the client may fetch again while an image is measured.
+        for plan_id, image in list(data.client.plan_images.items()):
+            if data.plan_contents.get(plan_id, ("", None))[0] != image.digest:
+                box = await hass.async_add_executor_job(image_content_box, image.content)
+                data.plan_contents[plan_id] = (image.digest, box)
         # No frame arrives with a fetched image; wake the image entities.
         data.async_notify_listeners()
         data.async_plan_changed()

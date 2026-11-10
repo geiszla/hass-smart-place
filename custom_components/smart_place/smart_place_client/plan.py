@@ -9,14 +9,21 @@ one view per function (lights, blinds, climate), as in the vendor app,
 because markers of different kinds overlap, plus a view with the scenes
 and the Intercom view (``intercom.py``).
 
+The card is one column wide (at most 500 px), so the whole plan fits a
+desktop window and fills a phone's width. It shows only the part of the
+image that holds the drawing and the markers. A marker is a rigid group
+of elements around one anchor, sized in CSS pixels and drawn on a
+backdrop: the plan under it can be white or dark.
+
 Pure functions, no HA imports: the caller supplies entity ids and image
 sizes and gets plain dicts back.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+import math
 import struct
 from typing import Any, Final, TypeVar
 
@@ -30,16 +37,37 @@ _Device = TypeVar("_Device", LightConfig, BlindConfig, ClimateZoneConfig)
 _PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
 _PNG_HEADER_LENGTH: Final = 24
 
-# Blind buttons relative to the blind's state icon, in image pixels: the
-# vendor app puts Down / Vent / Up in one row below the icon.
-_BLIND_DOWN_DX: Final = -60.0
-_BLIND_UP_DX: Final = 57.0
-_BLIND_BUTTON_DY: Final = 50.0
+# Marker sizes are CSS pixels on a screen at least this wide. On a
+# narrower one (a phone) they shrink with the screen, as the plan does, so
+# markers that do not touch at this width do not touch at any width.
+_FULL_SIZE_VIEWPORT: Final = 412.0
 
-# Climate marker layout, in image pixels: measured temperature above the
-# target, the − / + buttons left and right of both.
-_CLIMATE_LINE_DY: Final = 11.0
-_CLIMATE_BUTTON_DX: Final = 62.0
+# Kept around the drawing and the outermost marker centres, in image pixels.
+_WINDOW_PADDING: Final = 12
+# Kept between a marker and the edge of the card.
+_EDGE: Final = 2.0
+
+_ICON: Final = 24.0
+_LABEL_FONT: Final = 13.0
+_LABEL_LINE: Final = 16.0
+# The frontend's own padding around the text of a state label; it does not shrink.
+_LABEL_PADDING: Final = 8.0
+_ROW: Final = _LABEL_LINE + 2 * _LABEL_PADDING
+_CORNER: Final = _ROW / 2
+# A light's icon is the frontend's state badge, which has this fixed size.
+_BADGE: Final = 40.0
+
+# Blind marker, one row: the position, then Down / Vent / Up as in the vendor app.
+_BLIND_TEXT: Final = 42.0
+_BLIND_BUTTON_PITCH: Final = _ICON + 2.0
+_BLIND_END: Final = 4.0
+# Wide enough for "Unavailable".
+_STATE_WIDTH: Final = 92.0
+
+# Climate marker, two rows: measured temperature above the target, the
+# − / + buttons left and right of both.
+_CLIMATE_WIDTH: Final = 112.0
+_CLIMATE_BUTTON_DX: Final = _CLIMATE_WIDTH / 2 - 2.0 - _ICON / 2
 
 _UNAVAILABLE_STATES: Final = ["unknown", "unavailable"]
 
@@ -95,11 +123,27 @@ def png_size(data: bytes) -> tuple[int, int] | None:
 
 @dataclass(frozen=True, slots=True)
 class PlanBackground:
-    """The image entity that shows a plan, and the image's pixel size."""
+    """The image entity that shows a plan, and the image's pixel size.
+
+    ``content`` is the box ``(left, top, right, bottom)`` around what the
+    image depicts, when the rest of it is empty (transparent); ``None``
+    when that is not known.
+    """
 
     entity_id: str
     width: int
     height: int
+    content: tuple[int, int, int, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Window:
+    """The part of a plan image the card shows, in image pixels."""
+
+    left: float
+    top: float
+    width: float
+    height: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,15 +167,89 @@ class DashboardEntities:
     cameras: Sequence[NamedEntity] = ()
 
 
-def _style(point: Point, image: PlanBackground) -> dict[str, str]:
-    """Position a marker centre in percent of the image size, kept inside the image."""
-    left = min(max(point[0] / image.width, 0.0), 1.0)
-    top = min(max(point[1] / image.height, 0.0), 1.0)
-    return {"left": f"{round(left * 100, 2)}%", "top": f"{round(top * 100, 2)}%"}
-
-
 def _inside(point: Point, image: PlanBackground) -> bool:
     return 0 <= point[0] <= image.width and 0 <= point[1] <= image.height
+
+
+def _window(image: PlanBackground, centres: Iterable[Point]) -> _Window:
+    """Return the part of the image to show: the drawing and every marker centre, with a margin.
+
+    The card can cut only one axis, by the same amount on both sides (it
+    centres the image in a box of another shape), so the window is the
+    smaller of the two that are possible. Without a known content box it
+    is the whole image.
+    """
+    if image.content is None:
+        return _Window(0, 0, image.width, image.height)
+    left, top, right, bottom = image.content
+    for x, y in centres:
+        left, right = min(left, x), max(right, x)
+        top, bottom = min(top, y), max(bottom, y)
+    half_width = min(max(image.width / 2 - left, right - image.width / 2) + _WINDOW_PADDING, image.width / 2)
+    half_height = min(max(image.height / 2 - top, bottom - image.height / 2) + _WINDOW_PADDING, image.height / 2)
+    if half_width / image.width <= half_height / image.height:
+        width = math.ceil(2 * half_width)
+        return _Window((image.width - width) / 2, 0, width, image.height)
+    height = math.ceil(2 * half_height)
+    return _Window(0, (image.height - height) / 2, image.width, height)
+
+
+def _px(size: float, *, fixed: bool = False) -> str:
+    """Return ``size`` CSS pixels, fewer on a screen narrower than ``_FULL_SIZE_VIEWPORT``."""
+    if fixed:
+        return f"{size:g}px"
+    return f"min({size:g}px, {round(size * 100 / _FULL_SIZE_VIEWPORT, 2):g}vw)"
+
+
+def _anchor(
+    point: Point, window: _Window, half_width: float, half_height: float, *, fixed: bool = False
+) -> dict[str, str]:
+    """Position a marker's centre in percent of the window, the whole marker kept inside the card.
+
+    ``half_width`` and ``half_height`` are half the marker's size. Every
+    element of one marker gets the same anchor, so the browser moves them
+    together when the marker is at the edge.
+    """
+    left = round((point[0] - window.left) / window.width * 100, 2)
+    top = round((point[1] - window.top) / window.height * 100, 2)
+    x_margin = _px(half_width + _EDGE, fixed=fixed)
+    y_margin = _px(half_height + _EDGE, fixed=fixed)
+    return {
+        "left": f"clamp({x_margin}, {left:g}%, calc(100% - {x_margin}))",
+        "top": f"clamp({y_margin}, {top:g}%, calc(100% - {y_margin}))",
+    }
+
+
+def _shift(dx: float = 0.0, dy: float = 0.0) -> str:
+    """Return the transform that puts an element's centre ``dx``, ``dy`` pixels from its anchor."""
+
+    def axis(offset: float) -> str:
+        if not offset:
+            return "-50%"
+        return f"calc(-50% {'+' if offset > 0 else '-'} {_px(abs(offset))})"
+
+    return f"translate({axis(dx)}, {axis(dy)})"
+
+
+# Under a marker: the card's colour, so the theme's text colour is readable
+# on it, and a thin outline where the marker lies on the card itself.
+_BACKDROP_COLOUR: Final = "color-mix(in srgb, var(--card-background-color) 85%, transparent)"
+_OUTLINE_COLOUR: Final = "var(--divider-color)"
+_BACKDROP: Final[dict[str, str]] = {
+    "background": _BACKDROP_COLOUR,
+    "border-radius": _px(_CORNER),
+    "box-shadow": f"0 0 0 1px {_OUTLINE_COLOUR}",
+}
+# The same as a disc inside the state badge's square: its size cannot be
+# set, and discs as large as the badge touch where lights are close.
+_BADGE_BACKDROP: Final[dict[str, str]] = {
+    "background": (
+        f"radial-gradient(closest-side, {_BACKDROP_COLOUR} 86%, {_OUTLINE_COLOUR} 86% 91%, transparent 93%)"
+    ),
+}
+_TEXT: Final[dict[str, str]] = {"font-size": _px(_LABEL_FONT), "line-height": _px(_LABEL_LINE)}
+# Without the line height the element's box is taller than the icon and the icon sits above its centre.
+_GLYPH: Final[dict[str, str]] = {"--mdc-icon-size": _px(_ICON), "line-height": "0"}
 
 
 def _perform(action: str, entity_id: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -149,17 +267,17 @@ def _button(icon: str, title: str, action: dict[str, Any], style: dict[str, str]
         "title": title,
         "tap_action": action,
         "hold_action": {"action": "none"},
-        "style": style,
+        "style": {**style, **_GLYPH},
     }
 
 
-def _light_elements(entity_id: str, centre: Point, image: PlanBackground, *, protected: bool) -> list[dict[str, Any]]:
+def _light_elements(entity_id: str, centre: Point, window: _Window, *, protected: bool) -> list[dict[str, Any]]:
     element: dict[str, Any] = {
         "type": "state-icon",
         "entity": entity_id,
         "tap_action": {"action": "toggle"},
         "hold_action": {"action": "more-info"},
-        "style": _style(centre, image),
+        "style": {**_anchor(centre, window, _BADGE / 2, _BADGE / 2, fixed=True), **_BADGE_BACKDROP},
     }
     if protected:
         # No command is sent for a protected device: say so, and offer no
@@ -169,21 +287,33 @@ def _light_elements(entity_id: str, centre: Point, image: PlanBackground, *, pro
     return [element]
 
 
-def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: PlanBackground) -> list[dict[str, Any]]:
-    """Build a blind's marker: position, or the alarm that blocks it, and the direction buttons.
+def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _Window) -> list[dict[str, Any]]:
+    """Build a blind's marker: position, or the alarm that blocks it, then the direction buttons.
 
-    The buttons exist twice, switched by the cover's ``blocked``
+    The element that shows the position (or the alarm) is as wide as the
+    whole marker and carries its backdrop; the buttons lie on its right
+    part. The buttons exist twice, switched by the cover's ``blocked``
     attribute: with their action, and greyed without one while a weather
     alarm blocks the blind (the frontend compares attributes as text).
     """
-    x, y = centre
-    style = _style(centre, image)
     more_info = {"action": "more-info"}
+    buttons = [("mdi:arrow-down", "Down", "cover.close_cover")]
+    if blind.kind == BLIND_KIND_SLATTED:
+        buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt"))
+    buttons.append(("mdi:arrow-up", "Up", "cover.open_cover"))
+    width = _BLIND_TEXT + len(buttons) * _BLIND_BUTTON_PITCH - (_BLIND_BUTTON_PITCH - _ICON) + _BLIND_END
+    anchor = _anchor(centre, window, width / 2, _ROW / 2)
+    backdrop = {**anchor, **_BACKDROP, "box-sizing": "border-box", "min-width": _px(width), "text-align": "left"}
+    button_styles = [
+        {**anchor, "transform": _shift(_BLIND_TEXT + _ICON / 2 + index * _BLIND_BUTTON_PITCH - width / 2)}
+        for index in range(len(buttons))
+    ]
 
     def attribute(name: str, **match: str | list[str]) -> dict[str, Any]:
         return {"condition": "state", "entity": entity_id, "attribute": name, **match}
 
     def alarm_icon(icon: str, title: str, conditions: list[dict[str, Any]]) -> dict[str, Any]:
+        side = (_ROW - _ICON) / 2
         return {
             "type": "conditional",
             "conditions": conditions,
@@ -195,18 +325,15 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: Pl
                     "entity": entity_id,
                     "tap_action": more_info,
                     "hold_action": more_info,
-                    "style": style,
+                    "style": {
+                        **backdrop,
+                        **_GLYPH,
+                        "padding": f"{_px(side)} 0 {_px(side)} {_px(_LABEL_PADDING + side)}",
+                    },
                 },
             ],
         }
 
-    buttons = [
-        ("mdi:arrow-down", "Down", "cover.close_cover", _BLIND_DOWN_DX),
-        ("mdi:arrow-up", "Up", "cover.open_cover", _BLIND_UP_DX),
-    ]
-    if blind.kind == BLIND_KIND_SLATTED:
-        buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt", 0.0))
-    button_styles = [_style((x + dx, y + _BLIND_BUTTON_DY), image) for _, _, _, dx in buttons]
     return [
         # The position attribute is missing during a weather alarm and while
         # unavailable; a state-label on a missing attribute shows a warning.
@@ -222,15 +349,13 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: Pl
                     "attribute": "current_position",
                     "suffix": "%",
                     "tap_action": more_info,
-                    "style": style,
+                    "style": {**backdrop, **_TEXT},
                 },
             ],
         },
-        {
-            "type": "conditional",
-            "conditions": [{"condition": "state", "entity": entity_id, "state": _UNAVAILABLE_STATES}],
-            "elements": [{"type": "state-label", "entity": entity_id, "tap_action": more_info, "style": style}],
-        },
+        _state_text(
+            entity_id, centre, window, [{"condition": "state", "entity": entity_id, "state": _UNAVAILABLE_STATES}]
+        ),
         *(
             alarm_icon(icon, title, [attribute("weather_alarm", state=alarm)])
             for alarm, (icon, title) in _ALARM_ICONS.items()
@@ -241,10 +366,13 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: Pl
         ),
         {
             "type": "conditional",
-            "conditions": [attribute("blocked", state_not="true")],
+            "conditions": [
+                attribute("blocked", state_not="true"),
+                {"condition": "state", "entity": entity_id, "state_not": _UNAVAILABLE_STATES},
+            ],
             "elements": [
                 _button(icon, title, _perform(action, entity_id), button_style)
-                for (icon, title, action, _), button_style in zip(buttons, button_styles, strict=True)
+                for (icon, title, action), button_style in zip(buttons, button_styles, strict=True)
             ],
         },
         {
@@ -257,20 +385,45 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: Pl
                     {"action": "none"},
                     {**button_style, "opacity": _BLOCKED_OPACITY},
                 )
-                for (icon, title, _, _), button_style in zip(buttons, button_styles, strict=True)
+                for (icon, title, _), button_style in zip(buttons, button_styles, strict=True)
             ],
         },
     ]
 
 
-def _climate_elements(entity_id: str, centre: Point, image: PlanBackground, unit: str) -> list[dict[str, Any]]:
-    x, y = centre
+def _state_text(entity_id: str, centre: Point, window: _Window, conditions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the marker of an entity that has nothing to show but its state ("Unavailable")."""
+    return {
+        "type": "conditional",
+        "conditions": conditions,
+        "elements": [
+            {
+                "type": "state-label",
+                "entity": entity_id,
+                "tap_action": {"action": "more-info"},
+                "style": {**_anchor(centre, window, _STATE_WIDTH / 2, _ROW / 2), **_BACKDROP, **_TEXT},
+            },
+        ],
+    }
+
+
+def _climate_elements(entity_id: str, centre: Point, window: _Window, unit: str) -> list[dict[str, Any]]:
+    """Build a heating zone's marker: measured temperature, target below it, − and + at the sides.
+
+    The measured temperature's element is as large as the whole marker
+    and carries its backdrop.
+    """
     more_info = {"action": "more-info"}
-    target_style = _style((x, y + _CLIMATE_LINE_DY), image)
+    anchor = _anchor(centre, window, _CLIMATE_WIDTH / 2, _ROW / 2 + _LABEL_LINE / 2)
+    second_row = {**anchor, **_TEXT, "transform": _shift(dy=_LABEL_LINE / 2)}
+
+    def state(**match: str | list[str]) -> list[dict[str, Any]]:
+        return [{"condition": "state", "entity": entity_id, **match}]
+
     return [
         {
             "type": "conditional",
-            "conditions": [{"condition": "state", "entity": entity_id, "state_not": "unavailable"}],
+            "conditions": state(state_not="unavailable"),
             "elements": [
                 {
                     "type": "state-label",
@@ -278,13 +431,33 @@ def _climate_elements(entity_id: str, centre: Point, image: PlanBackground, unit
                     "attribute": "current_temperature",
                     "suffix": f" {unit}",
                     "tap_action": more_info,
-                    "style": _style((x, y - _CLIMATE_LINE_DY), image),
+                    "style": {
+                        **anchor,
+                        **_BACKDROP,
+                        **_TEXT,
+                        "box-sizing": "border-box",
+                        "min-width": _px(_CLIMATE_WIDTH),
+                        "padding-bottom": _px(_LABEL_LINE),
+                        "text-align": "center",
+                    },
                 },
+                _button(
+                    "mdi:minus",
+                    "Lower",
+                    _perform("smart_place.adjust_setpoint", entity_id, {"steps": -1}),
+                    {**anchor, "transform": _shift(-_CLIMATE_BUTTON_DX)},
+                ),
+                _button(
+                    "mdi:plus",
+                    "Raise",
+                    _perform("smart_place.adjust_setpoint", entity_id, {"steps": 1}),
+                    {**anchor, "transform": _shift(_CLIMATE_BUTTON_DX)},
+                ),
             ],
         },
         {
             "type": "conditional",
-            "conditions": [{"condition": "state", "entity": entity_id, "state": "heat"}],
+            "conditions": state(state="heat"),
             "elements": [
                 {
                     "type": "state-label",
@@ -293,28 +466,17 @@ def _climate_elements(entity_id: str, centre: Point, image: PlanBackground, unit
                     "prefix": "→ ",
                     "suffix": f" {unit}",
                     "tap_action": more_info,
-                    "style": target_style,
+                    "style": second_row,
                 },
             ],
         },
         # Off has no target temperature; show the mode instead.
         {
             "type": "conditional",
-            "conditions": [{"condition": "state", "entity": entity_id, "state_not": "heat"}],
-            "elements": [{"type": "state-label", "entity": entity_id, "tap_action": more_info, "style": target_style}],
+            "conditions": state(state_not=["heat", "unavailable"]),
+            "elements": [{"type": "state-label", "entity": entity_id, "tap_action": more_info, "style": second_row}],
         },
-        _button(
-            "mdi:minus",
-            "Lower",
-            _perform("smart_place.adjust_setpoint", entity_id, {"steps": -1}),
-            _style((x - _CLIMATE_BUTTON_DX, y), image),
-        ),
-        _button(
-            "mdi:plus",
-            "Raise",
-            _perform("smart_place.adjust_setpoint", entity_id, {"steps": 1}),
-            _style((x + _CLIMATE_BUTTON_DX, y), image),
-        ),
+        _state_text(entity_id, centre, window, state(state="unavailable")),
     ]
 
 
@@ -323,17 +485,37 @@ def _view(
     path: str,
     icon: str,
     image: PlanBackground | None,
+    window: _Window | None,
     elements: list[dict[str, Any]],
     unplaced: list[str],
 ) -> dict[str, Any]:
-    """Build one plan view: the plan with its markers, unplaced entities listed below."""
+    """Build one plan view: the plan with its markers, unplaced entities listed below.
+
+    One column: the card is then at most 500 px wide, so the plan fits a
+    desktop window without scrolling, and as wide as a phone's screen.
+    """
     cards: list[dict[str, Any]] = []
-    if image is not None and elements:
-        cards.append({"type": "picture-elements", "image_entity": image.entity_id, "elements": elements})
+    if image is not None and window is not None and elements:
+        cards.append(
+            {
+                "type": "picture-elements",
+                "image_entity": image.entity_id,
+                # The card shows the middle of the image in a box of this shape.
+                "aspect_ratio": f"{window.width:g}:{window.height:g}",
+                "elements": elements,
+                "grid_options": {"columns": "full"},
+            }
+        )
     if unplaced:
-        cards.append({"type": "entities", "entities": unplaced})
-    card = cards[0] if len(cards) == 1 else {"type": "vertical-stack", "cards": cards}
-    return {"title": title, "path": path, "icon": icon, "type": "panel", "cards": [card]}
+        cards.append({"type": "entities", "entities": unplaced, "grid_options": {"columns": "full"}})
+    return {
+        "title": title,
+        "path": path,
+        "icon": icon,
+        "type": "sections",
+        "max_columns": 1,
+        "sections": [{"type": "grid", "cards": cards}],
+    }
 
 
 def _named_rows(entity_ids: Sequence[str]) -> list[dict[str, Any]]:
@@ -363,9 +545,10 @@ def _markers(
     devices: Mapping[int, _Device],
     entity_ids: Mapping[int, str],
     centre_of: Callable[[int, int], Point],
-    make: Callable[[str, _Device, Point, PlanBackground], list[dict[str, Any]]],
+    make: Callable[[str, _Device, Point, _Window], list[dict[str, Any]]],
     plan_id: int | None,
     image: PlanBackground | None,
+    window: _Window | None,
     *,
     take_strays: bool,
     plans: Mapping[int, PlanConfig],
@@ -385,11 +568,30 @@ def _markers(
         if not on_plan and not (take_strays and device.plan_id not in plans):
             continue
         centre = centre_of(device.left, device.top) if device.left is not None and device.top is not None else None
-        if on_plan and image is not None and centre is not None and _inside(centre, image):
-            elements.extend(make(entity_id, device, centre, image))
+        if on_plan and image is not None and window is not None and centre is not None and _inside(centre, image):
+            elements.extend(make(entity_id, device, centre, window))
         else:
             unplaced.append(entity_id)
     return elements, unplaced
+
+
+def _centres(
+    plan_id: int | None,
+    image: PlanBackground,
+    lights: Mapping[int, LightConfig],
+    blinds: Mapping[int, BlindConfig],
+    zones: Mapping[int, ClimateZoneConfig],
+) -> list[Point]:
+    """Return the marker centres of a plan's devices that lie inside its image."""
+    kinds: tuple[tuple[Mapping[int, LightConfig | BlindConfig | ClimateZoneConfig], Callable[[int, int], Point]], ...]
+    kinds = ((lights, light_centre), (blinds, blind_centre), (zones, climate_centre))
+    centres = [
+        centre_of(device.left, device.top)
+        for devices, centre_of in kinds
+        for device in devices.values()
+        if device.plan_id == plan_id and device.left is not None and device.top is not None
+    ]
+    return [centre for centre in centres if _inside(centre, image)]
 
 
 def build_dashboard(
@@ -425,6 +627,8 @@ def build_dashboard(
         label = f" {plans[plan_id].label}" if several_plans and plan_id is not None else ""
         path = f"-{plan_id}" if several_plans else ""
         strays = plan_id == plan_ids[0]
+        # One window for the plan's three views: the plan keeps its size from tab to tab.
+        window = _window(image, _centres(plan_id, image, lights, blinds, zones)) if image is not None else None
         kinds = (
             (
                 "Lights",
@@ -434,11 +638,12 @@ def build_dashboard(
                     lights,
                     entities.lights,
                     light_centre,
-                    lambda entity_id, light, centre, image: _light_elements(
-                        entity_id, centre, image, protected=light.id in protected_lights
+                    lambda entity_id, light, centre, window: _light_elements(
+                        entity_id, centre, window, protected=light.id in protected_lights
                     ),
                     plan_id,
                     image,
+                    window,
                     take_strays=strays,
                     plans=plans,
                 ),
@@ -454,6 +659,7 @@ def build_dashboard(
                     _blind_elements,
                     plan_id,
                     image,
+                    window,
                     take_strays=strays,
                     plans=plans,
                 ),
@@ -466,18 +672,19 @@ def build_dashboard(
                     zones,
                     entities.climates,
                     climate_centre,
-                    lambda entity_id, _zone, centre, image: _climate_elements(
-                        entity_id, centre, image, temperature_unit
+                    lambda entity_id, _zone, centre, window: _climate_elements(
+                        entity_id, centre, window, temperature_unit
                     ),
                     plan_id,
                     image,
+                    window,
                     take_strays=strays,
                     plans=plans,
                 ),
             ),
         )
         views.extend(
-            _view(f"{title}{label}", f"{slug}{path}", icon, image, elements, unplaced)
+            _view(f"{title}{label}", f"{slug}{path}", icon, image, window, elements, unplaced)
             for title, slug, icon, (elements, unplaced) in kinds
             if elements or unplaced
         )
