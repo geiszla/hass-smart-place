@@ -211,7 +211,7 @@ def test_apply_gsa_config_extracts_cameras_and_labels() -> None:
     with the LAN IP swapped for a placeholder.
     """
     raw = (
-        "GlobalGsa>YEALINKOFF>10.0.0.1>60"
+        "GlobalGsa>YEALINKOFF>192.0.2.1>60"
         ">1^/linkmap1<2^/linkmap2<3^/linkmap3<4^/linkmap4"
         ">1^Eingang EG<2^Briefkasten<3^Garage<4^Eingang WHG>70>"
     )
@@ -228,7 +228,7 @@ def test_apply_gsa_config_extracts_cameras_and_labels() -> None:
 
 def test_apply_gsa_config_tolerates_leer_and_unknown_labels() -> None:
     """``LEER`` cameras yield no entities; unknown opener labels pass through raw."""
-    raw = "GlobalGsa>YEALINKOFF>10.0.0.1>60>LEER>1^Seiteneingang>70>"
+    raw = "GlobalGsa>YEALINKOFF>192.0.2.1>60>LEER>1^Seiteneingang>70>"
     state = SmartPlaceState()
     state.apply(parse_frame(raw))
     assert state.gsa_cameras == {}
@@ -239,7 +239,7 @@ def test_apply_gsa_config_tolerates_leer_and_unknown_labels() -> None:
 def test_apply_gsa_config_tolerates_truncated_frame() -> None:
     """A GlobalGsa frame cut off before the camera field leaves the maps empty."""
     state = SmartPlaceState()
-    state.apply(parse_frame("GlobalGsa>YEALINKOFF>10.0.0.1>60>"))
+    state.apply(parse_frame("GlobalGsa>YEALINKOFF>192.0.2.1>60>"))
     assert state.gsa_cameras == {}
     assert state.gsa_door_labels == {}
 

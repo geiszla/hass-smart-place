@@ -249,6 +249,14 @@ def test_go_to_link_ssl_routed_url_real_token_uses_infoboard1() -> None:
     assert frame.routed_https_url == "https://h:8770/Infoboard1?abc"
 
 
+def test_go_to_link_ssl_repr_leaves_out_the_second_token() -> None:
+    """The frame is printed by the CLI and is part of the client's repr."""
+    frame = GoToLinkSSL(host="h", port=8770, path=None, token2="s3cr3t-token")
+    assert "s3cr3t-token" not in repr(frame)
+    assert repr(frame) == "GoToLinkSSL(host='h', port=8770, path=None)"
+    assert frame != GoToLinkSSL(host="h", port=8770, path=None, token2="other")
+
+
 def test_go_to_link_ssl_app_ws_url_and_origin() -> None:
     frame = GoToLinkSSL(host="example", port=8770, path="/Start1", token2="Leer")
     assert frame.app_ws_url == f"wss://example:8770{APP_WS_PATH}"

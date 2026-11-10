@@ -101,6 +101,9 @@ _URL_TOKEN_TRAILING = re.compile(r"(/(?:Start|Infoboard)[0-9]?\?)[^\s\"']+")
 # installation's remote-access passwords. A password may contain any
 # character, so everything after the prefix goes.
 _CREDENTIAL_FRAME = re.compile(r"(\b\d+Update:).*", re.DOTALL)
+# ``GoToLinkSSL:<host>:<port[/path]>:<token2>``: the last field is a second
+# token unless it is the placeholder ``Leer``.
+_ROUTE_TOKEN = re.compile(r"(\bGoToLinkSSL:[^:\s]*:[^:\s]*:)(?!Leer\b)\S+")
 
 
 def _interpret_discovery_frame(frame: ServerFrame) -> GoToLinkSSL:
@@ -271,7 +274,7 @@ class _LiveSources:
     aiohttp >=3.10 requires a running loop to construct a ClientSession.
     """
 
-    token: str
+    token: str = field(repr=False)
     session: aiohttp.ClientSession | None
     own_session: bool
     heartbeat: float
@@ -1224,7 +1227,10 @@ class SmartPlaceClient:
                 continue
 
             if isinstance(frame, UnknownFrame):
-                _LOGGER.debug("unknown frame: %s", scrub_secrets(frame.raw))
+                # A credential frame the parser does not recognise (a leading
+                # space is enough) would reach the handlers with its value.
+                frame = UnknownFrame(raw=scrub_secrets(frame.raw))
+                _LOGGER.debug("unknown frame: %s", frame.raw)
                 self._log_unknown(frame)
 
             current_phase = self.state.phase
@@ -1278,7 +1284,7 @@ class SmartPlaceClient:
         self._capture_handle.flush()  # type: ignore[attr-defined]
 
     def _log_unknown(self, frame: UnknownFrame) -> None:
-        """Append an unknown frame to the unknown-log file.
+        """Append an unknown frame (already redacted) to the unknown-log file.
 
         Only fires in live mode and when ``unknown_log_path`` is set —
         replay-mode unknowns would just re-log the same frames we
@@ -1296,7 +1302,7 @@ class SmartPlaceClient:
         entry = {
             "ts": ts,
             "iso_ts": datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec="milliseconds"),
-            "raw": scrub_secrets(frame.raw),
+            "raw": frame.raw,
         }
         self._unknown_handle.write(json.dumps(entry, ensure_ascii=False) + "\n")  # type: ignore[attr-defined]
         self._unknown_handle.flush()  # type: ignore[attr-defined]
@@ -1311,12 +1317,14 @@ def _now_ts() -> float:
 
 
 def scrub_secrets(text: str) -> str:
-    """Replace URL tokens and credential-frame payloads with ``<REDACTED>``.
+    """Replace URL tokens, the routing frame's token and credential-frame payloads with ``<REDACTED>``.
 
     The one redaction every written frame goes through: log records,
-    capture lines and the unknown-frame log.
+    capture lines, the unknown-frame log and the unknown frames handed to
+    handlers.
     """
     text = _URL_TOKEN_TRAILING.sub(r"\1<REDACTED>", _TOKEN_QUERY.sub(r"\1<REDACTED>", text))
+    text = _ROUTE_TOKEN.sub(r"\1<REDACTED>", text)
     return _CREDENTIAL_FRAME.sub(r"\1<REDACTED>", text)
 
 

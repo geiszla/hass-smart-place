@@ -137,7 +137,7 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         ),
         pattern=re.compile(r"^GlobalGsa>"),
         parse=_named_fields_parser("GsaConfig", "GlobalGsa"),
-        example="GlobalGsa>YEALINKOFF>10.0.0.1>60>1^/linkmap1>",
+        example="GlobalGsa>YEALINKOFF>192.0.2.1>60>1^/linkmap1>",
     ),
     MessageDefinition(
         name="AllItems",

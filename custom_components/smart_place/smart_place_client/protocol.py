@@ -90,7 +90,8 @@ class GoToLinkSSL:
     host: str
     port: int
     path: str | None
-    token2: str
+    # A second token unless it is ``Leer``; kept out of the repr like the URL token.
+    token2: str = field(repr=False)
 
     @property
     def routed_https_url(self) -> str:

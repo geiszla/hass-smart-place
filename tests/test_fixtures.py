@@ -1,12 +1,14 @@
 """Tests on the capture fixtures themselves.
 
 The repository is public and the fixtures come from a real flat, so the
-first block guards what must never be in them. The second block replays
-the redacted 2026-11-09 captures.
+first block guards what must never be in them, nor in the test modules
+and the registry examples. The second block replays the redacted
+2026-11-09 captures.
 """
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
 from collections.abc import Callable
 import json
@@ -16,6 +18,8 @@ import re
 import pytest
 
 from smart_place_client import (
+    KNOWN_COMMANDS,
+    KNOWN_MESSAGES,
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
@@ -24,7 +28,8 @@ from smart_place_client import (
     cover_position,
 )
 
-FIXTURES = Path(__file__).parent / "fixtures"
+TESTS = Path(__file__).parent
+FIXTURES = TESTS / "fixtures"
 
 # Frames that carry the installation's remote-access passwords.
 _CREDENTIAL_FRAME = re.compile(r"\b\d+Update:")
@@ -36,7 +41,10 @@ _URL_TOKEN = re.compile(r"TOKEN=(?!<REDACTED>)|/(?:Start|Infoboard)\d?\?(?!<REDA
 # Free text that can carry a parcel PIN or an info-board link: only the "cleared" marker is allowed.
 _FREE_TEXT = re.compile(r"^(?:PERSINFO|INFOBOARD\d+INHALT):(?!Read$)")
 _PIN = re.compile(r"PIN:\s*\d", re.IGNORECASE)
-# Chart definitions carry the customer number in their 13th field.
+# The routing frame's last field is a second token unless it is the placeholder ``Leer``.
+_ROUTE_TOKEN = re.compile(r"^GoToLinkSSL:[^:]*:[^:]*:(?!Leer$|<REDACTED>$)")
+# Chart definitions (both frames share the layout) carry the customer number in their 13th field.
+_CHART_DEFINITION = re.compile(r"(?:CreateChartSingelDiagramm|SingelDiagramm)\d+:([^\n\"']*)")
 _CUSTOMER_NUMBER_FIELD = 12
 
 _FORBIDDEN: dict[str, re.Pattern[str]] = {
@@ -44,20 +52,38 @@ _FORBIDDEN: dict[str, re.Pattern[str]] = {
     "network address": _IPV4,
     "installation tag": _INSTALLATION_TAG,
     "URL token": _URL_TOKEN,
+    "second token": _ROUTE_TOKEN,
     "free text": _FREE_TEXT,
     "parcel PIN": _PIN,
 }
+# What can be told from the shape alone, in any text: a frame, a line of a test module.
+_FORBIDDEN_SHAPES = {kind: _FORBIDDEN[kind] for kind in ("network address", "installation tag")}
+
+
+def _has_customer_number(text: str) -> bool:
+    """Return whether a chart definition in ``text`` has a customer number that is not all zeros."""
+    return any(
+        len(fields := match.group(1).split(";")) > _CUSTOMER_NUMBER_FIELD
+        and bool(fields[_CUSTOMER_NUMBER_FIELD].strip("0"))
+        for match in _CHART_DEFINITION.finditer(text)
+    )
 
 
 def _private_data(text: str) -> list[str]:
     """Return what kinds of private data a frame text contains."""
     found = [kind for kind, pattern in _FORBIDDEN.items() if pattern.search(text)]
-    if text.startswith("SingelDiagramm"):
-        fields = text.split(";")
-        if len(fields) > _CUSTOMER_NUMBER_FIELD and fields[_CUSTOMER_NUMBER_FIELD].strip("0"):
-            found.append("customer number")
+    if _has_customer_number(text):
+        found.append("customer number")
     if text.startswith(("BasicInfos:", "TOKEN:", "SPOTIFYTOKEN<")):
         found.append("account data")
+    return found
+
+
+def _private_shapes(text: str) -> list[str]:
+    """Return the private data that shows by its shape in a text that is not a single frame."""
+    found = [kind for kind, pattern in _FORBIDDEN_SHAPES.items() if pattern.search(text)]
+    if _has_customer_number(text):
+        found.append("customer number")
     return found
 
 
@@ -75,27 +101,106 @@ def test_fixtures_contain_no_private_data() -> None:
     assert leaks == []
 
 
-@pytest.mark.parametrize(
-    ("text", "kind"),
-    [
-        ("144Update:secret", "credential frame"),
-        ("145Update:", "credential frame"),
-        ("GlobalGsa>YEALINKOFF>172.16.0.10>60>LEER>LEER>70>", "network address"),
-        ("GlobalGsa>YEALINKOFF>192.168.1.20>60>LEER>LEER>70>", "network address"),
-        ("GlobalGsa>YEALINKOFF>10.1.2.3>60>LEER>LEER>70>", "network address"),
-        ("Floorplan1:AB12-34-56,70px,10px,Leuchten", "installation tag"),
-        ("SingelDiagramm49:Elektro AB12-34-56;Area", "installation tag"),
-        ("opening wss://h:8770/StartAppExt/?TOKEN=abc", "URL token"),
-        ("PERSINFO:Sie haben eine Lieferung. Bitte verwenden Sie den PIN:1234", "parcel PIN"),
-        ("PERSINFO:something else", "free text"),
-        ("INFOBOARD2INHALT:<a href='x'>link</a>", "free text"),
-        ("SingelDiagramm49:Elektro;a;b;c;d;e;f;g;;CHF;0.1;0.1;1234567;Elektro;kWh", "customer number"),
-        ("BasicInfos:1234567;someone@example.com", "account data"),
-    ],
-)
+def _python_lines() -> list[tuple[str, int, str]]:
+    """Every line of the test modules, apart from the guard's own examples below."""
+    rows = []
+    for path in sorted(TESTS.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        skipped: set[int] = set()
+        if path == Path(__file__):
+            for node in ast.parse(source).body:
+                if (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id in ("_GUARD_EXAMPLES", "_GUARD_LINE_EXAMPLES")
+                ):
+                    assert node.end_lineno is not None
+                    skipped.update(range(node.lineno, node.end_lineno + 1))
+        rows += [
+            (path.name, number, line)
+            for number, line in enumerate(source.splitlines(), start=1)
+            if number not in skipped
+        ]
+    return rows
+
+
+def _python_strings() -> list[tuple[str, int, str]]:
+    """Every string literal of the test modules, adjacent literals joined as Python joins them."""
+    return [
+        (path.name, node.lineno, node.value)
+        for path in sorted(TESTS.glob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_test_modules_contain_no_private_data() -> None:
+    """No installation tag, no address outside 192.0.2.0/24 and no customer number in ``tests/*.py``.
+
+    Tags and addresses are looked for line by line (comments included).
+    A chart definition can be split over several literals, so customer
+    numbers are looked for in the string literals.
+    """
+    leaks = [
+        (name, number, kind)
+        for name, number, line in _python_lines()
+        for kind, pattern in _FORBIDDEN_SHAPES.items()
+        if pattern.search(line)
+    ]
+    guard_examples = {text for text, _ in (*_GUARD_EXAMPLES, *_GUARD_LINE_EXAMPLES)}
+    leaks += [
+        (name, number, "customer number")
+        for name, number, text in _python_strings()
+        if text not in guard_examples and _has_customer_number(text)
+    ]
+    assert leaks == []
+
+
+def test_registry_examples_contain_no_private_data() -> None:
+    """The message and command examples are public too."""
+    examples = [(defn.name, defn.example) for defn in (*KNOWN_MESSAGES, *KNOWN_COMMANDS)]
+    assert [(name, kinds) for name, example in examples if (kinds := _private_shapes(example))] == []
+
+
+# The guard's own examples: each must be recognised as the kind named. Private-looking on
+# purpose (all invented), so ``test_test_modules_contain_no_private_data`` skips this list.
+_GUARD_EXAMPLES: list[tuple[str, str]] = [
+    ("144Update:secret", "credential frame"),
+    ("145Update:", "credential frame"),
+    ("GlobalGsa>YEALINKOFF>172.16.0.10>60>LEER>LEER>70>", "network address"),
+    ("GlobalGsa>YEALINKOFF>192.168.1.20>60>LEER>LEER>70>", "network address"),
+    ("GlobalGsa>YEALINKOFF>10.1.2.3>60>LEER>LEER>70>", "network address"),
+    ("Floorplan1:AB12-34-56,70px,10px,Leuchten", "installation tag"),
+    ("SingelDiagramm49:Elektro AB12-34-56;Area", "installation tag"),
+    ("opening wss://h:8770/StartAppExt/?TOKEN=abc", "URL token"),
+    ("GoToLinkSSL:spr1.smartplace.ch:38435:abc123", "second token"),
+    ("GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer2", "second token"),
+    ("PERSINFO:Sie haben eine Lieferung. Bitte verwenden Sie den PIN:1234", "parcel PIN"),
+    ("PERSINFO:something else", "free text"),
+    ("INFOBOARD2INHALT:<a href='x'>link</a>", "free text"),
+    ("SingelDiagramm49:Elektro;a;b;c;d;e;f;g;;CHF;0.1;0.1;1234567;Elektro;kWh", "customer number"),
+    ("CreateChartSingelDiagramm49:Elektro;a;b;c;d;e;f;g;;CHF;0.1;0.1;1234567;Elektro;kWh", "customer number"),
+    ("BasicInfos:1234567;someone@example.com", "account data"),
+]
+
+
+@pytest.mark.parametrize(("text", "kind"), _GUARD_EXAMPLES)
 def test_private_data_guard_recognises(text: str, kind: str) -> None:
     """The guard itself must flag each kind of private data."""
     assert kind in _private_data(text)
+
+
+# The same for lines of a test module.
+_GUARD_LINE_EXAMPLES: list[tuple[str, str]] = [
+    ('    state.apply(parse_frame("GlobalGsa>YEALINKOFF>10.0.0.1>60>"))', "network address"),
+    ("# the tag AB12-34-56 of the installation", "installation tag"),
+    ('raw = "SingelDiagramm49:Elektro;a;b;c;d;e;f;g;;CHF;0.1;0.1;1234567;Elektro;kWh"', "customer number"),
+]
+
+
+@pytest.mark.parametrize(("line", "kind"), _GUARD_LINE_EXAMPLES)
+def test_private_data_guard_recognises_shapes_in_source_lines(line: str, kind: str) -> None:
+    assert kind in _private_shapes(line)
 
 
 def test_private_data_guard_accepts_redacted_frames() -> None:
@@ -107,6 +212,9 @@ def test_private_data_guard_accepts_redacted_frames() -> None:
         "INFOBOARD2:01",
         "SingelStandUpdate49:97:41.0819999999999::::",
         "SingelDiagramm49:Elektro XX00-00-00;a;b;c;d;e;f;g;;CHF;0.1;0.1;0000000;Elektro;kWh",
+        "CreateChartSingelDiagramm49:Elektro XX00-00-00;a;b;c;d;e;f;g;;CHF;0.1;0.1;0000000;Elektro;kWh",
+        "GoToLinkSSL:spr1.smartplace.ch:38435/Start1:Leer",
+        "GoToLinkSSL:spr1.smartplace.ch:38435:<REDACTED>",
     ):
         assert _private_data(text) == []
 

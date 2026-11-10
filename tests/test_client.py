@@ -1297,6 +1297,8 @@ async def test_credential_frames_are_redacted_everywhere_they_are_written(
                     f"145Update:{_PASSWORD}",
                     # Not a known shape, so it also goes to the unknown-frame log.
                     f"Hinweis 146Update:{_PASSWORD}",
+                    # A leading space is enough for the parser not to recognise the frame.
+                    f" 144Update:{_PASSWORD}",
                 ],
             ),
         )
@@ -1309,14 +1311,101 @@ async def test_credential_frames_are_redacted_everywhere_they_are_written(
     written = capture.read_text(encoding="utf-8") + unknown.read_text(encoding="utf-8") + caplog.text
     assert _PASSWORD not in written
     assert "s3cret" not in written
-    assert capture.read_text(encoding="utf-8").count("Update:<REDACTED>") == 3
-    assert json.loads(unknown.read_text(encoding="utf-8"))["raw"] == "Hinweis 146Update:<REDACTED>"
+    assert capture.read_text(encoding="utf-8").count("Update:<REDACTED>") == 4
+    logged_unknown = [json.loads(line)["raw"] for line in unknown.read_text(encoding="utf-8").splitlines()]
+    assert logged_unknown == ["Hinweis 146Update:<REDACTED>", " 144Update:<REDACTED>"]
     assert "unknown frame: Hinweis 146Update:<REDACTED>" in caplog.text
-    assert _PASSWORD not in repr(seen[:3])
-    assert seen[1:3] == [
+    assert "s3cret" not in repr(seen)
+    assert seen[1:] == [
         NamedValue(name="RemoteAccessCredential", value="", index=144),
         NamedValue(name="RemoteAccessCredential", value="", index=145),
+        UnknownFrame(raw="Hinweis 146Update:<REDACTED>"),
+        UnknownFrame(raw=" 144Update:<REDACTED>"),
     ]
+
+
+async def test_cli_does_not_print_an_unrecognised_credential_frame(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sp-cli`` prints every frame; an unknown frame must not carry a password to the terminal."""
+    fixture = tmp_path / "capture.ndjson"
+    fixture.write_text(
+        "".join(
+            CapturedFrame("server", 1.0, text).to_json() + "\n"
+            for text in (_ROUTE, f" 145Update:{_PASSWORD}", "TEMPIST1:21.5")
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    await _run_cli(False, fixture, None)
+    printed = capsys.readouterr().out
+    assert "Temperature(sensor=1, value=21.5)" in printed
+    assert "UnknownFrame(raw=' 145Update:<REDACTED>')" in printed
+    assert "s3cret" not in printed
+
+
+# ----------------------- second token redaction -----------------------
+
+_SECOND_TOKEN = "Zx9-second_token.value"
+
+
+def test_scrub_secrets_redacts_the_second_token_of_the_routing_frame() -> None:
+    assert scrub_secrets(f"GoToLinkSSL:h.example:40000:{_SECOND_TOKEN}") == "GoToLinkSSL:h.example:40000:<REDACTED>"
+    assert (
+        scrub_secrets(f"GoToLinkSSL:h.example:40000/Start1:{_SECOND_TOKEN}")
+        == "GoToLinkSSL:h.example:40000/Start1:<REDACTED>"
+    )
+    assert _SECOND_TOKEN not in scrub_secrets(f"parse error on frame 'GoToLinkSSL:h:1:{_SECOND_TOKEN}' — skipping")
+    # The placeholder for "no second token" is not a secret and stays readable.
+    assert scrub_secrets(_ROUTE) == _ROUTE
+    assert scrub_secrets("GoToLinkSSL:h.example:40000:<REDACTED>") == "GoToLinkSSL:h.example:40000:<REDACTED>"
+
+
+async def test_second_token_is_not_written_to_the_capture(tmp_path: Path) -> None:
+    """The discovery frame is captured; its fourth field is a token unless it is ``Leer``."""
+    capture = tmp_path / "capture.ndjson"
+    session = _FakeSession(
+        [_FakeWebSocket([f"GoToLinkSSL:routed.example:40000:{_SECOND_TOKEN}"]), _FakeWebSocket(["PongOK"])],
+    )
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=session,  # type: ignore[arg-type]
+        capture=capture,
+        ping_interval=0,
+        chart_poll_interval=0,
+    )
+    await client._run_live_once()
+    # The token is used for the routed page, and only there.
+    assert session.get_urls == [f"https://routed.example:40000/Infoboard1?{_SECOND_TOKEN}"]
+    written = capture.read_text(encoding="utf-8")
+    assert _SECOND_TOKEN not in written
+    assert json.loads(written.splitlines()[0])["text"] == "GoToLinkSSL:routed.example:40000:<REDACTED>"
+    # A capture written like this still replays.
+    replayed = SmartPlaceClient.replay(path=capture)
+    await replayed.run()
+    assert replayed.state.route == GoToLinkSSL(host="routed.example", port=40000, path=None, token2="<REDACTED>")
+
+
+async def test_client_repr_shows_no_token() -> None:
+    """Neither the URL token nor the second token of the route."""
+    session = _FakeSession(
+        [_FakeWebSocket([f"GoToLinkSSL:routed.example:40000:{_SECOND_TOKEN}"]), _FakeWebSocket(["PongOK"])],
+    )
+    client = SmartPlaceClient.live(
+        token="url-token-value",
+        session=session,  # type: ignore[arg-type]
+        ping_interval=0,
+        chart_poll_interval=0,
+    )
+    await client._run_live_once()
+    assert client.state.route is not None
+    assert client._camera_route is not None
+    shown = repr(client) + repr(client._live) + repr(client.state)
+    assert "url-token-value" not in shown
+    assert _SECOND_TOKEN not in shown
 
 
 async def test_unknown_frames_are_logged_at_debug(
@@ -1425,6 +1514,9 @@ async def test_cli_gates_live_sends_but_not_replay(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("smart_place_client.client._stdin_pump", fake_pump)
     monkeypatch.setattr(SmartPlaceClient, "run", fake_run)
+    # The CLI loads ``.env``: without this the developer's real token and
+    # Home Assistant credentials would be put into the test process.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *_args, **_kwargs: False)
     monkeypatch.setenv("SMART_PLACE_TOKEN", "dummy")
     await _run_cli(True, None, None)
     await _run_cli(True, None, None, allow_send=True)
