@@ -28,12 +28,13 @@ def test_first_position_gives_no_direction() -> None:
 
 def test_direction_follows_distinct_positions() -> None:
     motion = BlindMotion(clock=_Clock())
-    motion.update(40)
-    motion.update(45)
+    assert motion.update(40) is False
+    assert motion.update(45) is True
     assert motion.direction == "opening"
-    motion.update(45)
+    # A repeated position neither changes the direction nor restarts the timeout.
+    assert motion.update(45) is False
     assert motion.direction == "opening"
-    motion.update(30)
+    assert motion.update(30) is True
     assert motion.direction == "closing"
 
 

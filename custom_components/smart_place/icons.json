@@ -25,6 +25,17 @@
       "weather_alarm": {
         "default": "mdi:weather-cloudy-alert"
       }
+    },
+    "switch": {
+      "doorbell_mute": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-off"
+        }
+      },
+      "scene_switch": {
+        "default": "mdi:palette-outline"
+      }
     }
   }
 }

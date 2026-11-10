@@ -37,14 +37,21 @@ class BlindMotion:
     _direction: Direction | None = None
     _deadline: float = 0.0
 
-    def update(self, position: int | None) -> None:
-        """Feed the latest position (``None`` when the server reports none)."""
+    def update(self, position: int | None) -> bool:
+        """Feed the latest position (``None`` when the server reports none).
+
+        Returns ``True`` when this position (re)started the timeout, i.e.
+        the caller should look at :attr:`direction` again ``timeout``
+        seconds from now.
+        """
         previous, self._position = self._position, position
         if position is None or position in (_FULLY_CLOSED, _FULLY_OPEN):
             self._direction = None
         elif previous is not None and position != previous:
             self._direction = "opening" if position > previous else "closing"
             self._deadline = self.clock() + self.timeout
+            return True
+        return False
 
     @property
     def direction(self) -> Direction | None:

@@ -19,13 +19,15 @@ from collections.abc import Callable, Hashable
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.const import Platform
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
-from .smart_place_client import ExpectedState, SmartPlaceNotConnectedError
+from .smart_place_client import ExpectedState, SmartPlaceNotConnectedError, classify_scenes
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -35,7 +37,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
     from . import SmartPlaceConfigEntry, SmartPlaceData
-    from .smart_place_client import CommandDefinition
+    from .smart_place_client import CommandDefinition, SceneEntities
 
 # The timer may fire a moment before the expectation's own deadline.
 _EXPECTATION_TIMER_MARGIN = 0.1
@@ -67,6 +69,24 @@ def async_add_discovered(
     discover()
     data.listeners.append(discover)
     entry.async_on_unload(lambda: data.listeners.remove(discover))
+
+
+@callback
+def async_classify_scenes(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> SceneEntities:
+    """Decide which scene becomes a scene entity, a switch or a level of a fan.
+
+    The scene, switch and fan platforms all ask here, so they agree. A
+    scene that already is a switch in the entity registry stays one, also
+    when a later scene would complete a level group with it.
+    """
+    registry = er.async_get(data.hass)
+    scenes = data.state.scene_configs
+    registered_switches = {
+        scene_id
+        for scene_id in scenes
+        if registry.async_get_entity_id(Platform.SWITCH, DOMAIN, f"{entry.entry_id}_scene_switch_{scene_id}")
+    }
+    return classify_scenes(scenes, registered_switches)
 
 
 class SmartPlacePushEntity(Entity):

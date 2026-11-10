@@ -32,12 +32,22 @@ from .const import (
     SETUP_OBSERVATION_WINDOW,
 )
 from .smart_place_client import (
+    BLIND_KIND_AWNING,
+    BLIND_KIND_FABRIC,
+    BLIND_KIND_SLATTED,
     DISCOVERY_ORIGIN,
+    LIGHT_KIND_DIMMER,
+    LIGHT_KIND_LED,
+    LIGHT_KIND_SOCKET,
+    LIGHT_KIND_SWITCH,
     ServerFrame,
     SessionPhase,
     SmartPlaceClient,
     SmartPlaceState,
+    blind_centre,
     install_token_redaction_filter,
+    light_centre,
+    suggest_zone,
 )
 
 if TYPE_CHECKING:
@@ -45,13 +55,17 @@ if TYPE_CHECKING:
 
     from homeassistant.core import HomeAssistant
 
+    from .smart_place_client import BlindConfig, LightConfig
+
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.CAMERA,
+    Platform.LIGHT,
     Platform.SENSOR,
+    Platform.SWITCH,
 ]
 
 # Session phases in which the WS is connected far enough that entity
@@ -68,6 +82,18 @@ HEALTHY_PHASES: frozenset[SessionPhase] = frozenset(
 
 MANUFACTURER = "smart PLACE AG"
 
+_LIGHT_MODELS: dict[str, str] = {
+    LIGHT_KIND_SWITCH: "Light",
+    LIGHT_KIND_LED: "LED light",
+    LIGHT_KIND_DIMMER: "Dimmer",
+    LIGHT_KIND_SOCKET: "Socket",
+}
+_BLIND_MODELS: dict[str, str] = {
+    BLIND_KIND_SLATTED: "Slatted blind",
+    BLIND_KIND_FABRIC: "Fabric blind",
+    BLIND_KIND_AWNING: "Awning",
+}
+
 type SmartPlaceConfigEntry = ConfigEntry[SmartPlaceData]
 
 
@@ -75,6 +101,7 @@ type SmartPlaceConfigEntry = ConfigEntry[SmartPlaceData]
 class SmartPlaceData:
     """Per-config-entry runtime data, stored on ``entry.runtime_data``."""
 
+    hass: HomeAssistant
     client: SmartPlaceClient
     state: SmartPlaceState
     # Registry id of the main device; every sub-device links to it with
@@ -94,6 +121,16 @@ class SmartPlaceData:
         new WS is open but bootstrap hasn't completed yet.
         """
         return self.client.connected and self.client.state.phase in HEALTHY_PHASES
+
+    @property
+    def devices_listed(self) -> bool:
+        """Return True once this connection delivered its complete main-menu reply.
+
+        The platforms create the control entities then, not per frame:
+        room suggestions need every heating zone and scene grouping needs
+        every scene.
+        """
+        return self.client.state.main_menu_loaded
 
 
 def main_device_info(entry: SmartPlaceConfigEntry) -> DeviceInfo:
@@ -150,6 +187,69 @@ def zone_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, zone_id
         manufacturer=MANUFACTURER,
         model="Climate zone",
         suggested_area=room,
+        via_device_id=data.main_device_id,
+    )
+
+
+def _suggested_area(
+    entry: SmartPlaceConfigEntry,
+    data: SmartPlaceData,
+    name: str,
+    centre: tuple[float, float] | None,
+    plan_id: int | None,
+) -> str | None:
+    """Return the area to suggest for a light, socket or blind, if any.
+
+    The area currently assigned to the device of the matching heating
+    zone (so a renamed area is followed), else the zone's room name.
+    """
+    zone_id = suggest_zone(name, centre, plan_id, data.state.climate.values())
+    if zone_id is None:
+        return None
+    hass = data.hass
+    zone_device = dr.async_get(hass).async_get_device_by_identifier(
+        zone_device_identifier(entry, zone_id), entry.entry_id
+    )
+    if (
+        zone_device is not None
+        and zone_device.area_id is not None
+        and (area := ar.async_get(hass).async_get_area(zone_device.area_id)) is not None
+    ):
+        return area.name
+    return data.state.climate[zone_id].room
+
+
+def light_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, light: LightConfig) -> DeviceInfo:
+    """Return the device of one light or socket.
+
+    One device per light, named with the vendor name; its single entity
+    takes the device name. The area is only a suggestion: HA applies it
+    when it creates the device and never afterwards.
+    """
+    identifier = (DOMAIN, f"{entry.entry_id}_light_{light.id}")
+    data.device_identifiers.add(identifier)
+    centre = light_centre(light.left, light.top) if light.left is not None and light.top is not None else None
+    return DeviceInfo(
+        identifiers={identifier},
+        name=light.name,
+        manufacturer=MANUFACTURER,
+        model=_LIGHT_MODELS.get(light.kind),
+        suggested_area=_suggested_area(entry, data, light.name, centre, light.plan_id),
+        via_device_id=data.main_device_id,
+    )
+
+
+def blind_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, blind: BlindConfig) -> DeviceInfo:
+    """Return the device of one blind (see ``light_device_info``)."""
+    identifier = (DOMAIN, f"{entry.entry_id}_blind_{blind.id}")
+    data.device_identifiers.add(identifier)
+    centre = blind_centre(blind.left, blind.top) if blind.left is not None and blind.top is not None else None
+    return DeviceInfo(
+        identifiers={identifier},
+        name=blind.name,
+        manufacturer=MANUFACTURER,
+        model=_BLIND_MODELS.get(blind.kind),
+        suggested_area=_suggested_area(entry, data, blind.name, centre, blind.plan_id),
         via_device_id=data.main_device_id,
     )
 
@@ -213,7 +313,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         configuration_url=f"{DISCOVERY_ORIGIN}/Start5?{token}",
     )
 
-    data = SmartPlaceData(client=client, state=SmartPlaceState(), main_device_id=main_device.id)
+    data = SmartPlaceData(hass=hass, client=client, state=SmartPlaceState(), main_device_id=main_device.id)
     data.device_identifiers.add((DOMAIN, entry.entry_id))
     entry.runtime_data = data
 
