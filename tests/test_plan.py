@@ -449,14 +449,9 @@ def test_scenes_view_uses_built_in_cards(flat_state: SmartPlaceState) -> None:
     assert view["cards"] == [
         {"type": "entities", "title": "Scenes", "entities": _rows("scene.night", "scene.evening")},
         {"type": "entities", "title": "Switches", "entities": _rows("switch.blinds", "switch.doorbell_mute")},
-        {
-            "type": "entities",
-            "title": "Groups",
-            "entities": _rows(
-                "button.all_lights_off", "button.all_lights_on", "button.all_blinds_up", "button.all_blinds_down"
-            ),
-        },
     ]
+    # The buttons for all lights and all blinds are on their plan pages only.
+    assert "button." not in repr(view)
 
 
 def test_buttons_for_all_and_the_ventilation_are_below_their_plan(flat_state: SmartPlaceState) -> None:

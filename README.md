@@ -570,8 +570,7 @@ because the markers would overlap otherwise:
   While a zone calls for heat, a flame stands before its target and both are
   in the heating colour. Below the plan: "All heating off", "Heating back on"
   and the ventilation.
-- **Scenes** — scenes, scene switches, doorbell mute, "All lights off", "All
-  lights on" and the blinds group buttons.
+- **Scenes** — scenes, scene switches and the doorbell mute.
 - **Intercom** — one block per door: its name, the cameras that show it and a
   wide button that opens the door. A camera is put with the door whose name
   starts like the camera's ("Garage camera" and "Garage entrance camera" both

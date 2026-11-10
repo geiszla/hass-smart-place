@@ -1468,3 +1468,10 @@ Asked for by the user after the fifth entry was installed.
   zone that really calls for heat on the installed pages (seen with
   forced conditions only).
 - A press of the two heating buttons on the box: the box is live.
+
+### Follow-up: no "Groups" card on the Scenes view
+
+The user had the "Groups" card removed from the Scenes view: the buttons
+for all lights and all blinds are on their plan pages now. Checked with
+the repository tests and the runtime checks (the group button of a blinds
+sub-menu other than "All" is looked for on the Blinds page instead).

@@ -1551,8 +1551,8 @@ image and their sizes did not.
 - Below the plan of the first plan's views are tiles that press the
   buttons for all lights, all blinds and all heating zones (two per row),
   and on the Climate view the ventilation fans (moved from the Scenes
-  view; the view also exists for a fan alone). The Scenes view keeps the
-  "Groups" card with the light and blind buttons.
+  view; the view also exists for a fan alone). The Scenes view no longer
+  lists these buttons in a "Groups" card (user decision, 2026-11-10).
 
 A protected
 socket's marker gets the icon `mdi:lock` and no tap action (`none`; a

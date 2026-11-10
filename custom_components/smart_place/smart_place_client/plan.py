@@ -629,8 +629,6 @@ def _scenes_view(entities: DashboardEntities) -> dict[str, Any] | None:
         cards.append({"type": "entities", "title": "Scenes", "entities": _named_rows(entities.scenes)})
     if entities.switches:
         cards.append({"type": "entities", "title": "Switches", "entities": _named_rows(entities.switches)})
-    if groups := [*entities.light_buttons, *entities.blind_buttons]:
-        cards.append({"type": "entities", "title": "Groups", "entities": _named_rows(groups)})
     if not cards:
         return None
     return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": cards}
