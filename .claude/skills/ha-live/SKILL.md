@@ -112,7 +112,7 @@ real `friendly_name`/attributes with `state <entity_id>`.
   lists stays in the entity registry, also after a restart (Home Assistant
   then shows it as no longer provided), until the user deletes the device.
   `entities --disabled` shows whether the entity exists but is disabled
-  (disabled by default: the door buttons, the "All lights" button, the
+  (disabled by default: the "All lights" button, the
   button of a blinds group other than "All", and scenes the vendor app
   does not display).
 - **Test a control entity without touching the building** (dry run):

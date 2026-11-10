@@ -133,11 +133,6 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
     """
 
     _attr_has_entity_name = True
-    # Disabled by default — pressing one of these opens a real physical
-    # door, mailbox, or garage. Users can enable per-button in the HA
-    # entity registry once they've confirmed the label matches the
-    # door on their property.
-    _attr_entity_registry_enabled_default = False
 
     def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, door: _DoorButton) -> None:
         """Wire the door's name, unique_id, and write command."""

@@ -1390,7 +1390,9 @@ entity registry.
 
 The four `OEFFNER<n>` write commands surface as `Button` entities so
 the user can press one from the HA UI to open the corresponding
-door (disabled by default). `async_press` issues the command; if it
+door (enabled by default since 2026-11-10: the vendor app offers the same
+buttons at all times; on an install from before that they stay as the
+registry has them). `async_press` issues the command; if it
 cannot be sent the press raises a translated `HomeAssistantError`
 (`not_connected`) — there is no command queue.
 

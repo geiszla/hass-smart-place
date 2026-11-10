@@ -148,8 +148,8 @@ Open **Settings → Devices & services → Smart Place**. A healthy install show
   them in the integration's entity list or on the Scenes view of the
   dashboard.
 - Four **door** buttons (Front door, Ground floor entrance, Garage entrance,
-  Mailbox), disabled by default. They open real doors; enable only the ones
-  you want.
+  Mailbox). They open real doors, as the buttons in the Smart Place app do;
+  disable the ones you do not want in Home Assistant.
 - **Smart Place** in the sidebar: the [plan dashboard](#plan-dashboard).
 - A **Configure** button on the integration: the [options](#options).
 
@@ -233,7 +233,7 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds, if exactly one of them is on when the integration first sees them. Otherwise they become switches |
 | Group buttons of the lights and blinds pages | `button` | "All blinds up", "All blinds down"; "All lights" and the button of a blinds group other than "All" are disabled by default |
 | Doorbell mute | `switch` | |
-| Door openers | `button` | Disabled by default: they open real doors |
+| Door openers | `button` | They open real doors; not offered to the voice assistant by default |
 | Floor plan | `image` and a dashboard | See [Plan dashboard](#plan-dashboard) |
 | Temperatures, weather, weather alarms | `sensor`, `binary_sensor` | |
 | Electricity, heating and water meters | `sensor` | With electricity price and cost for the EWZ (Zurich) tariff |
