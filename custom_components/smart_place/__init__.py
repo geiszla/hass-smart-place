@@ -136,6 +136,10 @@ class SmartPlaceData:
     device_identifiers: set[tuple[str, str]] = field(default_factory=set)
     # The sidebar dashboard, ``None`` if it could not be set up.
     dashboard: SmartPlaceDashboard | None = None
+    # Scenes that became switches and level groups (by their level-1 scene
+    # id) that became fans in this run; see ``entity.async_classify_scenes``.
+    scene_switch_ids: set[int] = field(default_factory=set)
+    level_group_ids: set[int] = field(default_factory=set)
 
     @property
     def is_healthy(self) -> bool:

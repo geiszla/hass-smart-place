@@ -78,7 +78,7 @@ from .protocol import (
     repair_mojibake,
 )
 from .rooms import suggest_zone
-from .scenes import LevelGroup, SceneEntities, classify_scenes, find_level_groups
+from .scenes import LevelGroup, SceneEntities, classify_scenes, find_level_groups, is_level_group
 from .state import (
     CHART_RANGE_SERIES_HIGH_TARIFF,
     CHART_RANGE_SERIES_LOW_TARIFF,
@@ -172,6 +172,7 @@ __all__ = [
     "heating_is_off",
     "install_token_redaction_filter",
     "is_high_tariff",
+    "is_level_group",
     "light_centre",
     "light_is_on",
     "next_tariff_boundary",

@@ -1,13 +1,14 @@
 """Fan platform for Smart Place — one entity per level group of scenes.
 
 On/off scenes named alike except for a trailing number 1..N (N >= 3), such
-as "Lüftung Stufe 1/2/3", are the levels of one thing: the server keeps
-one of them active. Each group is one fan with N speeds; selecting level k
-sends ``SZENEN<id of level k>``.
+as "Lüftung Stufe 1/2/3", of which exactly one is on when they are first
+seen, are the levels of one thing: the server keeps one of them active.
+Each group is one fan with N speeds; selecting level k sends
+``SZENEN<id of level k>``.
 
-There is no off: the fan declares neither turn-off nor a zero speed.
-Whether sending the active level's scene again switches it off is
-untested, so the active level is never sent again.
+There is no off: the fan declares neither turn-off nor a zero speed, and
+refuses both. Whether sending the active level's scene again switches it
+off is untested, so the active level is never sent again.
 """
 
 from __future__ import annotations
@@ -78,9 +79,14 @@ class SmartPlaceLevelFan(SmartPlacePushEntity, FanEntity):
         self._expected_level: ExpectedState[int] = ExpectedState()
 
     def _server_level(self) -> int | None:
-        """Return the highest active level, 0 if none is active, ``None`` if unknown."""
+        """Return the highest active level, 0 if none is active, ``None`` unless every flag is known.
+
+        With a flag missing, "no level active" could be wrong, and
+        selecting a level could send the scene of the level that is
+        active.
+        """
         flags = [self._data.state.scene_states.get(scene_id) for scene_id in self._scene_ids]
-        if all(flag is None for flag in flags):
+        if any(flag is None for flag in flags):
             return None
         return max((level for level, on in enumerate(flags, start=1) if on), default=0)
 
@@ -118,6 +124,10 @@ class SmartPlaceLevelFan(SmartPlacePushEntity, FanEntity):
             await self.async_set_percentage(percentage)
         elif self._known_level() == 0:
             await self._async_select(1)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Refuse: there is no off level (``fan.toggle`` arrives here)."""
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_off_level")
 
     def _known_level(self) -> int:
         level = self._level()

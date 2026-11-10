@@ -76,18 +76,34 @@ def async_add_discovered(
 def async_classify_scenes(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> SceneEntities:
     """Decide which scene becomes a scene entity, a switch or a level of a fan.
 
-    The scene, switch and fan platforms all ask here, so they agree. A
-    scene that already is a switch in the entity registry stays one, also
-    when a later scene would complete a level group with it.
+    The scene, switch and fan platforms all ask here, so they agree.
+    What exists decides first, so nothing is ever converted: a scene that
+    already is a switch in the entity registry stays one, and a level
+    group that already is a fan stays a fan, whatever the scene flags say
+    now. What was decided in this run counts the same way: an entity is
+    only registered a moment after it was created.
     """
     registry = er.async_get(data.hass)
     scenes = data.state.scene_configs
-    registered_switches = {
-        scene_id
-        for scene_id in scenes
-        if registry.async_get_entity_id(Platform.SWITCH, DOMAIN, f"{entry.entry_id}_scene_switch_{scene_id}")
-    }
-    return classify_scenes(scenes, registered_switches)
+
+    def registered(platform: Platform, kind: str) -> set[int]:
+        return {
+            scene_id
+            for scene_id in scenes
+            if registry.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{kind}_{scene_id}")
+        }
+
+    entities = classify_scenes(
+        scenes,
+        data.state.scene_states,
+        keep_as_switch=registered(Platform.SWITCH, "scene_switch") | data.scene_switch_ids,
+        keep_as_group=registered(Platform.FAN, "level_group") | data.level_group_ids,
+    )
+    # Before the main-menu reply is complete the scene list can be partial; nothing is decided from it.
+    if data.devices_listed:
+        data.scene_switch_ids.update(entities.switches)
+        data.level_group_ids.update(group.scene_ids[0] for group in entities.level_groups)
+    return entities
 
 
 class SmartPlacePushEntity(Entity):
