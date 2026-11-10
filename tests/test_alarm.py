@@ -250,10 +250,18 @@ def test_a_position_change_during_the_wait_cancels() -> None:
     assert _due(rule, _value("12-00")) is False
 
 
-def test_already_fully_down_sends_nothing() -> None:
+def test_alarm_end_lowers_whatever_position_is_reported() -> None:
+    """Right after an alarm the server may still report the position from before it."""
     rule = LowerAfterAlarm(clock=_Clock())
     assert _feed(rule, _ALARM, _DOWN) == [False, True]
-    assert _due(rule, _DOWN) is False
+    assert _due(rule, _DOWN) is True
+    assert rule.waiting is False
+
+
+def test_alarm_back_at_the_end_of_the_wait_sends_nothing() -> None:
+    rule = LowerAfterAlarm(clock=_Clock())
+    assert _feed(rule, _ALARM, _UP) == [False, True]
+    assert _due(rule, _ALARM) is False
     assert rule.waiting is False
 
 

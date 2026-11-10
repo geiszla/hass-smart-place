@@ -94,9 +94,10 @@ class LowerAfterAlarm:
       value goes missing, the function is switched off, the caller sends
       a command for the blind (:meth:`cancel`), or the blind reports
       another position than at the end of the alarm (somebody moves it).
-    - When the wait is over, :meth:`due` says once whether to lower. It
-      never says so twice for one alarm: a command that could not be sent
-      is not repeated.
+    - When the wait is over, :meth:`due` says once whether to lower: yes,
+      unless the alarm is back or the value is missing. It never says so
+      twice for one alarm: a command that could not be sent is not
+      repeated.
 
     The caller schedules a callback for the end of the wait, because no
     frame arrives then.
@@ -149,4 +150,6 @@ class LowerAfterAlarm:
         if self._deadline is None or self.clock() < self._deadline:
             return False
         self._deadline = None
-        return enabled and healthy and blind_can_be_lowered(value)
+        # The position is not consulted: right after an alarm the server may
+        # still report the one from before it, while the blind is up.
+        return enabled and healthy and value is not None and value.position is not None

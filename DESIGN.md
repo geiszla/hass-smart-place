@@ -1235,9 +1235,11 @@ the waiting time and sends `Commands.BlindDown` through `_async_issue`
    `_async_issue`), or the blind reports another position than at the
    end of the alarm.
 4. When the wait is over (`due`): only if the switch is on, the
-   connection is healthy and the position is known and not fully down,
-   `JALDOW<id>` is sent once. No retry; a send that fails is logged at
-   WARNING. One INFO line names the blind and the reason.
+   connection is healthy and the blind is not blocked again,
+   `JALDOW<id>` is sent once, whatever position is reported: right
+   after an alarm the server may still report the position from before
+   it. No retry; a send that fails is logged at WARNING. One INFO line
+   names the blind and the reason.
 5. An alarm end that was not seen live lowers nothing.
 
 Turning the switch on (a change from off to on) lowers the blind at once
