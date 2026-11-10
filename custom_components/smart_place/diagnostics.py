@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.components.diagnostics import REDACTED, async_redact_data
 
 from .const import CONF_TOKEN
 
@@ -29,6 +29,9 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SmartPl
     state = asdict(data.state)
     # Internal buffer of a reply that is still arriving.
     state.pop("_range_pending")
+    # A plan label can be an installation tag.
+    for plan in state["plans"].values():
+        plan["label"] = REDACTED
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "client": {

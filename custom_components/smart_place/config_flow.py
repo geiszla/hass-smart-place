@@ -67,7 +67,7 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=probatio.Schema({probatio.Required(CONF_TOKEN): str}),
             errors=errors,
-            # hassfest forbids literal URLs in strings.json; the example
+            # hassfest forbids literal URLs in translation strings; the example
             # URL is injected here instead (strings reference it as {url}).
             description_placeholders={"url": f"{DISCOVERY_ORIGIN}/Start5?..."},
         )

@@ -507,7 +507,7 @@ def test_log_filter_scrubs_url_infoboard_query() -> None:
     assert "<REDACTED>" in record.getMessage()
 
 
-def test_scrub_token_helper_idempotent() -> None:
+def test_scrub_secrets_is_idempotent() -> None:
     raw = "GET /Start5?abcdef and TOKEN=xyz123"
     once = scrub_secrets(raw)
     twice = scrub_secrets(once)

@@ -248,11 +248,10 @@ class SmartPlaceState:
 
     Each field is ``None`` / empty until the first matching frame
     arrives. Discovery is observation-based: a ``WINDALARM<2>`` push
-    registers zone 2 in ``wind_alarms``. The integration sets up
-    entities after ``wait_for_bootstrap`` plus a brief observation
-    window (see ``__init__.py``); IDs that arrive after platforms have
-    been forwarded won't materialise as entities until HA reloads the
-    entry.
+    registers zone 2 in ``wind_alarms``. The integration adds an entity
+    when its id first shows up here — normally at setup, after
+    ``wait_for_bootstrap`` plus a brief observation window (see
+    ``__init__.py``), later for anything that arrives later.
 
     Indoor temperatures (``TEMPIST<N>``) are only surfaced when a
     matching ``ClimateConfig`` zone exists in ``climate_zones`` — the
