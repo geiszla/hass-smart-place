@@ -28,6 +28,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 import probatio
 
 from .const import (
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
 
     from .dashboard import SmartPlaceDashboard
     from .smart_place_client import BlindConfig, CommandDefinition, LevelGroup, LightConfig
+    from .smart_place_client.plan import Point
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -319,16 +321,28 @@ def _suggested_area(
     return data.state.climate[zone_id].room
 
 
+def _light_device(entry: SmartPlaceConfigEntry, light: LightConfig) -> tuple[tuple[str, str], Point | None]:
+    """Return the device identifier of a light or socket and, if it is placed, its marker centre on the plan."""
+    centre = light_centre(light.left, light.top) if light.left is not None and light.top is not None else None
+    return (DOMAIN, f"{entry.entry_id}_light_{light.id}"), centre
+
+
+def _blind_device(entry: SmartPlaceConfigEntry, blind: BlindConfig) -> tuple[tuple[str, str], Point | None]:
+    """Return the device identifier of a blind and, if it is placed, its marker centre on the plan."""
+    centre = blind_centre(blind.left, blind.top) if blind.left is not None and blind.top is not None else None
+    return (DOMAIN, f"{entry.entry_id}_blind_{blind.id}"), centre
+
+
 def light_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, light: LightConfig) -> DeviceInfo:
     """Return the device of one light or socket.
 
     One device per light, named with the vendor name; its single entity
     takes the device name. The area is only a suggestion: HA applies it
-    when it creates the device and never afterwards.
+    when it creates the device. Afterwards only a rename in the vendor
+    system can move the device (``_async_follow_renames``).
     """
-    identifier = (DOMAIN, f"{entry.entry_id}_light_{light.id}")
+    identifier, centre = _light_device(entry, light)
     data.device_identifiers.add(identifier)
-    centre = light_centre(light.left, light.top) if light.left is not None and light.top is not None else None
     return DeviceInfo(
         identifiers={identifier},
         name=light.name,
@@ -341,9 +355,8 @@ def light_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, light:
 
 def blind_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, blind: BlindConfig) -> DeviceInfo:
     """Return the device of one blind (see ``light_device_info``)."""
-    identifier = (DOMAIN, f"{entry.entry_id}_blind_{blind.id}")
+    identifier, centre = _blind_device(entry, blind)
     data.device_identifiers.add(identifier)
-    centre = blind_centre(blind.left, blind.top) if blind.left is not None and blind.top is not None else None
     return DeviceInfo(
         identifiers={identifier},
         name=blind.name,
@@ -352,6 +365,42 @@ def blind_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, blind:
         suggested_area=_suggested_area(entry, data, blind.name, centre, blind.plan_id),
         via_device_id=data.main_device_id,
     )
+
+
+@callback
+def _async_follow_renames(hass: HomeAssistant, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
+    """Give every light, socket and blind that was renamed in the vendor system its new name.
+
+    Run after each complete main-menu reply. The device's area follows to
+    the one suggested for the new name only while the device is still in
+    the one suggested for the old name ("no suggestion" matches "no
+    area"): an area the user chose is kept. The name a user gave the
+    device in Home Assistant and the entity ids are not touched.
+    """
+    devices = dr.async_get(hass)
+    areas = ar.async_get(hass)
+
+    def in_area(device: dr.DeviceEntry, area_name: str | None) -> bool:
+        if area_name is None:
+            return device.area_id is None
+        area = areas.async_get_area_by_name(area_name)
+        return area is not None and device.area_id == area.id
+
+    for (identifier, centre), listed in (
+        *((_light_device(entry, light), light) for light in data.state.lights.values()),
+        *((_blind_device(entry, blind), blind) for blind in data.state.blinds.values()),
+    ):
+        device = devices.async_get_device_by_identifier(identifier, entry.entry_id)
+        if device is None or device.name == listed.name:
+            continue
+        assert device.name is not None
+        old_area = _suggested_area(entry, data, device.name, centre, listed.plan_id)
+        new_area = _suggested_area(entry, data, listed.name, centre, listed.plan_id)
+        area_id: str | UndefinedType | None = UNDEFINED
+        if new_area != old_area and in_area(device, old_area):
+            area_id = None if new_area is None else areas.async_get_or_create(new_area).id
+        _LOGGER.info("%s was renamed to %s in Smart Place", device.name, listed.name)
+        devices.async_update_device(device.id, name=listed.name, area_id=area_id)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -498,6 +547,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         # server re-broadcasts the full sensor set ~2-3x/s even when nothing
         # changes.
         status = (data.is_healthy, client.state.main_menu_loaded)
+        if status[1] and not notified_status[1]:
+            # This connection's list of devices is complete.
+            _async_follow_renames(hass, entry, data)
         if changed or status != notified_status:
             data.async_notify_listeners()
         notified_status = status

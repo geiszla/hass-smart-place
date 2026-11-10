@@ -271,7 +271,6 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
         """Wire the blind's id, unique_id and device."""
         self._data = data
         self._blind_id = blind.id
-        self._blind_name = blind.name
         self._attr_unique_id = f"{entry.entry_id}_lower_after_alarm_{blind.id}"
         self._attr_device_info = blind_device_info(entry, data, blind)
         self._lowering = LowerAfterAlarm()
@@ -279,6 +278,10 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     def _value(self) -> BlindValue | None:
         return self._data.state.blind_values.get(self._blind_id)
+
+    def _blind_name(self) -> str:
+        """Return the blind's current vendor name, for the log."""
+        return self._data.state.blinds[self._blind_id].name
 
     @property
     def is_on(self) -> bool:
@@ -322,12 +325,12 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     async def _async_lower_after_alarm(self) -> None:
         """Send the down command. Nobody called for it, so a failure is logged, not raised."""
-        _LOGGER.info("Lowering %s (blind %d): its weather alarm ended", self._blind_name, self._blind_id)
+        _LOGGER.info("Lowering %s (blind %d): its weather alarm ended", self._blind_name(), self._blind_id)
         try:
             await self._async_issue(Commands.BlindDown, self._blind_id)
         except HomeAssistantError as err:
             _LOGGER.warning(
-                "%s (blind %d) was not lowered after its weather alarm: %s", self._blind_name, self._blind_id, err
+                "%s (blind %d) was not lowered after its weather alarm: %s", self._blind_name(), self._blind_id, err
             )
 
     @callback
@@ -360,7 +363,7 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
         if blind_can_be_lowered(self._value()):
             _LOGGER.info(
                 "Lowering %s (blind %d): 'Lower after weather alarm' was turned on and the blind is not down",
-                self._blind_name,
+                self._blind_name(),
                 self._blind_id,
             )
             await self._async_issue(Commands.BlindDown, self._blind_id)
