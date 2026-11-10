@@ -12,11 +12,14 @@ without running Home Assistant.
   - [Troubleshooting](#troubleshooting)
 - [What is supported](#what-is-supported)
 - [What is not supported](#what-is-not-supported)
+- [Devices and cards](#devices-and-cards)
+  - [Scenes and the voice assistant](#scenes-and-the-voice-assistant)
 - [Options](#options)
 - [Protected sockets](#protected-sockets)
 - [Blinds and weather alarms](#blinds-and-weather-alarms)
   - [Lower after weather alarm](#lower-after-weather-alarm)
 - [Rooms](#rooms)
+  - [When a device is renamed in Smart Place](#when-a-device-is-renamed-in-smart-place)
 - [Plan dashboard](#plan-dashboard)
 - [Actions](#actions)
 - [Development](#development)
@@ -132,21 +135,15 @@ Open **Settings → Devices & services → Smart Place**. A healthy install show
 
 - A **Smart Place** device with the diagnostic sensor **Connection**, which
   reads *Connected*. It stays available while the connection is down, so an
-  automation can watch it (for example, notify you when it turns off). The
-  floor plan image is on this device too.
+  automation can watch it (for example, notify you when it turns off).
 - One device per **heating zone**, named after the room: a climate entity, the
   temperature sensor and a humidity sensor that is disabled by default.
 - One device per **light**, **socket** and **blind**, named as in the Smart
   Place app. Each blind's device also has the switch
   ["Lower after weather alarm"](#lower-after-weather-alarm).
-- One device per group of numbered scenes, such as **Ventilation** (a fan).
-- The devices **Groups** (group buttons), **Intercom** (doorbell mute),
-  **Weather**, **Energy**, **Cameras** and **Doors**, each with "Smart Place"
-  in front of its name.
-- **Scenes** and scene switches, which have no device. They are named like the
-  scene alone ("Night"), so that the voice assistant recognises them. Find
-  them in the integration's entity list or on the Scenes view of the
-  dashboard.
+- The devices **Scene**, **Ventilation**, **Weather**, **Energy**, **Camera**
+  and **Door**. What is on which device: see
+  [Devices and cards](#devices-and-cards).
 - Four **door** buttons (Front door, Ground floor entrance, Garage entrance,
   Mailbox). They open real doors, as the buttons in the Smart Place app do;
   disable the ones you do not want in Home Assistant.
@@ -156,6 +153,12 @@ Open **Settings → Devices & services → Smart Place**. A healthy install show
 Entities appear when the Smart Place server first reports their device or
 value, normally all at once when the integration starts. A device you add in
 the Smart Place app later appears after the next reconnect or restart.
+
+After a start, every entity except Connection and the electricity price is
+*unavailable* until Smart Place has sent all its values once. Smart Place
+sends them up to some seconds after the list of devices, and the integration
+waits for them (ten seconds at most). So no entity shows a half-read state
+first: an intercom that seems to ring, a parcel that seems to arrive.
 
 ### Updating
 
@@ -196,10 +199,15 @@ existing entities keep their ids, and the [options](#options) stay.
 - **"Re-authenticate Smart Place" under Repairs.** Smart Place no longer
   accepts the token. Get the current one (step 1) and enter it there.
 - **An entity is missing.** Some entities are disabled by default, for
-  example the door buttons, the "All lights" button, scenes the Smart Place
-  app does not display and the humidity sensors. Enable them in the
+  example scenes the Smart Place app does not display, the humidity sensors
+  and the button of a blinds group other than "All". Enable them in the
   integration's entity list. A device added in the Smart Place app appears
   after the next reconnect or restart.
+- **A socket is missing from dashboards and from "turn off" for its room.**
+  It is a [protected socket](#protected-sockets): its switch is hidden on
+  purpose.
+- **There is no "Smart Place" dashboard, or it opens another one.** See the
+  note on the address under [Plan dashboard](#plan-dashboard).
 - **Logs.** Settings → System → Logs. The token and the installation's
   remote-access passwords are removed from everything the integration writes.
   Home Assistant shows warnings and errors by default. The integration writes
@@ -224,14 +232,15 @@ again whenever the server lists a new one. Nothing is configured per home.
 | --- | --- | --- |
 | Light (switch, LED) | `light`, on/off | One device per light |
 | Light (dimmer) | `light` with brightness | Built from the vendor web app's code; not tested on a real dimmer |
-| Socket | `switch` (outlet) | A switch, so "all lights off" does not cut socket power. Can be protected against switching: see [Protected sockets](#protected-sockets) |
+| Socket | `switch` (outlet) | A switch, so a call for all lights (`light.turn_off`) does not cut socket power. The integration's own "All lights off" button does switch sockets. Can be protected against switching: see [Protected sockets](#protected-sockets) |
 | Blind (slatted, fabric, awning) | `cover` | Open, close, reported position. Slatted blinds: "tilt open" moves to the vent position. No command while a weather alarm blocks the blind: see [Blinds and weather alarms](#blinds-and-weather-alarms) |
 | Per blind: "Lower after weather alarm" | `switch` (configuration) | A setting of the integration, off by default: see [Lower after weather alarm](#lower-after-weather-alarm) |
 | Heating zone | `climate` | Heat / Off, target 19–26 °C in whole degrees, measured temperature, heating or idle |
 | Scene that only triggers | `scene` | Usable from the voice assistant |
 | Scene with on/off state | `switch` | |
 | Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds, if exactly one of them is on when the integration first sees them. Otherwise they become switches |
-| Group buttons of the lights and blinds pages | `button` | "All blinds up", "All blinds down"; "All lights" and the button of a blinds group other than "All" are disabled by default |
+| All lights | `button` | "All lights off" and "All lights on" switch every light and socket that is not in that state yet, one after the other. A [protected socket](#protected-sockets) is never switched. Smart Place's own "All" button of the lights page is not used: what it does is not known |
+| Group buttons of the blinds page | `button` | "All blinds up", "All blinds down"; the button of a blinds group other than "All" is disabled by default |
 | Doorbell mute | `switch` | |
 | Door openers | `button` | They open real doors; not offered to the voice assistant by default |
 | Floor plan | `image` and a dashboard | See [Plan dashboard](#plan-dashboard) |
@@ -280,6 +289,56 @@ Good to know:
 - RGB lights, fan coils, alarm devices, sauna.
 - Two-way audio with the intercom, and a live doorbell signal.
 
+## Devices and cards
+
+Home Assistant's automatic dashboard shows one card per device that has no
+area, and puts a device with an area on the card of that area. The
+integration's devices are named for that:
+
+| Device | What is on it |
+| --- | --- |
+| **Smart Place** | Connection, floor plan image, doorbell mute, "All lights off", "All lights on", the blinds group buttons, intercom caller, parcel PIN, info board |
+| One per heating zone, named after the room | Thermostat, temperature, humidity |
+| One per light, socket and blind, named as in the Smart Place app | The light, switch or cover; for a blind also "Lower after weather alarm" |
+| **Scene** | Every scene and every scene switch |
+| **Ventilation** (one per group of numbered scenes, named after the group) | The fan |
+| **Weather** | Outdoor temperature, wind speed, weather alarms |
+| **Energy** | Meters, electricity price and cost |
+| **Camera** | The intercom cameras |
+| **Door** | The door buttons |
+
+The devices of lights, sockets, blinds and heating zones get an area (see
+[Rooms](#rooms)). The others have none on purpose, so that a command for a
+whole area cannot trigger a scene or open a door.
+
+Home Assistant builds an entity's full name from the device name and the
+entity name: "Weather Outdoor temperature", "Door Mailbox", "Scene Night". A
+new install gets its entity ids from these names
+(`sensor.weather_outdoor_temperature`, `button.door_mailbox`).
+
+On an install from before these names, the devices are renamed by themselves
+at the first start; **entity ids do not change**. Two devices of that
+version, "Smart Place Groups" and "Smart Place Intercom", are no longer used
+and stay behind empty: delete them on their device pages. The old "All
+lights" button stays behind as an entity that is no longer provided: delete
+it in the entity list.
+
+### Scenes and the voice assistant
+
+A scene is called "Scene Night" in Home Assistant, but you say "Night". The
+voice assistants do not go by the name: they go by the entity's list of
+**aliases**. By default that list holds one entry that stands for the full
+name. When the integration adds a scene or a scene switch and the list is
+still that default, it replaces it with the scene's own name ("Night").
+
+- A list you edited is never touched. This includes a list that still has the
+  default entry next to an alias of your own; the default entry then reads
+  "Scene Night".
+- The alias is set once. If the scene is renamed in Smart Place later, change
+  the alias yourself: entity settings → **Voice assistants**.
+- Existing entity ids stay (`scene.night`). A scene created on a new install
+  gets an id with the device in it (`scene.scene_night`).
+
 ## Options
 
 *Settings → Devices & services → Smart Place → Configure* has two settings:
@@ -306,23 +365,36 @@ To protect a socket, select it under **Protected sockets** in the
 
 While a socket is protected:
 
+- **Its switch is hidden in Home Assistant.** Home Assistant leaves a hidden
+  entity out of its automatic dashboards and out of every call for an area, a
+  device, a floor or a label. So "turn off" for the socket's room
+  (`light.turn_off` and `switch.turn_off` with the area, or
+  `homeassistant.turn_off`) switches the room's lights and other sockets and
+  does not reach the protected one. The entity still exists: find it in the
+  integration's entity list (change the filter to show hidden entities) and
+  use it in dashboards and automations as before.
 - "Turn on", "turn off" and "toggle" for its switch do nothing. No command is
   sent and no error is shown; a toggle in the UI flips back by itself. The
   integration writes one line to the log at level INFO
-  (`<entity> is protected: LightToggle not sent`).
-- A call for several entities (`switch.turn_off` for all switches or for an
-  area, `homeassistant.turn_off`) switches the others and skips the protected
-  socket.
+  (`<entity> is protected: LightToggle not sent`). This is what stops a call
+  that names the switch, `switch.turn_off` for all switches
+  (`entity_id: all`, which includes hidden entities) and a voice assistant
+  the socket is exposed to (hiding does not change that setting).
+- The buttons "All lights off" and "All lights on" do not switch it.
 - Its switch has the attribute `protected: true` and a lock icon. Every other
   socket has `protected: false`.
-- On the plan dashboard its marker is a lock, and a tap opens the details
-  instead of toggling.
+- On the plan dashboard its marker is a lock and a tap does nothing. A long
+  press opens the details.
 - The switch still shows the real state of the socket.
 
-**What the integration cannot prevent.** Everything that is decided inside
-Smart Place can still switch a protected socket: a Smart Place scene, the "All
-lights" group, a wall button and the Smart Place app. This includes the scene
-entities and the "All lights" button of this integration: each sends one
+The integration hides the switch when you protect the socket and at every
+start. It shows the switch again when you remove the protection, unless you
+hid it yourself. If you make a protected socket's switch visible by hand, it
+stays visible until the next start; it stays protected.
+
+**What can still switch a protected socket.** Everything that is decided
+inside Smart Place: a Smart Place scene, a wall button and the Smart Place
+app. This includes the scene entities of this integration: each sends one
 command, and Smart Place decides which devices it switches. Check that no
 scene you use contains the socket.
 
@@ -365,8 +437,9 @@ all values again; in the moment before the blind's value has arrived,
 `blocked` keeps the value it had before the connection was lost. So a
 reconnect during an alarm does not look like a new alarm, and an alarm that
 ended while the connection was down gives one change from `true` to `false`
-when the new value arrives. Right after a start of Home Assistant, before any
-value was received, `blocked` is `false`.
+when the new value arrives. Right after a start of Home Assistant the blind
+is *unavailable* until Smart Place has sent its values; if they do not come
+within ten seconds, `blocked` is `false` until they do.
 
 On the plan dashboard a blocked blind shows a rain, wind or hail icon in place
 of its position (a warning sign for any other alarm). Its buttons are grey and
@@ -429,9 +502,11 @@ If the heating zone's device already has an area in Home Assistant, that area
 is suggested (also when you renamed it). Otherwise the zone's room name is
 used, and Home Assistant creates the area.
 
-The suggestion is made **once, when Home Assistant creates the device**. The
-integration never changes the area of a light, socket or blind afterwards. To
-change it, open the device in Home Assistant and pick another area.
+The suggestion is made **when Home Assistant creates the device**. To change
+the area, open the device in Home Assistant and pick another one. The
+integration changes the area of a light, socket or blind afterwards in one
+case only: when the device is renamed in Smart Place and you have not chosen
+another area for it (next section).
 
 On an install that existed before this version, the devices of the heating
 zones are already there. A heating-zone device without an area gets the area
@@ -445,6 +520,32 @@ no area on purpose, so that a command for a whole area cannot trigger them.
 The area also ends up in the entity ids of new entities. To avoid that, see
 [2. Before the first start: entity ids](#2-before-the-first-start-entity-ids).
 
+### When a device is renamed in Smart Place
+
+The integration compares the names of the lights, sockets and blinds each
+time it connects to Smart Place (at a start and after every reconnect). For a
+device whose name changed there:
+
+- The device in Home Assistant gets the new name, and with it the names of
+  its entities. No restart is needed.
+- If the device is still in the area that was suggested for the old name, it
+  moves to the area suggested for the new name. "No area" counts as the
+  suggestion for a name that fits no room. A device that you moved to
+  another area, or took out of its area, stays where you put it.
+- A name you gave the device in Home Assistant stays; it hides the Smart
+  Place name as before.
+- **Entity ids never change by themselves**: automations and dashboards keep
+  working. A light renamed from "Corridor lights" to "Hall lights" is still
+  `light.corridor_lights`. To get ids from the new names, open the device in
+  Home Assistant and choose **⋮ → Recreate entity IDs**, or select the
+  entities under *Settings → Devices & services → Entities* and choose
+  **Recreate entity IDs of selected**. Then replace the old ids in your
+  automations, scripts and dashboards yourself. The plan dashboard follows
+  by itself.
+
+Scenes, heating zones and the ventilation group take a new Smart Place name
+at the next start of Home Assistant. Their areas and aliases are not changed.
+
 ## Plan dashboard
 
 The integration adds a read-only dashboard **Smart Place** to the sidebar. It
@@ -454,17 +555,32 @@ because the markers would overlap otherwise:
 
 - **Lights** — an icon per light and socket. Tap toggles, hold opens the
   details. A [protected socket](#protected-sockets) shows a lock, and a tap
-  opens the details.
+  does nothing.
 - **Blinds** — the position of each blind, and buttons for down, vent (slatted
   blinds) and up. A [blocked blind](#blinds-and-weather-alarms) shows its
   alarm instead, with grey buttons.
 - **Climate** — measured and target temperature per zone, and − / + buttons.
-- **Scenes** — scenes, scene switches, ventilation, doorbell mute and the
-  group buttons.
+- **Scenes** — scenes, scene switches, ventilation, doorbell mute, "All
+  lights off", "All lights on" and the blinds group buttons.
+- **Intercom** — one block per door: its name, the cameras that show it and a
+  wide button that opens the door. A camera is put with the door whose name
+  starts like the camera's ("Garage camera" and "Garage entrance camera" both
+  go with "Garage entrance"). Cameras that fit no door are listed under
+  "Cameras". The view is there while at least one door button or camera is
+  enabled. **A tap on the button opens the real door at once**, without a
+  question.
 
 Devices without a usable position on the plan are listed below the plan.
 Disabled entities are left out. With several floor plans the views repeat per
 plan.
+
+The dashboard's address is `/smart-place`, and a view has its own address,
+for example `/smart-place/intercom`. If that address is already taken — a
+dashboard of your own called "Smart Place" gets the same one — the
+integration uses `/smart-place-plan` instead. Both dashboards are then in the
+sidebar under the same title; rename yours if that confuses. Only when both
+addresses are taken there is no dashboard, and the integration logs one
+warning.
 
 To use the views in a dashboard of your own, run the action
 `smart_place.get_plan_config` (*Developer tools → Actions*). It returns the

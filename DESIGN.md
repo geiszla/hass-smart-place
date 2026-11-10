@@ -866,9 +866,21 @@ and ``tests/fixtures/scene-echo.ndjson``.
 **General**
 
 - All config frames arrive in the reply to ``GiveMeMainmenu``, before
-  ``GiveMeMainMenuFinished`` [L]. Value frames for every device follow
-  about 0.15–0.5 s after ``SocketConnected:1``; no marker ends that
-  burst [L].
+  ``GiveMeMainMenuFinished`` [L].
+- **The value burst.** The values of every device follow that reply in
+  one block of about 100 frames within a few milliseconds, with no marker
+  at its start or end [L]. Its delay varies: 0.1–0.2 s after the reply in
+  three captures, **4.8 s** in a fourth, and a reload on the box showed
+  the late case too (2026-11-10). In between only chart replies arrive.
+  The order inside the block was the same every time: ``INFOBOARD<n>``,
+  ``leuchte<n>``, ``JALICO<n>``, ``TEMPSOLL<n>``, ``TEMPIST<n>``,
+  ``FEUCHTEIST<n>``, ``KLIMASINFO<n>``, ``CHART<id>STAND<n>``,
+  ``WINDGESCHWINDIGKEIT``, ``JALWARTUNG``, ``REGEN``, ``HAGEL``,
+  ``TEMPOUT``, ``WINDALARM<n>``, ``SPRECHEN<n>``, ``MUTE<n>``,
+  ``CALLINFO<n>``, ``LEUCHTENZENTRAL<n>``, …, ``INFOBOARD<n>INHALT``,
+  ``PERSINFO``, ``PACKETBOX<n>``, …, ``SZENEN<n>``, ``CHARTZIEL<n>``. So
+  the control values of every light, blind and heating zone come first,
+  and the ring flag of an intercom two frames before its caller.
 - The server replays all values to every session whenever any client
   connects, and rebroadcasts unchanged values to the primary session about
   2–3 times per second [L]. Real changes arrive as single frames.
@@ -932,7 +944,9 @@ and ``tests/fixtures/scene-echo.ndjson``.
 
 - ``UnterMenuLeuchten<n>:name,top,left,icon,OnOn|OnOff,<group message>,Uebersicht<plan>``;
   the group message (``LEUCHTENZENTRAL<n>``) is sent back as a command
-  without value. What it does (all off, all on, toggle) is [U].
+  without value. What it does (all off, all on, toggle) is [U]. The
+  integration no longer sends it (user decision, 2026-11-10; see
+  "button" in §11): ``Commands.GroupMessage`` stays declared only.
 - ``UnterMenuJalousien<n>:...,JALZENTRAL<n>,Uebersicht<plan>``. The
   vendor app gives only the sub-menu named ``All`` the two buttons that
   send ``JALUPZENTRAL<plan>`` and ``JALDOWZENTRAL<plan>`` (the number is
@@ -983,17 +997,64 @@ with `via_device_id`: one device per heating zone
 (`<entry_id>_zone_<n>`), one per light or socket (`<entry_id>_light_<n>`),
 one per blind (`<entry_id>_blind_<n>`), one per level group
 (`<entry_id>_level_group_<first scene id>`, named after the group alone,
-such as "Ventilation"), and category devices (`<entry_id>_cat_<name>`:
-Weather, Energy, Groups, Intercom, Doors, Cameras). Scenes and scene
-switches have no device: Home Assistant names an entity "<device>
-<entity>", and the voice assistant has to match a spoken "Night". The
-deprecated identifier-based `via_device` must not be used: Home Assistant
-raises on it whenever it cannot attribute the call to an integration,
-which made the two tariff sensors unavailable (IMPLEMENT.md, 2026-11-10).
+such as "Ventilation"), and category devices (`<entry_id>_cat_<key>`).
+The deprecated identifier-based `via_device` must not be used: Home
+Assistant raises on it whenever it cannot attribute the call to an
+integration, which made the two tariff sensors unavailable (IMPLEMENT.md,
+2026-11-10).
+
+**Device names and cards** (user decisions, 2026-11-10, second round).
+The user reads Home Assistant's automatic dashboard: one card per device
+without an area, titled with the device name. The category devices are
+therefore named in the singular and without "Smart Place"; their
+identifiers keep the key they were created with:
+
+| Identifier key | Name | Entities |
+| --- | --- | --- |
+| `cat_weather` | Weather | outdoor temperature, wind speed, weather alarms, blinds maintenance |
+| `cat_energy` | Energy | chart sensors, price, cost, tariff energy |
+| `cat_doors` | Door | the door buttons |
+| `cat_cameras` | Camera | the intercom cameras |
+| `cat_scenes` | Scene | every scene and every on/off scene switch (new) |
+
+The main device "Smart Place" carries the Connection sensor, the plan
+image, the intercom, parcel and info-board sensors, the doorbell mute, the
+two "all lights" buttons and the blinds group buttons. The category
+devices "Groups" and "Intercom" of the first round are no longer used;
+nothing migrates them (they stay behind empty and can be deleted).
+
+**Scenes and the spoken name** (user decision, 2026-11-10). On a device
+Home Assistant's full name of a scene is "<device> <entity>" ("Scene
+Night"). The voice assistants do not read that name: they read the
+entity's alias list (`er.async_get_entity_aliases`), whose default
+`[er.COMPUTED_NAME]` stands for the full name. When a scene or scene
+switch is added and its alias list is exactly that default,
+`entity.async_keep_spoken_name` sets it to `[<the scene's own name>]`. A
+list the user edited is never touched, also not one that still contains
+`COMPUTED_NAME` next to other aliases. Limits: the alias is set once, so a
+scene renamed in the vendor system later keeps the old alias; a scene
+created on a new install gets an entity id with the device in it
+(`scene.scene_night`), existing ids stay. The Scenes view of the dashboard
+asks the frontend for the entity's own name per row
+(`name: {type: entity}`), so "Scene" is not repeated on every line.
 
 **Areas.** Lights, sockets and blinds get `suggested_area` from the
 heating zones (`smart_place_client.rooms`): name match first, nearest
-plan marker second. Category devices have no area on purpose.
+plan marker second. Category devices and the main device have no area on
+purpose.
+
+**Renames in the vendor system** (2026-11-10). After every complete
+main-menu reply (`_on_frame`, on the change of `main_menu_loaded`, so at
+setup and on each reconnect) `_async_follow_renames` compares the registry
+name of each light, socket and blind device with the vendor name. For a
+device that differs it writes the new name and, only if the device is
+still in the area `_suggested_area` gives for the old name, the area it
+gives for the new name ("no suggestion" matches "no area"; a suggested
+area that does not exist matches nothing). An area the user chose is
+therefore kept. `name_by_user` and entity ids are never written; Home
+Assistant rewrites the friendly names itself when the device name
+changes. Not covered: scenes, heating zones and level groups take a new
+name when their entity is added again (restart or reload), as before.
 
 **Discovery** is dynamic (`entity.async_add_discovered`): every platform
 maps what the state snapshot holds to entity factories, and an entity is
@@ -1011,18 +1072,50 @@ they are therefore not created from half a reply. The Connection sensor
 and the other entities that need nothing of that kind are created at
 once. Nothing is removed automatically.
 
-The value frames (`WINDALARM<n>`, `SPRECHEN<n>`, `MUTE<n>`) arrive after
-the main-menu reply. `devices_listed` therefore only turns true
-`SETUP_OBSERVATION_WINDOW` (2 s) after the first main-menu reply
-(`SmartPlaceData.first_reply_observed`), so a name that depends on a
-count sees the whole count — at setup, and also when the first bootstrap
-is slower than the setup waits (2026-11-10; before, the slow case added
-an entity per frame, and the first wind zone, intercom or mute could get
-the name without its number). The window is started by the reply itself
-(`_on_frame`), setup waits for its end, and a connection that drops
-during the window starts it again with the next reply. Only the first
-reply waits: after a reconnect a new device is added as soon as that
-connection's main-menu reply is complete.
+The value frames (`WINDALARM<n>`, `SPRECHEN<n>`, `MUTE<n>`, ...) arrive
+in one burst after the main-menu reply (§10 "The value burst").
+`devices_listed` therefore only turns true `SETUP_OBSERVATION_WINDOW`
+(2 s) after that burst began (`SmartPlaceData.first_reply_observed`), so
+a name that depends on a count sees the whole count and a state built
+from several frames is complete when its entity is created.
+
+*When the window starts* (2026-11-10, second round). It used to start at
+the main-menu reply. With a burst 4.8 s after the reply it ended before
+any value was in, and the entities were then created frame by frame: the
+intercom sensor at `SPRECHEN1:ring` with the state "unknown", and
+`CALLINFO1` two frames later made it "Front door". The user's automation
+took that for a ring (a real ring is exactly unknown → caller). The window
+now starts when `SmartPlaceState.control_values_received` turns true:
+every listed light, blind and heating zone has its control value. These
+values come first in the burst, so the rest of it lands inside the
+window. The user's proposal was "the first control value frame"; a single
+light that somebody switches between the reply and the burst would have
+started the window too early, and all listed devices having a value only
+happens with the burst (control values are cleared on every disconnect).
+Two fallbacks keep the devices from being withheld: an installation
+without lights, blinds and zones has nothing to wait for, so the reply
+starts the window as before; and when the values of some listed device
+do not come within `VALUE_BURST_TIMEOUT` (10 s) after the reply, the
+entities are created without them and one warning is logged. In that
+last case a burst that comes even later is folded frame by frame, as
+before this fix.
+
+*Nothing shows a state before that.* `SmartPlacePushEntity.available`
+also requires `first_reply_observed`. The entities that exist from the
+start (parcel PIN, personal info, door buttons, cameras) and those created
+from their own value during the burst (rain, temperatures, info board) are
+unavailable until the window is over, so none goes from "unknown" to its
+first value. Exceptions as before: the Connection sensor, the price
+sensor and a fetched plan image. Only the first burst of a run is waited
+for. After a reconnect the entities are available as soon as the
+connection is healthy: intercom, parcel and sensor values are kept across
+a disconnect, and the control values read "unknown" until that
+connection's burst (user decision of the first round).
+
+Setup waits for the end of the window (up to `SETUP_BOOTSTRAP_TIMEOUT` +
+`SETUP_OBSERVATION_WINDOW`), a connection that drops before it starts the
+wait again with the next reply, and after a reconnect a new device is
+added as soon as that connection's main-menu reply is complete.
 
 **Options** (2026-11-10). The config entry has options, set in an options
 flow (`config_flow.SmartPlaceOptionsFlow`) and by the "Lower after
@@ -1074,6 +1167,13 @@ allocation (billed ~20 % cheaper), unknowable live — cost reads
 +0.3…+2.3 % high (~0.4 CHF/month in 2025). **Yearly manual step:** add
 the next year's `TariffYear` each September; a missing year falls back
 to the latest known one with a `rates_stale` attribute + setup warning.
+
+The server sends a range bucket with the float noise of its own
+subtraction (`2.35699999999997`). The two tariff energy sensors and the
+kWh attributes of the daily cost sensor show the bucket rounded to six
+decimals (2026-11-10). `SmartPlaceState.chart_today_buckets` keeps the
+number as received: the cost is rounded to 0.0001 CHF, and rounding its
+inputs first moves it by one such step in some cases (a test pins one).
 
 Chart device-class and native unit are derived from the
 `ChartDefinition` frames that arrive during `GiveMeMainmenu` (the
@@ -1155,9 +1255,9 @@ their registry entries, in the `binary_sensor` domain only).
 | ------ | ------ | ----- |
 | `INHALTLeuchten<N>` kind `schalter` / `led` + `leuchte<N>` | `SmartPlaceLight` | `ColorMode.ONOFF`; on = level above 0. |
 | kind `dimmer` | `SmartPlaceDimmer` | `ColorMode.BRIGHTNESS`; a brightness sends `DIMleuchte<N>:<level>`. Untested on a real dimmer. |
-| kind `steckdose` | `SmartPlaceSocket` (`switch`, `OUTLET`) | A switch so that "all lights off" does not cut socket power. |
-| `INHALTSZENEN<N>` type `OnOff` + `SZENEN<N>` | `SmartPlaceSceneSwitch` | Not for members of a level group. |
-| `MUTE<N>` | `SmartPlaceMuteSwitch` | On = doorbell muted. |
+| kind `steckdose` | `SmartPlaceSocket` (`switch`, `OUTLET`) | A switch so that a call for all lights (`light.turn_off`) does not cut socket power. Hidden while protected. |
+| `INHALTSZENEN<N>` type `OnOff` + `SZENEN<N>` | `SmartPlaceSceneSwitch` | Not for members of a level group. On the "Scene" device. |
+| `MUTE<N>` | `SmartPlaceMuteSwitch` | On = doorbell muted. On the main device. |
 | `INHALTJalousien<N>` (option `lower_after_alarm`) | `SmartPlaceLowerAfterAlarmSwitch` | A setting per blind, not a vendor state; see "switch: Lower after weather alarm". |
 
 **Protected sockets** (user decision, 2026-11-10: set in the options; a
@@ -1181,9 +1281,26 @@ device family to the protected ids; only `DEVICE_LIGHT` is filled today,
 another family would be one more entry. The socket's switch has the
 attribute `protected` (true / false) and, while protected, the icon
 `mdi:lock`. Not covered, by design: commands that reach the socket
-inside the vendor system (scenes, the "All lights" group message, wall
-buttons, the vendor app) — also when this integration's scene entities or
-group button send them.
+inside the vendor system (scenes, wall buttons, the vendor app) — also
+when this integration's scene entities send them. The vendor's "All
+lights" group message was such a command; the integration no longer
+sends it (see "button").
+
+**Hidden while protected** (user decision, 2026-11-10, second round).
+`SmartPlaceSocket._async_follow_protection` sets the entity registry's
+`hidden_by` to `INTEGRATION` when the socket becomes protected and clears
+it when the protection ends, if the integration set it. Checked in
+`helpers/target.py` of 2026.11.1: the expansion of an area, device, floor
+or label target leaves out every entry with `hidden_by` set, and the
+automatic dashboards leave hidden entities out too. So "turn off" for the
+socket's room does not call it at all. `entity_id: all` and a call that
+names the entity do include it; there the silent drop above is the second
+line of defence. The exposure to a voice assistant is a stored setting of
+its own and is not changed by hiding. The flag is applied when the entity
+is added and when the option changes (the write gate's fan-out, which the
+entry's update listener triggers), not on every update: the user may
+show a protected socket again until the next start. A flag the user set
+(`USER`) is never replaced or cleared.
 
 All of these only have a toggle command. `SmartPlaceToggleEntity`
 decides turn-on and turn-off against the effective state: the expected
@@ -1331,7 +1448,9 @@ complete main-menu reply: PIN flag other than `NoPw` → nothing; `OnOn` →
 `SmartPlaceScene` (activation sends `SZENEN<N>`; the latched flag is not
 exposed); `OnOff` → switch, unless it is one level of a level group. A
 scene the vendor app does not display gets its entity disabled by
-default.
+default. Scenes and scene switches sit on the device "Scene" and keep
+their own name as the spoken alias (see "Scenes and the spoken name"
+above).
 
 A level group is three or more on/off scenes whose names differ only in a
 trailing number 1..N, separated from the name by whitespace (compared
@@ -1360,9 +1479,10 @@ fetched; its timestamp moves only when the bytes change.
 ids into `picture-elements` views (positions in percent of the image
 size): Lights, Blinds, Climate, plus a Scenes view with built-in cards.
 Devices that cannot be placed are listed below the plan. A protected
-socket's marker gets the icon `mdi:lock` and `more-info` as its tap
-action (the builder takes the protected ids; the update listener
-refreshes the dashboard when the option changes). A blind's marker
+socket's marker gets the icon `mdi:lock` and no tap action (`none`; a
+long press still opens the details — it opened them on a tap until the
+second round of 2026-11-10; the builder takes the protected ids; the
+update listener refreshes the dashboard when the option changes). A blind's marker
 switches on the cover's attributes with `conditional` elements (the
 frontend compares an attribute as text, so `blocked` is matched against
 `"true"`): the direction buttons exist twice, with their action while
@@ -1376,6 +1496,40 @@ read-only sidebar dashboard through the lovelace integration's internal
 guards it so that a change in those internals disables the dashboard
 only. The action `smart_place.get_plan_config` returns the same
 configuration.
+
+**URL path** (2026-11-10, second round). The dashboard is registered at
+`smart-place`, or at `smart-place-plan` when that path already belongs to
+a dashboard or panel that is not ours (a storage dashboard the user
+called "Smart Place" gets the same path; the registration then failed
+with "Overwriting panel smart-place"). Only when both are taken the
+registration raises, and `__init__.py` logs its one warning. A second
+Smart Place entry gets no dashboard, as before. The dashboard object
+listens to entity-registry events from its creation; it is now created
+after the panel is registered, so a failed registration leaves no
+listener behind.
+
+**Intercom view** (2026-11-10, second round; modelled on a page of the
+user's own dashboard). `smart_place_client.intercom.intercom_view` builds
+a `sections` view (path `intercom`, at most three columns) when the entry
+has an enabled door button or camera: per door a `heading` card (name,
+and an icon chosen by a word of the name), a `picture-entity` card per
+camera of that door, and a wide `button` card whose tap action is
+`button.press` for the door button — without a confirmation, like the
+user's page. Which camera belongs to which door is not sent by the
+server. `camera_door` goes by the names: the camera's name without the
+word "camera" at its end and the door's name must start alike, word by
+word ("Garage camera" and "Garage entrance camera" → "Garage entrance");
+of several doors the one sharing most words wins, then the nearest in
+length, then the first. A camera that fits no door goes to a last block
+"Cameras". A door without a camera has heading and button only and
+shares its column with the next door that has one, which gives three
+columns for the four doors here. The four doors (key, name, command) are
+the table `intercom.DOORS`, which `button.py` held before; the view shows
+them in that order. `plan_view.py` passes the door buttons by that table
+and the cameras by `state.gsa_cameras` with the names from the entity
+registry (`original_name`). With an enabled door button the dashboard
+has this view from the start, so the placeholder view below only shows
+when every door button and camera is disabled.
 
 While no entity is known the dashboard has one placeholder view (the
 frontend opens a dashboard without views in edit mode, and this one
@@ -1396,14 +1550,29 @@ registry has them). `async_press` issues the command; if it
 cannot be sent the press raises a translated `HomeAssistantError`
 (`not_connected`) — there is no command queue.
 
-`SmartPlaceGroupButton`: per lights sub-menu one button that sends the
-sub-menu's group message (disabled by default, its effect is untested).
-The blinds sub-menu that covers its whole plan (group message
-`JALZENTRAL<plan>`) gets "all up" and "all down" (`JALUPZENTRAL<plan>` /
-`JALDOWZENTRAL<plan>`); any other blinds sub-menu gets one button that
-sends its own group message, disabled by default like the lights one. A
-group message is only sent back when it has the expected shape
-(`LEUCHTENZENTRAL<n>` for lights, a `JAL…<n>` frame name for blinds);
+`SmartPlaceAllLightsButton` (user decision, 2026-11-10, second round):
+"All lights off" and "All lights on" on the main device, enabled by
+default, created when the server lists at least one light or socket.
+The vendor's group message of the lights sub-menu is not used any more:
+nobody knows what it does, and a protected socket cannot be kept out of
+it. A press calls `light.turn_off` / `switch.turn_off` (or `turn_on`) for
+each light and socket entity of the entry whose state is the opposite
+one, one after the other, awaited, with the button's context. So each
+light goes through its own entity: the toggle rule, the expected state,
+the settle time and the guard of a protected socket apply as for a single
+press. Entities that are disabled, unknown or unavailable are skipped; a
+send that fails raises and ends the press. Sockets are included on
+purpose (user decision), unlike in Home Assistant's own calls for all
+lights. Names come from `translations/en.json`
+(`entity.button.all_lights_off` / `all_lights_on`), unique ids
+`<entry_id>_all_lights_off` / `_all_lights_on`.
+
+`SmartPlaceGroupButton`, on the main device: the blinds sub-menu that
+covers its whole plan (group message `JALZENTRAL<plan>`) gets "all up"
+and "all down" (`JALUPZENTRAL<plan>` / `JALDOWZENTRAL<plan>`); any other
+blinds sub-menu gets one button that sends its own group message,
+disabled by default because its effect is untested. A group message is
+only sent back when it has the expected shape (a `JAL…<n>` frame name);
 otherwise the sub-menu gets no button.
 
 ### Polling

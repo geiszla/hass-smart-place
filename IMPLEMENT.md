@@ -1167,3 +1167,178 @@ and has installation and use first, development and reference last.
 | Alarm words other than `regenalarm` | Only `regenalarm` was seen live; `windalarm` and `hagelalarm` were not. Any word blocks. |
 | The plan in a browser | Lock icon, alarm icons and greyed buttons were checked as configuration, not as pixels. |
 | `ha-live update` with the Marketplace | See above. |
+
+## 2026-11-10 (fourth entry) — Second round: late value burst, devices and cards, all lights, hidden sockets, renames, dashboard
+
+The branch was installed on the box in a dry-run build and tested. This
+entry fixes what that test and the user found. No command was sent to the
+vendor server, and nothing was installed or called on the box for this
+round. Pure logic is in the client library with tests in `tests/`; the
+Home Assistant side was checked with the throwaway setups described under
+"How the Home Assistant side was checked" (results at the end).
+
+### Finding: the value burst can come seconds after the main-menu reply
+
+Two passive captures of the same day, frame names only. After the app
+socket opens, the main-menu reply arrives at about +0.5 s. The values of
+all devices (about 100 frames within a few milliseconds, always in the
+same order, see DESIGN.md §10) followed 0.1 s later in one capture and
+**4.8 s** later in the other. A reload on the box showed the late case.
+
+`SETUP_OBSERVATION_WINDOW` (2 s) started at the reply. In the late case
+`devices_listed` turned true before any value was in, and the platforms
+then created entities frame by frame while the burst arrived. Observed on
+the box: the intercom sensor was created at `SPRECHEN1:ring` (caller not
+known, state "unknown") and became "Front door" at `CALLINFO1`, two
+frames later. The user's automation (state trigger, not from
+"unavailable", not to "unknown" / "unavailable") took that for a ring and
+sent a notification. The automation is right: a real ring is exactly
+unknown → caller.
+
+The same defect, not observed but possible: a name that depends on a
+count decided from part of the count; the sensors that exist from the
+start (parcel PIN, personal info) going from "unknown" to their value
+when the late burst lands, which looks like a new parcel.
+
+Fix (`__init__.py`, `entity.py`, `state.py`, `const.py`):
+
+- The window starts when every listed light, blind and heating zone has
+  its control value (`SmartPlaceState.control_values_received`). These
+  values come first in the burst.
+- No light, blind and zone listed: the reply starts the window, as before.
+- The values of some listed device do not come within
+  `VALUE_BURST_TIMEOUT` (10 s) after the reply: the entities are created
+  without them and one warning is logged.
+- Every entity is unavailable until then
+  (`SmartPlacePushEntity.available` also needs `first_reply_observed`);
+  the Connection sensor, the price sensor and a fetched plan image keep
+  their exceptions.
+
+Divergence from the brief: it proposed to start the window at the first
+control value frame. A single light, blind or setpoint that changes in
+the building between the reply and the burst is such a frame and would
+have started the window too early. "Every listed device has its value"
+only happens with the burst.
+
+Limits: if the burst comes later than the bounded wait, entities are
+created without it and take each value when it arrives (the old
+behaviour, now with a warning). After a reconnect within a run nothing
+waits: intercom, parcel and sensor values are kept across a disconnect,
+and lights, blinds and heating read "unknown" until that connection's
+burst, as decided in the first round.
+
+### Devices and cards
+
+The user reads Home Assistant's automatic dashboard (one card per device
+without an area).
+
+- Category devices: "Weather", "Energy", "Door", "Camera" (singular, no
+  "Smart Place" in front; identifiers unchanged). On an existing install
+  the device names follow at the first start, the entity ids stay.
+- The doorbell mute and the blinds group buttons are on the main device.
+  The devices "Groups" and "Intercom" are no longer used. Nothing
+  migrates them.
+- New device "Scene" with every scene and on/off scene switch. The full
+  name is then "Scene Night"; the voice assistants read the alias list.
+  When such an entity is added and its alias list is the untouched
+  default (`[er.COMPUTED_NAME]`), it becomes `[<scene name>]`
+  (`entity.async_keep_spoken_name`). A list the user edited is left
+  alone. The Scenes view of the dashboard asks for the entity's own name
+  per row (`name: {type: entity}`).
+- "All lights off" / "All lights on" on the main device replace the
+  button that sent the vendor's lights group message
+  (`Commands.GroupMessage` stays declared). They call turn-off or turn-on
+  per light and socket entity, see DESIGN.md §11 "button". Their names
+  come from `translations/en.json`; the other buttons build theirs in
+  code because the sub-menu name is part of them.
+- A protected socket's switch is hidden (`hidden_by = INTEGRATION`), see
+  DESIGN.md §11 "Hidden while protected". Its plan marker has no tap
+  action any more (it opened the details).
+
+Choices made here: the hidden flag is applied when the entity is added
+and when the option changes, so a socket the user shows again is hidden
+again at the next start; the alias is set once and does not follow a
+later rename of the scene in the vendor system; a scene created on a new
+install gets the id `scene.scene_<name>`.
+
+### Renames in the vendor system
+
+`_async_follow_renames`, after every complete main-menu reply: a light,
+socket or blind device whose registry name differs from the vendor name
+gets the new name, and its area follows only if it is still the area
+suggested for the old name. Details and limits: DESIGN.md §11 "Renames in
+the vendor system". The log lines of "Lower after weather alarm" read the
+blind's current name. Not covered: scenes, heating zones and level groups
+still take a new name at the next start only.
+
+### Dashboard
+
+- URL path `smart-place`, or `smart-place-plan` when the first is taken
+  by something that is not ours (on the box: a dashboard of the user's
+  own). The listener that stayed behind after a failed registration is
+  gone.
+- New view "Intercom" (`smart_place_client/intercom.py`): per door a
+  heading, its cameras and a wide button that opens the door. The table
+  of the four doors moved from `button.py` to that module.
+- With an enabled door button the dashboard has the Intercom view before
+  any device is listed, so the placeholder view only shows when every
+  door button and camera is disabled.
+
+### Smaller fixes
+
+- The two tariff energy sensors and the kWh attributes of the daily cost
+  sensor show the range buckets rounded to six decimals. First attempt:
+  round in the fold (`state.py`). That moved the cost of the recorded
+  reply by 0.0001 CHF at the 2026 rates (the unrounded inputs lie just
+  below a rounding step), so the buckets stay as received and only what
+  is shown is rounded. `tests/test_state.py` pins that reply.
+- README: the door buttons are enabled by default.
+
+### How it was checked
+
+- `./scripts/lint-check`: pass. `./scripts/test`: 525 passed.
+- Type check of a copy against `homeassistant==2026.11.1`: 0 errors.
+- hassfest: valid.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  146 passed — the 107 earlier ones (some adapted: device names, the
+  removed devices and button, the view list of the dashboard, the plan
+  marker of a protected socket) and 39 new ones. The scratch copy ran
+  with `DRY_RUN = False`; the branch tip sets it to `True` for the live
+  test, and the checks look at what is sent on the scripted socket.
+  New checks: a burst that comes after the setup gave up waiting, while
+  it still waits, after a single stray value, never, and without lights,
+  blinds and zones (first intercom state is the caller, no "unknown" in
+  its history, count-dependent names, parcel PIN from unavailable to its
+  value); device names and what is on which device; aliases (default,
+  edited, existing ids, reload); "all lights" (order, context, protected,
+  disabled and unknown entities, lost connection); the hidden flag (set,
+  cleared, a user's flag, shown again by the user) and a whole room
+  switched off by area with a protected socket in it; renames (area
+  follows, a moved device stays, `name_by_user`, no suggestion, restart);
+  the dashboard path (free, taken, both taken, listener, second entry);
+  the Intercom view; the rounding.
+- Mutation checks: the burst checks fail on the old window logic with
+  the observed symptom (`["unknown", "Front door"]`); the dashboard path
+  checks fail on the old module.
+
+### Needs a look on the box
+
+| Point | What was checked instead |
+| --- | --- |
+| The alias in a real voice command ("activate Night") | `homeassistant.helpers.intent.async_get_entity_aliases` returns the short name |
+| The Scenes view showing "Night", not "Scene Night" | The row configuration `name: {type: entity}`; its effect was read in the frontend source of 2026.10.4, not seen in a browser |
+| The Intercom view in a browser (columns, camera pictures, the wide button) | Its configuration |
+| The automatic dashboard: one card per device with the new names, no card for a protected socket | The registry (device names, `hidden_by`); the frontend's rule was read in its source |
+| A real late burst | A scripted one |
+
+### To do by hand on an install of the first round
+
+Nothing is migrated in code. After the update:
+
+- Delete the two empty devices "Smart Place Groups" and "Smart Place
+  Intercom" (device page → ⋮ → Delete).
+- Delete the old "All lights" button, unique id
+  `<entry id>_lights_group_<n>`: it is no longer provided.
+- Entity ids did not change. The friendly names did ("Scene Night",
+  "Weather Outdoor temperature", "Smart Place Doorbell mute").
+
