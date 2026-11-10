@@ -10,6 +10,10 @@ blinds — tilt-open for vent.
 The position is the server's own time-based estimate, hence
 ``assumed_state``: Home Assistant then keeps both direction buttons
 enabled whatever the reported position.
+
+While a weather alarm blocks a blind (the value carries a word instead of
+a position) the vendor system drives it up and refuses to lower it. The
+entity then offers no command at all and says ``blocked: true``.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from .smart_place_client import (
     BLIND_KIND_FABRIC,
     BLIND_KIND_SLATTED,
     BLIND_MOTION_TIMEOUT,
+    BlindAlarm,
     BlindConfig,
     BlindMotion,
     BlindValue,
@@ -62,6 +67,8 @@ _OPEN_THEN_TILT_WINDOW = 2.0
 _MOTION_TIMER_MARGIN = 0.1
 
 _FULLY_CLOSED = 0
+
+_NO_FEATURES = CoverEntityFeature(0)
 
 
 async def async_setup_entry(
@@ -99,7 +106,10 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
         features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
         if blind.kind == BLIND_KIND_SLATTED:
             features |= CoverEntityFeature.OPEN_TILT
-        self._attr_supported_features = features
+        self._features = features
+        # Seeded here: the features are read when the entity is registered.
+        self._alarm = BlindAlarm()
+        self._alarm.update(self._value())
         self._motion = BlindMotion()
         self._motion_timer: CALLBACK_TYPE | None = None
         self._opened_at: float | None = None
@@ -116,8 +126,27 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
         return cover_position(value.position)
 
     @property
+    def supported_features(self) -> CoverEntityFeature:
+        """Offer no command while a weather alarm blocks the blind.
+
+        Home Assistant's card then shows no buttons, a call for an area
+        skips the blind and a call for the blind itself is refused. Home
+        Assistant stores a changed feature set in the entity registry on
+        the next state write (and warns above 100 such changes per hour);
+        the write gate and the kept alarm (``BlindAlarm``) limit that to
+        the alarm's real start and end.
+        """
+        return _NO_FEATURES if self._alarm.blocked else self._features
+
+    @property
     def is_closed(self) -> bool | None:
-        """Return whether the blind is fully down, ``None`` without a position."""
+        """Return whether the blind is fully down, ``None`` without a position.
+
+        A blocked blind reports no position; the alarm drives it up, so
+        it reads as open.
+        """
+        if self._alarm.blocked:
+            return False
         position = self.current_cover_position
         return None if position is None else position == _FULLY_CLOSED
 
@@ -132,14 +161,17 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
         return self._motion.direction == "closing"
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
-        """Expose the weather alarm (``rain`` / ``wind`` / ``hail``) holding the blind, if any."""
-        value = self._value()
-        return {"weather_alarm": value.alarm if value is not None else None}
+    def extra_state_attributes(self) -> dict[str, bool | str]:
+        """Expose ``blocked``, and while blocked the alarm (``rain`` / ``wind`` / ``hail`` or the vendor's word)."""
+        alarm = self._alarm.alarm
+        if alarm is None:
+            return {"blocked": False}
+        return {"blocked": True, "weather_alarm": alarm}
 
     @callback
     def _handle_frame_update(self) -> None:
-        """Feed the position to the motion tracker, then write if anything changed."""
+        """Feed the value to the alarm and motion trackers, then write if anything changed."""
+        self._alarm.update(self._value())
         if self._motion.update(self.current_cover_position):
             # The server says nothing when a blind stops; look again after the timeout.
             self._async_cancel_motion_timer()

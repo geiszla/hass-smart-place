@@ -75,10 +75,23 @@ def _elements_of(view: dict[str, Any], entity_id: str) -> list[dict[str, Any]]:
     found = []
     for element in card["elements"]:
         inner = element.get("elements", [element])
-        target = element.get("tap_action", {}).get("target", {}).get("entity_id")
-        if any(item.get("entity") == entity_id for item in inner) or target == entity_id:
+        owners = {condition.get("entity") for condition in element.get("conditions", [])}
+        owners |= {item.get("entity") for item in inner}
+        owners.add(element.get("tap_action", {}).get("target", {}).get("entity_id"))
+        if entity_id in owners:
             found.extend(inner)
     return found
+
+
+def _conditions_of(view: dict[str, Any], entity_id: str, title: str) -> list[dict[str, Any]]:
+    """Return the conditions under which ``entity_id``'s element titled ``title`` is shown."""
+    for element in view["cards"][0]["elements"]:
+        conditions = element.get("conditions", [])
+        if any(condition.get("entity") == entity_id for condition in conditions) and any(
+            item.get("title") == title for item in element["elements"]
+        ):
+            return conditions
+    raise AssertionError(f"no conditional element titled {title} for {entity_id}")
 
 
 def test_png_size_reads_the_header() -> None:
@@ -156,7 +169,11 @@ def test_blinds_view_has_position_text_and_direction_buttons(flat_state: SmartPl
     buttons = {element["title"]: element for element in elements if element["type"] == "icon"}
     assert [label.get("attribute") for label in labels] == ["current_position", None]
     assert all(label["tap_action"] == {"action": "more-info"} for label in labels)
-    assert set(buttons) == {"Down", "Vent", "Up"}
+    assert {title for title, button in buttons.items() if button["tap_action"]["action"] == "perform-action"} == {
+        "Down",
+        "Vent",
+        "Up",
+    }
     assert buttons["Down"]["tap_action"] == {
         "action": "perform-action",
         "perform_action": "cover.close_cover",
@@ -170,8 +187,63 @@ def test_blinds_view_has_position_text_and_direction_buttons(flat_state: SmartPl
     assert buttons["Vent"]["style"] == {"left": "41.5%", "top": "90.14%"}
     assert buttons["Up"]["style"] == {"left": "47.2%", "top": "90.14%"}
 
-    fabric_buttons = {e["title"] for e in _elements_of(view, f"cover.blind_{fabric.id}") if e["type"] == "icon"}
+    fabric_buttons = {
+        e["title"]
+        for e in _elements_of(view, f"cover.blind_{fabric.id}")
+        if e["type"] == "icon" and e["tap_action"]["action"] == "perform-action"
+    }
     assert fabric_buttons == {"Down", "Up"}
+
+
+def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlaceState) -> None:
+    """While the cover says ``blocked``, the buttons have no action and an alarm icon replaces the position."""
+    view = _views(_flat_dashboard(flat_state))["blinds"]
+    slatted = next(blind for blind in flat_state.blinds.values() if blind.name == "Office balcony door blinds")
+    entity_id = f"cover.blind_{slatted.id}"
+
+    def attribute(name: str, **match: Any) -> dict[str, Any]:
+        return {"condition": "state", "entity": entity_id, "attribute": name, **match}
+
+    elements = _elements_of(view, entity_id)
+    icons = {element["title"]: element for element in elements if element["type"] == "icon"}
+    position = next(element for element in elements if element.get("attribute") == "current_position")
+
+    # The buttons with an action show unless blocked, the greyed ones while blocked.
+    assert _conditions_of(view, entity_id, "Down") == [attribute("blocked", state_not="true")]
+    assert _conditions_of(view, entity_id, "Down (blocked by a weather alarm)") == [attribute("blocked", state="true")]
+    for title in ("Down", "Vent", "Up"):
+        greyed = icons[f"{title} (blocked by a weather alarm)"]
+        assert greyed["tap_action"] == {"action": "none"}
+        assert greyed["hold_action"] == {"action": "none"}
+        assert greyed["icon"] == icons[title]["icon"]
+        assert greyed["style"] == {**icons[title]["style"], "opacity": "0.3"}
+
+    # One icon per known alarm at the place of the position text, one for any other word.
+    assert {title: icons[title]["icon"] for title in ("Rain alarm", "Wind alarm", "Hail alarm", "Weather alarm")} == {
+        "Rain alarm": "mdi:weather-pouring",
+        "Wind alarm": "mdi:weather-windy",
+        "Hail alarm": "mdi:weather-hail",
+        "Weather alarm": "mdi:alert",
+    }
+    assert _conditions_of(view, entity_id, "Rain alarm") == [attribute("weather_alarm", state="rain")]
+    assert _conditions_of(view, entity_id, "Wind alarm") == [attribute("weather_alarm", state="wind")]
+    assert _conditions_of(view, entity_id, "Hail alarm") == [attribute("weather_alarm", state="hail")]
+    assert _conditions_of(view, entity_id, "Weather alarm") == [
+        attribute("blocked", state="true"),
+        attribute("weather_alarm", state_not=["rain", "wind", "hail"]),
+    ]
+    for title in ("Rain alarm", "Wind alarm", "Hail alarm", "Weather alarm"):
+        assert icons[title]["style"] == position["style"]
+        assert icons[title]["entity"] == entity_id
+        assert icons[title]["tap_action"] == {"action": "more-info"}
+
+    fabric = next(blind for blind in flat_state.blinds.values() if blind.name == "Bedroom blinds")
+    fabric_greyed = {
+        e["title"]
+        for e in _elements_of(view, f"cover.blind_{fabric.id}")
+        if e["type"] == "icon" and e["tap_action"]["action"] == "none"
+    }
+    assert fabric_greyed == {"Down (blocked by a weather alarm)", "Up (blocked by a weather alarm)"}
 
 
 def test_climate_view_has_temperatures_and_step_buttons(flat_state: SmartPlaceState) -> None:
@@ -324,20 +396,22 @@ def test_companion_buttons_stay_inside_the_image() -> None:
         entities=DashboardEntities(blinds={1: "cover.edge"}),
         temperature_unit="°C",
     )
-    buttons = {e["title"]: e for e in config["views"][0]["cards"][0]["elements"] if e["type"] == "icon"}
+    buttons = {e["title"]: e for e in _elements_of(config["views"][0], "cover.edge") if e["type"] == "icon"}
     assert buttons["Down"]["style"] == {"left": "0.0%", "top": "100.0%"}
 
 
 def test_icon_buttons_do_nothing_on_a_long_press(flat_state: SmartPlaceState) -> None:
-    """An icon element has no entity, so the default hold action (more-info) ends in an error toast."""
+    """An icon element without an entity must not get the default hold action (more-info): it ends in an error toast."""
     views = _views(_flat_dashboard(flat_state))
     icons = [
-        element
+        inner
         for path in ("blinds", "climate")
         for element in views[path]["cards"][0]["elements"]
-        if element["type"] == "icon"
+        for inner in element.get("elements", [element])
+        if inner["type"] == "icon" and "entity" not in inner
     ]
-    assert {icon["title"] for icon in icons} == {"Down", "Vent", "Up", "Lower", "Raise"}
+    blocked = " (blocked by a weather alarm)"
+    assert {icon["title"].removesuffix(blocked) for icon in icons} == {"Down", "Vent", "Up", "Lower", "Raise"}
     assert all(icon["hold_action"] == {"action": "none"} for icon in icons)
     # A light's icon has an entity: a long press opens its details.
     light = views["lights"]["cards"][0]["elements"][0]

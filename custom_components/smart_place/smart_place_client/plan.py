@@ -41,6 +41,17 @@ _CLIMATE_BUTTON_DX: Final = 62.0
 
 _UNAVAILABLE_STATES: Final = ["unknown", "unavailable"]
 
+# Shown in place of a blind's position while a weather alarm blocks it,
+# by the cover's ``weather_alarm`` attribute: icon and tooltip. Any other
+# word gets the last pair.
+_ALARM_ICONS: Final[dict[str, tuple[str, str]]] = {
+    "rain": ("mdi:weather-pouring", "Rain alarm"),
+    "wind": ("mdi:weather-windy", "Wind alarm"),
+    "hail": ("mdi:weather-hail", "Hail alarm"),
+}
+_OTHER_ALARM_ICON: Final = ("mdi:alert", "Weather alarm")
+_BLOCKED_OPACITY: Final = "0.3"
+
 # Shown while no entity is known yet (the server has not listed the devices).
 _WAITING_VIEW: Final[dict[str, Any]] = {
     "title": "Smart Place",
@@ -153,10 +164,44 @@ def _light_elements(entity_id: str, centre: Point, image: PlanBackground, *, pro
 
 
 def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: PlanBackground) -> list[dict[str, Any]]:
+    """Build a blind's marker: position, or the alarm that blocks it, and the direction buttons.
+
+    The buttons exist twice, switched by the cover's ``blocked``
+    attribute: with their action, and greyed without one while a weather
+    alarm blocks the blind (the frontend compares attributes as text).
+    """
     x, y = centre
     style = _style(centre, image)
     more_info = {"action": "more-info"}
-    elements: list[dict[str, Any]] = [
+
+    def attribute(name: str, **match: str | list[str]) -> dict[str, Any]:
+        return {"condition": "state", "entity": entity_id, "attribute": name, **match}
+
+    def alarm_icon(icon: str, title: str, conditions: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "type": "conditional",
+            "conditions": conditions,
+            "elements": [
+                {
+                    "type": "icon",
+                    "icon": icon,
+                    "title": title,
+                    "entity": entity_id,
+                    "tap_action": more_info,
+                    "hold_action": more_info,
+                    "style": style,
+                },
+            ],
+        }
+
+    buttons = [
+        ("mdi:arrow-down", "Down", "cover.close_cover", _BLIND_DOWN_DX),
+        ("mdi:arrow-up", "Up", "cover.open_cover", _BLIND_UP_DX),
+    ]
+    if blind.kind == BLIND_KIND_SLATTED:
+        buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt", 0.0))
+    button_styles = [_style((x + dx, y + _BLIND_BUTTON_DY), image) for _, _, _, dx in buttons]
+    return [
         # The position attribute is missing during a weather alarm and while
         # unavailable; a state-label on a missing attribute shows a warning.
         {
@@ -180,29 +225,36 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: Pl
             "conditions": [{"condition": "state", "entity": entity_id, "state": _UNAVAILABLE_STATES}],
             "elements": [{"type": "state-label", "entity": entity_id, "tap_action": more_info, "style": style}],
         },
-        _button(
-            "mdi:arrow-down",
-            "Down",
-            _perform("cover.close_cover", entity_id),
-            _style((x + _BLIND_DOWN_DX, y + _BLIND_BUTTON_DY), image),
+        *(
+            alarm_icon(icon, title, [attribute("weather_alarm", state=alarm)])
+            for alarm, (icon, title) in _ALARM_ICONS.items()
         ),
-        _button(
-            "mdi:arrow-up",
-            "Up",
-            _perform("cover.open_cover", entity_id),
-            _style((x + _BLIND_UP_DX, y + _BLIND_BUTTON_DY), image),
+        alarm_icon(
+            *_OTHER_ALARM_ICON,
+            [attribute("blocked", state="true"), attribute("weather_alarm", state_not=list(_ALARM_ICONS))],
         ),
+        {
+            "type": "conditional",
+            "conditions": [attribute("blocked", state_not="true")],
+            "elements": [
+                _button(icon, title, _perform(action, entity_id), button_style)
+                for (icon, title, action, _), button_style in zip(buttons, button_styles, strict=True)
+            ],
+        },
+        {
+            "type": "conditional",
+            "conditions": [attribute("blocked", state="true")],
+            "elements": [
+                _button(
+                    icon,
+                    f"{title} (blocked by a weather alarm)",
+                    {"action": "none"},
+                    {**button_style, "opacity": _BLOCKED_OPACITY},
+                )
+                for (icon, title, _, _), button_style in zip(buttons, button_styles, strict=True)
+            ],
+        },
     ]
-    if blind.kind == BLIND_KIND_SLATTED:
-        elements.append(
-            _button(
-                "mdi:blinds-horizontal",
-                "Vent",
-                _perform("cover.open_cover_tilt", entity_id),
-                _style((x, y + _BLIND_BUTTON_DY), image),
-            ),
-        )
-    return elements
 
 
 def _climate_elements(entity_id: str, centre: Point, image: PlanBackground, unit: str) -> list[dict[str, Any]]:

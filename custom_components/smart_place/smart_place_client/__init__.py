@@ -4,6 +4,7 @@ Has no homeassistant dependency; safe to import from a notebook or CLI.
 The HA integration in custom_components/smart_place/ is a thin wrapper.
 """
 
+from .alarm import BlindAlarm
 from .client import (
     CapturedFrame,
     DisconnectCallback,
@@ -122,6 +123,7 @@ __all__ = [
     "SETPOINT_DEFAULT",
     "SETPOINT_MIN",
     "TARIFFS",
+    "BlindAlarm",
     "BlindConfig",
     "BlindMotion",
     "BlindValue",
