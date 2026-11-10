@@ -39,6 +39,7 @@ from .const import (
     SETUP_BOOTSTRAP_TIMEOUT,
     SETUP_OBSERVATION_WINDOW,
 )
+from .plan_view import async_build_plan_config
 from .smart_place_client import (
     BLIND_KIND_AWNING,
     BLIND_KIND_FABRIC,
@@ -296,9 +297,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     async def get_plan_config(call: ServiceCall) -> ServiceResponse:
-        # Lazy import: the builder pulls in every platform's helpers.
-        from .plan_view import async_build_plan_config  # noqa: PLC0415
-
         entry = service.async_get_config_entry(call.hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID))
         return async_build_plan_config(call.hass, entry)
 

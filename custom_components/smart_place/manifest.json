@@ -1,15 +1,9 @@
 {
   "domain": "smart_place",
   "name": "Smart Place",
-  "codeowners": [
-    "@geiszla"
-  ],
+  "codeowners": ["@geiszla"],
   "config_flow": true,
-  "dependencies": [
-    "frontend",
-    "lovelace",
-    "recorder"
-  ],
+  "dependencies": ["frontend", "lovelace", "recorder"],
   "documentation": "https://www.smartplace.ch",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/geiszla/hass-smart-place/issues",
