@@ -219,6 +219,12 @@ payload (`--dry-run` it) before writing, and never add or trigger a door
   `assist_pipeline/run`, and any payload that contains the key `type` or `id`
   (it would replace the command that was checked). Do not work around either
   guard with curl or another client.
+- **The switches "Lower after weather alarm"** (one per blind, a
+  configuration entity) are the one place where the integration sends a
+  command by itself: turning one on lowers its blind at once if the blind
+  is not down, and afterwards the integration lowers it whenever it sees
+  the blind's weather alarm end. Never turn one on outside dry run unless
+  the user asks for exactly that.
 - **`call` only reaches the entity it names.** Dry run covers this
   integration only; entities of other integrations would really act. So
   `call` also refuses:
