@@ -111,15 +111,15 @@ real `friendly_name`/attributes with `state <entity_id>`.
   entity_id, then `state sensor.smart_place_outdoor_temperature` for the full
   object including attributes (unit, device_class, last_changed...).
 - **Debug a missing entity**: entities are added when the server first
-  delivers their device or value (normally all at setup, after the 2 s
-  observation window, `SETUP_OBSERVATION_WINDOW` in `const.py`). Nothing
+  delivers their device or value (normally all at setup, 2 s after the
+  server's value burst, `SETUP_OBSERVATION_WINDOW` in `const.py`; the
+  burst follows the device list up to 5 s later). Nothing
   is removed automatically: the entity of a device the server no longer
   lists stays in the entity registry, also after a restart (Home Assistant
   then shows it as no longer provided), until the user deletes the device.
   `entities --disabled` shows whether the entity exists but is disabled
-  (disabled by default: the "All lights" button, the
-  button of a blinds group other than "All", and scenes the vendor app
-  does not display).
+  (disabled by default: the button of a blinds group other than "All",
+  and scenes the vendor app does not display).
 - **Test a control entity without touching the building** (dry run):
   only possible when the installed build has `DRY_RUN = True` in
   `const.py`. `status` then prints "(dry run: ...)" next to the
