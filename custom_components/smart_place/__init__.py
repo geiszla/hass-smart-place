@@ -649,7 +649,7 @@ def _async_setup_dashboard(hass: HomeAssistant, entry: SmartPlaceConfigEntry, da
         from .dashboard import async_register_dashboard  # noqa: PLC0415
 
         data.dashboard = async_register_dashboard(hass, entry)
-    except Exception:  # noqa: BLE001 - HA internals; whatever fails, only the dashboard is lost
+    except Exception:  # HA internals; whatever fails, only the dashboard is lost
         _LOGGER.warning(
             "The Smart Place dashboard could not be set up; everything else works. "
             "The smart_place.get_plan_config action still returns its configuration",
@@ -684,7 +684,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) 
     if data.dashboard is not None:
         try:
             data.dashboard.async_remove()
-        except Exception:  # noqa: BLE001 - HA internals; the unload must go on
+        except Exception:  # HA internals; the unload must go on
             _LOGGER.warning("The Smart Place dashboard could not be removed", exc_info=True)
         data.dashboard = None
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

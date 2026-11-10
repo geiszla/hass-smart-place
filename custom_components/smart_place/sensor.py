@@ -999,7 +999,7 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceElectricityCostSensor):
                     None,
                     {"change"},
                 )
-            except Exception:  # noqa: BLE001 - recorder may not be ready yet; retry next tick
+            except Exception:  # recorder may not be ready yet; retry next tick
                 _LOGGER.debug("month-cost prefix query failed; keeping previous value", exc_info=True)
                 return
             prefix = round(sum(row.get("change") or 0.0 for row in stats.get(statistic_id, ())), 6)

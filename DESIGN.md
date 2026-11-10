@@ -227,7 +227,7 @@ repo-root/
 
 | Concern | Choice | Rationale |
 | ------- | ------ | --------- |
-| Language | **Python 3.13+** | HA is Python; no reason to swap. 3.13 is the floor for current HA core. |
+| Language | **Python 3.13+** | HA is Python; no reason to swap. The code stays valid for 3.13; development and CI run on 3.14 (`.python-version`), the version Home Assistant 2026.11 requires. |
 | Concurrency | **asyncio** | HA's event-loop model; aiohttp is async; saves a thread. |
 | WS client | **`aiohttp.ClientSession.ws_connect()`** | Already a HA core dependency — no extra wheel. Sufficient features. We add our own reconnect/backoff (see §6). |
 | HTTP client | **aiohttp** | Same session, same loop, same connection pool. |
@@ -367,7 +367,7 @@ async def run(self) -> None:
             # Token is bad; surface to HA as a reauth flow, stop trying.
             await self._trigger_reauth()
             return
-        except Exception as err:                  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             self._logger.warning("WS dropped: %s; retrying in %.1fs", err, backoff.peek())
             await asyncio.sleep(backoff.next())
 ```
