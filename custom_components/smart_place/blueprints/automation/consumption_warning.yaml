@@ -5,11 +5,11 @@ blueprint:
 
     The Smart Place integration rates today's consumption of each meter against its daily target in a
     "target status" sensor: orange from 60 % of the target, red from 90 %. The notification is sent when that
-    sensor changes to the level chosen here. A tap on it opens the "target use" sensor.
+    sensor changes to one of the levels chosen here, with the title of that level. A tap on it opens the
+    "target use" sensor. A notification for red replaces the one for orange of the same meter.
 
-    Make one automation per level. A notification for red replaces the one for orange of the same meter.
-
-    Title and message can contain templates. `{{ value }}` is the value of the "target use" sensor.
+    Titles and message can contain templates. `{{ value }}` is the value of the "target use" sensor and
+    `{{ level }}` the level reached: `orange` or `red`.
   domain: automation
   source_url: >-
     https://github.com/geiszla/hass-smart-place/blob/main/custom_components/smart_place/blueprints/automation/consumption_warning.yaml
@@ -25,12 +25,15 @@ blueprint:
             - integration: smart_place
               domain: sensor
               device_class: enum
-    level:
-      name: Level
-      description: The notification is sent when the target status changes to this level.
-      default: red
+    levels:
+      name: Levels
+      description: The notification is sent when the target status changes to one of these levels.
+      default:
+        - orange
+        - red
       selector:
         select:
+          multiple: true
           options:
             - label: Orange
               value: orange
@@ -53,9 +56,13 @@ blueprint:
           multiple: true
           filter:
             - integration: mobile_app
-    title:
-      name: Title
-      description: The default fits the level red.
+    title_orange:
+      name: Title for orange
+      default: "🟠 Moderate consumption"
+      selector:
+        text: {}
+    title_red:
+      name: Title for red
       default: "🔴 High consumption"
       selector:
         text: {}
@@ -74,7 +81,7 @@ blueprint:
 triggers:
   - trigger: state
     entity_id: !input status_sensor
-    to: !input level
+    to: !input levels
     not_from:
       - unknown
       - unavailable
@@ -84,14 +91,18 @@ actions:
       status_sensor: !input status_sensor
       use_sensor: !input use_sensor
       channel: !input channel
+      level: "{{ trigger.to_state.state }}"
       value: "{{ states(use_sensor) }}"
+      titles:
+        orange: !input title_orange
+        red: !input title_red
   - repeat:
       for_each: !input phones
       sequence:
         # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's device.
         - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
           data:
-            title: !input title
+            title: "{{ titles[level] }}"
             message: !input message
             # ttl 0 and priority high: delivered at once, also to a sleeping phone.
             data: >

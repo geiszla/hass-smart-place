@@ -130,6 +130,21 @@ def test_entity_inputs_offer_smart_place_entities(path: Path) -> None:
             assert [entity_filter["integration"] for entity_filter in filters] == ["smart_place"], name
 
 
+def test_consumption_warning_covers_both_levels_with_a_title_each() -> None:
+    blueprint = _load(blueprint_install.BLUEPRINTS / "consumption_warning.yaml")
+    inputs = _declared_inputs(blueprint)
+    levels = inputs["levels"]["selector"]["select"]
+    assert levels["multiple"] is True
+    assert [option["value"] for option in levels["options"]] == ["orange", "red"]
+    assert inputs["levels"]["default"] == ["orange", "red"]
+    # One title per level, each with a default; nothing to type for either.
+    assert {name for name in inputs if "title" in name} == {"title_orange", "title_red"}
+    assert all(inputs[name]["default"] for name in ("title_orange", "title_red"))
+    [trigger] = blueprint["triggers"]
+    assert trigger["to"] == "levels"
+    assert trigger["not_from"] == ["unknown", "unavailable"]
+
+
 def test_installer_copies_every_blueprint_into_a_new_folder(tmp_path: Path) -> None:
     target = tmp_path / "blueprints" / "automation" / "smart_place"
     assert blueprint_install.install_blueprints(target) == _NAMES
