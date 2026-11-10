@@ -33,6 +33,7 @@ import probatio
 from .const import (
     CAPTURE_PATH,
     CHART_POLL_INTERVAL,
+    CONF_PROTECTED_SOCKETS,
     CONF_TOKEN,
     CONF_ZONE_AREAS_SET,
     DOMAIN,
@@ -45,6 +46,7 @@ from .smart_place_client import (
     BLIND_KIND_AWNING,
     BLIND_KIND_FABRIC,
     BLIND_KIND_SLATTED,
+    DEVICE_LIGHT,
     DISCOVERY_ORIGIN,
     LIGHT_KIND_DIMMER,
     LIGHT_KIND_LED,
@@ -127,6 +129,7 @@ class SmartPlaceData:
     """Per-config-entry runtime data, stored on ``entry.runtime_data``."""
 
     hass: HomeAssistant
+    entry: SmartPlaceConfigEntry
     client: SmartPlaceClient
     state: SmartPlaceState
     # Registry id of the main device; every sub-device links to it with
@@ -168,6 +171,16 @@ class SmartPlaceData:
         follow the reply.
         """
         return self.first_reply_observed and self.client.state.main_menu_loaded
+
+    @property
+    def protected(self) -> dict[str, frozenset[int]]:
+        """Return the vendor ids no command may be sent for, by device family.
+
+        Read from the entry options whenever it is asked for, so a changed
+        option counts for the next command. Only sockets can be protected
+        today; another family would be one more entry here.
+        """
+        return {DEVICE_LIGHT: frozenset(self.entry.options.get(CONF_PROTECTED_SOCKETS, ()))}
 
     @callback
     def async_notify_listeners(self) -> None:
@@ -416,7 +429,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         configuration_url=f"{DISCOVERY_ORIGIN}/Start5?{token}",
     )
 
-    data = SmartPlaceData(hass=hass, client=client, state=SmartPlaceState(), main_device_id=main_device.id)
+    data = SmartPlaceData(
+        hass=hass,
+        entry=entry,
+        client=client,
+        state=SmartPlaceState(),
+        main_device_id=main_device.id,
+    )
     data.device_identifiers.add((DOMAIN, entry.entry_id))
     entry.runtime_data = data
 
@@ -499,7 +518,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_setup_dashboard(hass, entry, data)
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     return True
+
+
+async def _async_entry_updated(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> None:
+    """Show changed options at once.
+
+    Nothing is reloaded: the entities read the options when they need
+    them. Only what they show, and the plan dashboard, has to follow.
+    """
+    data = entry.runtime_data
+    data.async_notify_listeners()
+    data.async_plan_changed()
 
 
 @callback

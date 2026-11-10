@@ -25,6 +25,22 @@
       "already_configured": "This Smart Place installation is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smart Place options",
+        "data": {
+          "protected_sockets": "Protected sockets"
+        },
+        "data_description": {
+          "protected_sockets": "Home Assistant sends no command for a protected socket: turning it on or off from Home Assistant does nothing. Smart Place scenes, the 'All lights' button, wall buttons and the Smart Place app can still switch it."
+        }
+      }
+    },
+    "abort": {
+      "not_loaded": "Smart Place is not running, so its sockets are not known. Start the integration and try again."
+    }
+  },
   "entity": {
     "sensor": {
       "weather_alarm": {

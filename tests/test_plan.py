@@ -125,6 +125,27 @@ def test_lights_view_has_one_toggle_icon_per_light_and_socket(flat_state: SmartP
     assert icon["style"] == {"left": "38.65%", "top": "30.21%"}
 
 
+def test_protected_socket_shows_a_lock_and_cannot_be_toggled(flat_state: SmartPlaceState) -> None:
+    """A tap on a protected socket opens its details; the other markers still toggle."""
+    office, bedroom = (
+        next(light for light in flat_state.lights.values() if light.name == name)
+        for name in ("Office socket", "Bedroom socket")
+    )
+    view = _views(_flat_dashboard(flat_state, protected_lights={office.id}))["lights"]
+
+    (locked,) = _elements_of(view, f"switch.device_{office.id}")
+    assert locked["type"] == "state-icon"
+    assert locked["icon"] == "mdi:lock"
+    assert locked["tap_action"] == {"action": "more-info"}
+    assert locked["hold_action"] == {"action": "more-info"}
+
+    (free,) = _elements_of(view, f"switch.device_{bedroom.id}")
+    assert "icon" not in free
+    assert free["tap_action"] == {"action": "toggle"}
+    actions = [element["tap_action"]["action"] for element in view["cards"][0]["elements"]]
+    assert actions.count("toggle") == 14
+
+
 def test_blinds_view_has_position_text_and_direction_buttons(flat_state: SmartPlaceState) -> None:
     view = _views(_flat_dashboard(flat_state))["blinds"]
     slatted = next(blind for blind in flat_state.blinds.values() if blind.name == "Office balcony door blinds")

@@ -16,7 +16,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .entity import async_classify_scenes
-from .smart_place_client import LIGHT_KIND_SOCKET, DashboardEntities, PlanBackground, build_dashboard
+from .smart_place_client import DEVICE_LIGHT, LIGHT_KIND_SOCKET, DashboardEntities, PlanBackground, build_dashboard
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -91,4 +91,5 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         zones=state.climate,
         entities=entities,
         temperature_unit=hass.config.units.temperature_unit,
+        protected_lights=data.protected[DEVICE_LIGHT],
     )

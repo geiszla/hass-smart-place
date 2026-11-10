@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Hashable
 import contextlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import Platform
@@ -28,7 +29,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
-from .smart_place_client import ExpectedState, SmartPlaceNotConnectedError, classify_scenes
+from .smart_place_client import ExpectedState, SmartPlaceNotConnectedError, classify_scenes, command_is_protected
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
 
     from . import SmartPlaceConfigEntry, SmartPlaceData
     from .smart_place_client import CommandDefinition, SceneEntities
+
+_LOGGER = logging.getLogger(__name__)
 
 # The timer may fire a moment before the expectation's own deadline.
 _EXPECTATION_TIMER_MARGIN = 0.1
@@ -137,8 +140,22 @@ class SmartPlacePushEntity(Entity):
         self.async_write_ha_state()
         self._sp_last_written = calculated
 
+    def _command_refused(self, command: CommandDefinition, args: tuple[object, ...]) -> bool:
+        """Return True, with one line in the log, for a command for a protected device."""
+        if not command_is_protected(command, args, self._data.protected):
+            return False
+        _LOGGER.info("%s is protected: %s not sent", self.entity_id, command.name)
+        return True
+
     async def _async_issue(self, command: CommandDefinition, *args: object) -> None:
-        """Issue a command; raise a translated error if it cannot be sent."""
+        """Issue a command; raise a translated error if it cannot be sent.
+
+        Every command of every entity passes here, so this is where a
+        command for a protected device is dropped: without an error for
+        the caller, so that a call for many entities reaches the others.
+        """
+        if self._command_refused(command, args):
+            return
         try:
             await self._data.client.issue(command, *args)
         except SmartPlaceNotConnectedError as err:
@@ -158,6 +175,9 @@ class SmartPlacePushEntity(Entity):
         send fails. No frame arrives when an expectation times out, so a
         timer writes the state then.
         """
+        # Nothing is sent for a protected device, so nothing is expected of it.
+        if self._command_refused(command, args):
+            return
         for expected, value, server_value in expectations:
             expected.expect(value, server_value)
         if self._sp_expectation_timer is not None:
@@ -239,6 +259,11 @@ class SmartPlaceToggleEntity(SmartPlacePushEntity):
         await self._async_switch(on=False)
 
     async def _async_switch(self, *, on: bool) -> None:
+        command, vendor_id = self._toggle_command()
+        # Nothing is ever sent for a protected device: there is nothing to
+        # wait for, and a state that is not known is no error.
+        if self._command_refused(command, (vendor_id,)):
+            return
         # A scene or group command issued a moment ago is about to change
         # values: a toggle decided now could undo what it switches.
         if (delay := self._data.client.settle.remaining()) > 0:
@@ -249,5 +274,4 @@ class SmartPlaceToggleEntity(SmartPlacePushEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="state_unknown")
         if current is on:
             return
-        command, vendor_id = self._toggle_command()
         await self._async_issue_expecting(command, (vendor_id,), (self._expected_on, on, self._server_is_on()))

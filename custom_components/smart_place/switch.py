@@ -21,7 +21,15 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 
 from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, light_device_info
 from .entity import SmartPlaceToggleEntity, async_add_discovered, async_classify_scenes
-from .smart_place_client import LIGHT_KIND_SOCKET, CommandDefinition, Commands, LightConfig, SceneConfig, light_is_on
+from .smart_place_client import (
+    DEVICE_LIGHT,
+    LIGHT_KIND_SOCKET,
+    CommandDefinition,
+    Commands,
+    LightConfig,
+    SceneConfig,
+    light_is_on,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -58,7 +66,11 @@ async def async_setup_entry(
 
 
 class SmartPlaceSocket(SmartPlaceToggleEntity, SwitchEntity):
-    """A switched socket."""
+    """A switched socket.
+
+    While it is protected (integration options) no command is sent for it
+    — see ``SmartPlacePushEntity._async_issue`` — and it shows a lock.
+    """
 
     _attr_has_entity_name = True
     _attr_name = None
@@ -71,6 +83,19 @@ class SmartPlaceSocket(SmartPlaceToggleEntity, SwitchEntity):
         self._light_id = light.id
         self._attr_unique_id = f"{entry.entry_id}_socket_{light.id}"
         self._attr_device_info = light_device_info(entry, data, light)
+
+    def _protected(self) -> bool:
+        return self._light_id in self._data.protected[DEVICE_LIGHT]
+
+    @property
+    def icon(self) -> str | None:
+        """Return a lock while protected, else nothing (the device class has an icon)."""
+        return "mdi:lock" if self._protected() else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool]:
+        """Expose whether the socket is protected."""
+        return {"protected": self._protected()}
 
     def _server_is_on(self) -> bool | None:
         level = self._data.state.light_levels.get(self._light_id)

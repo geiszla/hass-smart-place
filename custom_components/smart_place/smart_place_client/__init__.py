@@ -16,7 +16,7 @@ from .client import (
     install_token_redaction_filter,
     scrub_secrets,
 )
-from .commands import KNOWN_COMMANDS, CommandDefinition, Commands
+from .commands import DEVICE_BLIND, DEVICE_LIGHT, KNOWN_COMMANDS, CommandDefinition, Commands
 from .conversions import (
     SETPOINT_DEFAULT,
     SETPOINT_MIN,
@@ -56,6 +56,7 @@ from .plan import (
     light_centre,
     png_size,
 )
+from .protection import command_is_protected
 from .protocol import (
     DISCOVERY_ORIGIN,
     GlobalConfig,
@@ -107,6 +108,8 @@ __all__ = [
     "CHART_RANGE_SERIES_HIGH_TARIFF",
     "CHART_RANGE_SERIES_LOW_TARIFF",
     "CHART_RANGE_SERIES_TOTAL",
+    "DEVICE_BLIND",
+    "DEVICE_LIGHT",
     "DISCOVERY_ORIGIN",
     "EXPECTED_STATE_TIMEOUT",
     "GROUP_SETTLE_TIME",
@@ -167,6 +170,7 @@ __all__ = [
     "chart_target_status",
     "classify_scenes",
     "climate_centre",
+    "command_is_protected",
     "cover_position",
     "encode_frame",
     "energy_cost_chf",

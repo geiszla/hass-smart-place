@@ -46,6 +46,11 @@ DRY_RUN: Final = False
 # devices has run (see ``__init__.py``).
 CONF_ZONE_AREAS_SET: Final = "zone_areas_set"
 
+# Config-entry option: vendor light ids of the sockets no command may be
+# sent for (see ``entity.py``). Read on every command, so a change takes
+# effect without a reload.
+CONF_PROTECTED_SOCKETS: Final = "protected_sockets"
+
 # Give up on the first bootstrap after this long and set the platforms up
 # anyway; entities for whatever arrives later are added when it does.
 SETUP_BOOTSTRAP_TIMEOUT: Final = 10.0

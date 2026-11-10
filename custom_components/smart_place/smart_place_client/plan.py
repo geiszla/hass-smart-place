@@ -14,7 +14,7 @@ sizes and gets plain dicts back.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 import struct
 from typing import Any, Final, TypeVar
@@ -136,16 +136,20 @@ def _button(icon: str, title: str, action: dict[str, Any], style: dict[str, str]
     }
 
 
-def _light_elements(entity_id: str, centre: Point, image: PlanBackground) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "state-icon",
-            "entity": entity_id,
-            "tap_action": {"action": "toggle"},
-            "hold_action": {"action": "more-info"},
-            "style": _style(centre, image),
-        },
-    ]
+def _light_elements(entity_id: str, centre: Point, image: PlanBackground, *, protected: bool) -> list[dict[str, Any]]:
+    element: dict[str, Any] = {
+        "type": "state-icon",
+        "entity": entity_id,
+        "tap_action": {"action": "toggle"},
+        "hold_action": {"action": "more-info"},
+        "style": _style(centre, image),
+    }
+    if protected:
+        # No command is sent for a protected device: say so instead of
+        # offering a toggle that does nothing.
+        element["icon"] = "mdi:lock"
+        element["tap_action"] = {"action": "more-info"}
+    return [element]
 
 
 def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, image: PlanBackground) -> list[dict[str, Any]]:
@@ -330,6 +334,7 @@ def build_dashboard(
     zones: Mapping[int, ClimateZoneConfig],
     entities: DashboardEntities,
     temperature_unit: str,
+    protected_lights: Collection[int] = (),
 ) -> dict[str, Any]:
     """Build the dashboard configuration for the given devices and entities.
 
@@ -340,7 +345,9 @@ def build_dashboard(
     card, so it stays reachable; devices of an unknown plan are listed in
     the first plan's views. With several plans the views repeat per plan
     with the plan label in the title; with one plan the label is not shown.
-    Without any entity the dashboard has one view that says so.
+    Without any entity the dashboard has one view that says so. A light or
+    socket whose vendor id is in ``protected_lights`` shows a lock, and a
+    tap opens its details instead of toggling it.
     """
     plan_ids: list[int | None] = [*sorted(plans)] or [None]
     several_plans = len(plan_ids) > 1
@@ -359,7 +366,9 @@ def build_dashboard(
                     lights,
                     entities.lights,
                     light_centre,
-                    lambda entity_id, _light, centre, image: _light_elements(entity_id, centre, image),
+                    lambda entity_id, light, centre, image: _light_elements(
+                        entity_id, centre, image, protected=light.id in protected_lights
+                    ),
                     plan_id,
                     image,
                     take_strays=strays,

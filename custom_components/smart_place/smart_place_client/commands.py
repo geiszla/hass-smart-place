@@ -31,6 +31,10 @@ LIGHT_LEVEL_MAX: Final = 255
 SETPOINT_OFF: Final = 18
 SETPOINT_MAX: Final = 26
 
+# Device families a command can name (``CommandDefinition.device``).
+DEVICE_LIGHT: Final = "light"
+DEVICE_BLIND: Final = "blind"
+
 # The lights sub-menu names its own command (``UnterMenuLeuchten<n>:...,
 # LEUCHTENZENTRAL<n>,...``). It comes from the server, so only this shape
 # is ever sent back.
@@ -66,6 +70,11 @@ class CommandDefinition:
             entities of their own (a scene, a group button). Their values
             follow a moment later, so ``client.issue`` starts the settle
             time during which no toggle is decided (``expected.SettleTime``).
+        device: The device family whose vendor id is the first argument
+            (``DEVICE_LIGHT`` covers lights and sockets, ``DEVICE_BLIND``
+            blinds); ``None`` for a command that names no single device
+            of such a family. Lets a caller tell which device a command
+            is for (``protection.command_is_protected``).
         audit: Whether issuing this command is logged at INFO as an
             audit-trail line (``client.issue``). Defaults to ``True`` so
             new commands are recorded by default — the audit log should
@@ -83,6 +92,7 @@ class CommandDefinition:
     example_args: tuple[object, ...] = ()
     write: bool = True
     changes_others: bool = False
+    device: str | None = None
 
 
 def _static(wire: str) -> Callable[[], str]:
@@ -323,6 +333,7 @@ class Commands:
         encode=_encode_light_toggle,
         example="leuchte13",
         example_args=(13,),
+        device=DEVICE_LIGHT,
     )
     LightDim = CommandDefinition(
         name="LightDim",
@@ -335,6 +346,7 @@ class Commands:
         encode=_encode_light_dim,
         example="DIMleuchte13:128",
         example_args=(13, 128),
+        device=DEVICE_LIGHT,
     )
     # -- Blinds (write) -----------------------------------------------------
     BlindUp = CommandDefinition(
@@ -347,6 +359,7 @@ class Commands:
         encode=_encode_blind_up,
         example="JALUP8",
         example_args=(8,),
+        device=DEVICE_BLIND,
     )
     BlindDown = CommandDefinition(
         name="BlindDown",
@@ -354,6 +367,7 @@ class Commands:
         encode=_encode_blind_down,
         example="JALDOW8",
         example_args=(8,),
+        device=DEVICE_BLIND,
     )
     BlindVent = CommandDefinition(
         name="BlindVent",
@@ -364,6 +378,7 @@ class Commands:
         encode=_encode_blind_vent,
         example="JALLUE8",
         example_args=(8,),
+        device=DEVICE_BLIND,
     )
     BlindsGroupUp = CommandDefinition(
         name="BlindsGroupUp",

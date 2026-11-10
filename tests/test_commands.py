@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from smart_place_client import KNOWN_COMMANDS, CommandDefinition, Commands
+from smart_place_client import DEVICE_BLIND, DEVICE_LIGHT, KNOWN_COMMANDS, CommandDefinition, Commands
 
 
 def test_known_commands_names_are_unique() -> None:
@@ -157,6 +157,26 @@ def test_commands_that_change_other_devices_are_flagged() -> None:
         "BlindsGroupDown",
     }
     assert CommandDefinition(name="X", description="d", encode=lambda: "X", example="X").changes_others is False
+
+
+def test_commands_that_name_a_device_are_listed() -> None:
+    """A command for one light, socket or blind says so, and takes the vendor id first.
+
+    Listed by hand like the writes: the protection of a device rests on it
+    (``protection.command_is_protected``), so a new command for a single
+    light or blind belongs here.
+    """
+    assert {defn.name: defn.device for defn in KNOWN_COMMANDS if defn.device is not None} == {
+        "LightToggle": DEVICE_LIGHT,
+        "LightDim": DEVICE_LIGHT,
+        "BlindUp": DEVICE_BLIND,
+        "BlindDown": DEVICE_BLIND,
+        "BlindVent": DEVICE_BLIND,
+    }
+    for defn in KNOWN_COMMANDS:
+        if defn.device is not None:
+            assert isinstance(defn.example_args[0], int), defn.name
+            assert str(defn.example_args[0]) in defn.example, defn.name
 
 
 def test_control_commands_encode_vendor_wire_strings() -> None:
