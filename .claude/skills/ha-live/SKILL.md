@@ -1,6 +1,6 @@
 ---
 name: ha-live
-description: Query the live Home Assistant box for Smart Place integration data using ./scripts/ha-live — config entry status, devices, entities and their current values, full state objects, system logs with tracebacks, live state streaming, plus reload/restart after deploys and raw REST/WebSocket escape hatches. Use when asked to verify the deployed integration, check entity values on the Pi, debug unavailable or missing entities, inspect HA logs for smart_place errors, or watch live updates.
+description: Query the live Home Assistant box for Smart Place integration data using ./scripts/ha-live — config entry status, devices, entities and their current values, full state objects, system logs with tracebacks, live state streaming, plus update (HACS), reload/restart, a service call that only works in dry run, and raw REST/WebSocket escape hatches. Use when asked to verify the deployed integration, check entity values on the Pi, debug unavailable or missing entities, inspect HA logs for smart_place errors, or watch live updates.
 ---
 
 # Inspect the live Smart Place deployment
@@ -39,16 +39,18 @@ echo 'HASS_URL=http://192.168.1.x:8123' >> .env
 
 | Command | What it returns |
 | --- | --- |
-| `status` | HA version, config entry state (+ failure reason), device/entity counts, Connection sensor value, any unavailable entities |
-| `devices` | Device-registry entries: main Smart Place device + climate sub-devices |
+| `status` | HA version, config entry state (+ failure reason), device/entity counts, Connection sensor value (and whether dry run is on), any unavailable entities |
+| `devices` | Device-registry entries: main Smart Place device + its sub-devices (zones, lights, blinds, categories) |
 | `entities` | Every entity with its current value and name (`--disabled` to include disabled ones) |
 | `state <entity_id>...` | Full state object(s) as JSON: value, all attributes, timestamps |
 | `logs` | smart_place system-log entries with tracebacks (`--all` for the whole buffer) |
 | `watch --seconds N` | Live stream of Smart Place state changes (default 60 s) |
-| `reload` | Reload the config entry — re-runs one-shot entity discovery |
+| `reload` | Reload the config entry — re-runs the integration's setup |
 | `restart` | Restart HA core, wait for it to come back, print entry state |
-| `get <path>` | Raw REST GET, e.g. `get /api/error_log`, `get /api/config` |
-| `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list` |
+| `update [--version <git ref>]` | Install a version of the integration through its HACS update entity (`update.smart_place_update`); needs a `restart` afterwards |
+| `call <domain.service> <entity_id> [key=value ...]` | Call a service on a Smart Place entity — **only while the integration is in dry run**, never on a door button (see below) |
+| `get <path>` | Raw REST GET, e.g. `get /api/config` |
+| `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list`. Refuses `call_service`, `execute_script`, `fire_event` and the other commands that make HA act |
 | `config-set <domain> <key> --file <f>` | Create/update an automation, scene, or script (writes HA config; see below) |
 
 `status`, `devices`, `entities`, and `logs` accept `--json` for
@@ -61,16 +63,14 @@ real `friendly_name`/attributes with `state <entity_id>`.
 
 ## Verification recipes
 
-- **After deploying new code** (changed Python requires a core restart;
-  reload is not enough):
+- **Installing new code** (only when the user asks for it). The box has
+  no SSH; the integration is installed through HACS, which tracks the
+  GitHub repository. So the code must be pushed first, then:
 
   ```bash
-  # NOTE: this box has NO SSH (port 22 refused — verified 2026-06-25), so
-  # the scp below does NOT work here. The user deploys the files via their
-  # own non-SSH channel (Samba / File editor / Studio Code Server); you
-  # then run the restart + checks over HTTP. See the ha-box-no-ssh memory.
-  scp -r custom_components/smart_place root@homeassistant.local:/config/custom_components/  # ✗ no sshd
-  ./scripts/ha-live restart
+  ./scripts/ha-live update                      # latest commit of the default branch
+  ./scripts/ha-live update --version <git ref>  # or a specific commit / tag
+  ./scripts/ha-live restart                     # changed Python needs a core restart
   ./scripts/ha-live status
   ./scripts/ha-live logs
   ```
@@ -78,14 +78,27 @@ real `friendly_name`/attributes with `state <entity_id>`.
 - **Check a specific value or its configuration**: `entities` to find the
   entity_id, then `state sensor.smart_place_outdoor_temperature` for the full
   object including attributes (unit, device_class, last_changed...).
-- **Debug a missing sensor**: discovery is one-shot during the 2 s
-  observation window after bootstrap (`SETUP_OBSERVATION_WINDOW` in
-  `const.py`). If the server first pushed that ID later, `reload` re-runs
-  discovery, then `entities` to confirm it appeared.
+- **Debug a missing entity**: entities are added when the server first
+  delivers their device or value (normally all at setup, after the 2 s
+  observation window, `SETUP_OBSERVATION_WINDOW` in `const.py`). A device
+  the server no longer lists keeps its entity until the next restart and
+  is never removed automatically. `entities --disabled` shows whether the
+  entity exists but is disabled (the door buttons and the "All lights"
+  button are disabled by default).
+- **Test a control entity without touching the building** (dry run):
+  only possible when the installed build has `DRY_RUN = True` in
+  `const.py`. `status` then prints "(dry run: ...)" next to the
+  Connection sensor.
+
+  ```bash
+  ./scripts/ha-live call light.turn_on light.kitchen_lights
+  ./scripts/ha-live call climate.set_temperature climate.bedroom temperature=22
+  ./scripts/ha-live get /api/hassio/core/logs | grep "dry run: would send"
+  ./scripts/ha-live state light.kitchen_lights   # shows the expected state for ~3 s, then the server value again
+  ```
 - **Confirm live pushes are flowing**: `watch --seconds 60` — climate/weather
   sensors update on server pushes; the stream prints each change.
-- **Anything not covered**: use the escape hatches, e.g. full error log text
-  `get /api/error_log`, entity registry dump
+- **Anything not covered**: use the escape hatches, e.g. entity registry dump
   `ws config/entity_registry/list`, config entries
   `ws config_entries/get '{"domain": "smart_place"}'`.
 
@@ -136,8 +149,7 @@ prompts for confirmation (skip with `--yes`; required when piping the payload
 via `--file -`) and prints the stored config back as confirmation.
 
 `config-set` writes **config only** — it cannot itself call a service, so it
-never opens a door directly (it does not break the "no service-calling
-command" rule below). But an automation you write here *can* press a door
+never opens a door directly. But an automation you write here *can* press a door
 button the next time it triggers — e.g. the existing **Intercom Ringing –
 Action** automation calls `button.press` on the door buttons. Review every
 payload (`--dry-run` it) before writing, and never add or trigger a door
@@ -167,14 +179,27 @@ payload (`--dry-run` it) before writing, and never add or trigger a door
 
 - **Never call `button.press` on the door buttons** (Front door, Ground floor
   entrance, Garage entrance, Mailbox) — they send `OEFFNER<n>` commands that
-  open real doors in the building. `ha-live` deliberately has no
-  service-calling command; do not work around that via `get`/`ws` or curl.
+  open real doors in the building. `call` refuses them always, also in dry run.
+- **Every other control entity acts on the real flat too**: lights, sockets,
+  blinds, heating, scenes, ventilation, group buttons, doorbell mute. The only
+  service-calling command is `call`, and it refuses unless the Connection
+  sensor reports `dry_run: true` (the integration then logs
+  `dry run: would send ...` instead of sending). `ws` refuses `call_service`,
+  `execute_script`, `fire_event`, `webhook/handle`, `conversation/process` and
+  `assist_pipeline/run`. Do not work around either guard with curl or another
+  client.
 - **Default to read-only.** Unless the user specifically asks for a change,
   use only the read-only commands. The mutating operations — `reload`,
-  `restart`, `config-set`, and any entity-registry rename / helper creation /
-  dashboard edit done through the raw `ws`/`get` hatches — affect the HA
-  instance only, never the building directly, but run them only when explicitly
-  instructed.
+  `restart`, `update`, `config-set`, and any entity-registry rename / helper
+  creation / dashboard edit done through the raw `ws`/`get` hatches — affect
+  the HA instance only, never the building directly, but run them only when
+  explicitly instructed.
+- **Keep the load on the box low.** It is a Raspberry Pi; a large history
+  response can stall Home Assistant. For history use a window of a few hours,
+  one or two named entities, and `minimal_response` plus `no_attributes`. For
+  anything longer than a day use the long-term statistics query
+  (`ws recorder/statistics_during_period` with `"period": "hour"`). Run such
+  queries one at a time.
 - `HASS_TOKEN` grants admin over HA: keep it in `.env`, never echo or commit
   it. The script never prints it.
 

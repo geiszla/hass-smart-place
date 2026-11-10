@@ -4,9 +4,15 @@ A read-mostly CLI over the HA REST + WebSocket APIs, scoped to the
 ``smart_place`` integration. It fetches data — config entry status,
 devices, entities and their states, system logs, a live state stream —
 and leaves any judgement about health to the caller. The mutating
-commands are ``reload``, ``restart``, and ``config-set``; all affect the
-HA instance only, never the building directly (``config-set`` writes
-automation/scene/script config — it cannot itself call a service).
+commands are ``reload``, ``restart``, ``update`` and ``config-set``; all
+affect the HA instance only, never the building directly (``config-set``
+writes automation/scene/script config — it cannot itself call a service).
+
+One command calls a service on a Smart Place entity: ``call``. It only
+does so while the integration runs in dry run (the Connection sensor
+reports ``dry_run: true``, so the integration logs commands instead of
+sending them to the building), and never on a door button. The raw ``ws``
+hatch refuses the WebSocket commands that make Home Assistant act.
 
 Authentication uses a long-lived access token from an admin HA user
 (HA UI → your user → Security → Long-lived access tokens). Put it in
@@ -54,8 +60,31 @@ DEFAULT_URL = "http://homeassistant.local:8123"
 # domain/key from escaping into another endpoint.
 CONFIG_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 
+# WebSocket commands that make Home Assistant act on devices: directly
+# (a service call, a script), or by starting whatever listens (an event,
+# a webhook, a voice command). The raw ``ws`` hatch refuses them; the
+# guarded ``call`` command is the only way to call a service from here.
+BLOCKED_WS_COMMANDS = frozenset(
+    {
+        "call_service",
+        "execute_script",
+        "fire_event",
+        "webhook/handle",
+        "conversation/process",
+        "assist_pipeline/run",
+    }
+)
+
+# The door buttons' unique ids are ``<entry id>_door_<key>`` (button.py).
+DOOR_UNIQUE_ID_MARKER = "_door_"
+
+# HACS creates this update entity for the integration's repository.
+HACS_UPDATE_ENTITY = "update.smart_place_update"
+
 REST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 WS_TIMEOUT = 15.0
+# HACS downloads the repository before ``update.install`` returns.
+UPDATE_TIMEOUT = 300.0
 # Entry reload re-runs the Smart Place bootstrap (CONFIG_FLOW_TIMEOUT=60s)
 # plus the 2s observation window, so give it headroom.
 RELOAD_TIMEOUT = 90.0
@@ -98,14 +127,14 @@ class HassApi:
                 return await response.json()
             return await response.text()
 
-    async def ws_command(self, command_type: str, **payload: Any) -> Any:
+    async def ws_command(self, command_type: str, *, max_wait: float = WS_TIMEOUT, **payload: Any) -> Any:
         """Send one WebSocket command and return its ``result`` payload."""
         ws = await self._connect_ws()
         self._next_id += 1
         msg_id = self._next_id
         await ws.send_json({"id": msg_id, "type": command_type, **payload})
         while True:
-            async with asyncio.timeout(WS_TIMEOUT):
+            async with asyncio.timeout(max_wait):
                 reply = await self._receive_json(ws)
             if reply.get("id") != msg_id or reply.get("type") != "result":
                 continue  # stray event from an earlier subscription
@@ -214,6 +243,70 @@ async def _states_by_id(api: HassApi) -> dict[str, dict[str, Any]]:
     return {s["entity_id"]: s for s in await api.get("/api/states")}
 
 
+def _connection_sensor(
+    registry: list[dict[str, Any]],
+    states: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the state of the integration's Connection sensor, if it has one."""
+    return next(
+        (
+            states[e["entity_id"]]
+            for e in registry
+            if not e.get("disabled_by")
+            and e["entity_id"].startswith("binary_sensor.")
+            and e["entity_id"] in states
+            and states[e["entity_id"]]["attributes"].get("device_class") == "connectivity"
+        ),
+        None,
+    )
+
+
+def _parse_service_data(pairs: tuple[str, ...]) -> dict[str, Any]:
+    """Turn ``key=value`` arguments into service data; values are JSON where they parse as JSON."""
+    data: dict[str, Any] = {}
+    for pair in pairs:
+        key, separator, raw = pair.partition("=")
+        if not separator or not key:
+            raise ApiError(f"service data must be key=value, got {pair!r}")
+        try:
+            data[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            data[key] = raw
+    return data
+
+
+async def _call_in_dry_run(api: HassApi, service: str, entity_id: str, data: dict[str, Any]) -> Any:
+    """Call ``service`` on a Smart Place entity, but only while the integration is in dry run.
+
+    Refuses (``ApiError``) when the entity is not one of this integration,
+    when it is a door button, and when the Connection sensor does not
+    report ``dry_run: true``: without dry run the call would reach the
+    real building.
+    """
+    domain, separator, name = service.partition(".")
+    if not separator or not domain or not name:
+        raise ApiError(f"the service must be given as <domain>.<service>, got {service!r}")
+    registry = await _domain_registry_entities(api)
+    entry = next((e for e in registry if e["entity_id"] == entity_id), None)
+    if entry is None:
+        raise ApiError(f"{entity_id} is not an entity of the {DOMAIN} integration; refusing to call a service on it")
+    if DOOR_UNIQUE_ID_MARKER in (entry.get("unique_id") or ""):
+        raise ApiError(f"{entity_id} is a door button; ha-live never presses a door button")
+    connection = _connection_sensor(registry, await _states_by_id(api))
+    if connection is None or connection["attributes"].get("dry_run") is not True:
+        raise ApiError(
+            "the integration is not in dry run (the Connection sensor does not report dry_run: true); "
+            "refusing to call a service that would act on the real building"
+        )
+    return await api.ws_command(
+        "call_service",
+        domain=domain,
+        service=name,
+        service_data=data,
+        target={"entity_id": entity_id},
+    )
+
+
 def _entry_label(entry: dict[str, Any]) -> str:
     """Return a one-line label for a config entry, including its state."""
     reason = f" — {entry['reason']}" if entry.get("reason") else ""
@@ -301,16 +394,7 @@ def status(obj: dict[str, str], as_json: bool) -> None:
         ]
         enabled = [e for e in registry if not e.get("disabled_by")]
         states = await _states_by_id(api)
-        connection = next(
-            (
-                states[e["entity_id"]]
-                for e in enabled
-                if e["entity_id"].startswith("binary_sensor.")
-                and e["entity_id"] in states
-                and states[e["entity_id"]]["attributes"].get("device_class") == "connectivity"
-            ),
-            None,
-        )
+        connection = _connection_sensor(registry, states)
         unavailable = [e["entity_id"] for e in enabled if states.get(e["entity_id"], {}).get("state") == "unavailable"]
 
         if as_json:
@@ -336,7 +420,8 @@ def status(obj: dict[str, str], as_json: bool) -> None:
         if connection is None:
             print("  Connection sensor: not found")
         else:
-            print(f"  Connection sensor ({connection['entity_id']}): {connection['state']}")
+            dry_run = " (dry run: commands are logged, not sent)" if connection["attributes"].get("dry_run") else ""
+            print(f"  Connection sensor ({connection['entity_id']}): {connection['state']}{dry_run}")
         if unavailable:
             print(f"  unavailable entities ({len(unavailable)}): {', '.join(unavailable[:8])}")
 
@@ -487,7 +572,7 @@ def watch(obj: dict[str, str], seconds: int) -> None:
 @cli.command()
 @click.pass_obj
 def reload(obj: dict[str, str]) -> None:
-    """Reload the Smart Place config entry (re-runs one-shot entity discovery)."""
+    """Reload the Smart Place config entry (re-runs the integration's setup)."""
 
     async def handler(api: HassApi) -> None:
         for entry in await _domain_entries(api):
@@ -572,11 +657,83 @@ def ws_cmd(obj: dict[str, str], command_type: str, payload: str | None) -> None:
 
     PAYLOAD is an optional JSON object merged into the message, e.g.:
     ./scripts/ha-live ws config_entries/get '{"domain": "smart_place"}'
+
+    Commands that make Home Assistant act (call_service, execute_script,
+    fire_event, ...) are refused; use ``call`` for a service call.
     """
+    if command_type in BLOCKED_WS_COMMANDS:
+        raise click.UsageError(
+            f"{command_type} makes Home Assistant act on devices and is not allowed through ws. "
+            "To call a service on a Smart Place entity in dry run, use: ha-live call"
+        )
 
     async def handler(api: HassApi) -> None:
         extra = json.loads(payload) if payload else {}
         _print_json(await api.ws_command(command_type, **extra))
+
+    _execute(obj, handler)
+
+
+@cli.command(name="call")
+@click.argument("service")
+@click.argument("entity_id")
+@click.argument("data", nargs=-1)
+@click.pass_obj
+def call_cmd(obj: dict[str, str], service: str, entity_id: str, data: tuple[str, ...]) -> None:
+    """Call a service on a Smart Place entity — only while the integration is in dry run.
+
+    SERVICE is <domain>.<service>, DATA is any number of key=value pairs
+    (values are read as JSON where possible), e.g.:
+
+      ./scripts/ha-live call light.turn_on light.kitchen_lights
+      ./scripts/ha-live call climate.set_temperature climate.bedroom temperature=22
+      ./scripts/ha-live call smart_place.adjust_setpoint climate.bedroom steps=-1
+
+    The call is refused unless the Connection sensor reports dry_run: true
+    (the integration then logs the command instead of sending it to the
+    building), unless the entity belongs to this integration, and always
+    for a door button.
+    """
+
+    async def handler(api: HassApi) -> None:
+        result = await _call_in_dry_run(api, service, entity_id, _parse_service_data(data))
+        print(f"Called {service} on {entity_id} (dry run: logged by the integration, not sent).")
+        if isinstance(result, dict) and result.get("response") is not None:
+            _print_json(result["response"])
+
+    _execute(obj, handler)
+
+
+@cli.command()
+@click.option("--version", "version", default=None, help="Git ref (commit, tag) to install; default: the latest.")
+@click.pass_obj
+def update(obj: dict[str, str], version: str | None) -> None:
+    """Install a version of the integration through its HACS update entity.
+
+    Calls update.install on the HACS update entity of this integration.
+    The new code only runs after a core restart: ./scripts/ha-live restart
+    """
+
+    async def handler(api: HassApi) -> None:
+        try:
+            before = await api.get(f"/api/states/{HACS_UPDATE_ENTITY}")
+        except aiohttp.ClientResponseError as err:
+            if err.status != 404:
+                raise
+            raise ApiError(f"{HACS_UPDATE_ENTITY} not found — is the integration installed through HACS?") from err
+        target = version or before["attributes"].get("latest_version")
+        print(f"Installing {target} (installed: {before['attributes'].get('installed_version')})...")
+        await api.ws_command(
+            "call_service",
+            max_wait=UPDATE_TIMEOUT,
+            domain="update",
+            service="install",
+            service_data={"version": version} if version else {},
+            target={"entity_id": HACS_UPDATE_ENTITY},
+        )
+        after = await api.get(f"/api/states/{HACS_UPDATE_ENTITY}")
+        print(f"  installed version: {after['attributes'].get('installed_version')}")
+        print("  restart Home Assistant to load it: ./scripts/ha-live restart")
 
     _execute(obj, handler)
 
