@@ -11,8 +11,11 @@ writes automation/scene/script config — it cannot itself call a service).
 One command calls a service on a Smart Place entity: ``call``. It only
 does so while the integration runs in dry run (the Connection sensor
 reports ``dry_run: true``, so the integration logs commands instead of
-sending them to the building), and never on a door button. The raw ``ws``
-hatch refuses the WebSocket commands that make Home Assistant act.
+sending them to the building), and never on a door button. The service
+must belong to the entity's domain or to ``smart_place``, and the service
+data must not name further targets. The raw ``ws`` hatch refuses the
+WebSocket commands that make Home Assistant act, and a payload that would
+replace the command.
 
 Authentication uses a long-lived access token from an admin HA user
 (HA UI → your user → Security → Long-lived access tokens). Put it in
@@ -75,8 +78,17 @@ BLOCKED_WS_COMMANDS = frozenset(
     }
 )
 
+# The message's own fields. A payload that carries one of them would replace
+# the command type that was checked against ``BLOCKED_WS_COMMANDS``.
+RESERVED_WS_KEYS = frozenset({"id", "type"})
+
 # The door buttons' unique ids are ``<entry id>_door_<key>`` (button.py).
 DOOR_UNIQUE_ID_MARKER = "_door_"
+
+# Service data that Home Assistant reads as further targets. ``call`` checks
+# one entity; these would make the call reach entities of other integrations,
+# which are not in dry run.
+SERVICE_TARGET_KEYS = frozenset({"entity_id", "device_id", "area_id", "floor_id", "label_id"})
 
 # HACS creates this update entity for the integration's repository.
 HACS_UPDATE_ENTITY = "update.smart_place_update"
@@ -278,14 +290,26 @@ def _parse_service_data(pairs: tuple[str, ...]) -> dict[str, Any]:
 async def _call_in_dry_run(api: HassApi, service: str, entity_id: str, data: dict[str, Any]) -> Any:
     """Call ``service`` on a Smart Place entity, but only while the integration is in dry run.
 
-    Refuses (``ApiError``) when the entity is not one of this integration,
-    when it is a door button, and when the Connection sensor does not
-    report ``dry_run: true``: without dry run the call would reach the
-    real building.
+    Refuses (``ApiError``) when the service belongs to another domain than
+    the entity (only ``smart_place`` actions are allowed besides), when the
+    service data names further targets, when the entity is not one of this
+    integration, when it is a door button, and when the Connection sensor
+    does not report ``dry_run: true``: without dry run the call would reach
+    the real building.
     """
     domain, separator, name = service.partition(".")
     if not separator or not domain or not name:
         raise ApiError(f"the service must be given as <domain>.<service>, got {service!r}")
+    entity_domain = entity_id.partition(".")[0]
+    if domain not in (entity_domain, DOMAIN):
+        raise ApiError(
+            f"{service} is not a service of the {entity_domain} or the {DOMAIN} domain; "
+            f"refusing to call it on {entity_id}"
+        )
+    if extra_targets := sorted(SERVICE_TARGET_KEYS & data.keys()):
+        raise ApiError(
+            f"service data must not name targets ({', '.join(extra_targets)}): the call is only checked for {entity_id}"
+        )
     registry = await _domain_registry_entities(api)
     entry = next((e for e in registry if e["entity_id"] == entity_id), None)
     if entry is None:
@@ -659,16 +683,26 @@ def ws_cmd(obj: dict[str, str], command_type: str, payload: str | None) -> None:
     ./scripts/ha-live ws config_entries/get '{"domain": "smart_place"}'
 
     Commands that make Home Assistant act (call_service, execute_script,
-    fire_event, ...) are refused; use ``call`` for a service call.
+    fire_event, ...) are refused; use ``call`` for a service call. So is a
+    PAYLOAD with the key ``type`` or ``id``: it would replace the command.
     """
     if command_type in BLOCKED_WS_COMMANDS:
         raise click.UsageError(
             f"{command_type} makes Home Assistant act on devices and is not allowed through ws. "
             "To call a service on a Smart Place entity in dry run, use: ha-live call"
         )
+    try:
+        extra = json.loads(payload) if payload else {}
+    except json.JSONDecodeError as err:
+        raise click.BadParameter(f"PAYLOAD is not valid JSON: {err}") from err
+    if not isinstance(extra, dict):
+        raise click.BadParameter("PAYLOAD must be a JSON object")
+    if RESERVED_WS_KEYS & extra.keys():
+        raise click.UsageError(
+            "PAYLOAD must not contain the key 'type' or 'id': it would replace the command that ws has checked"
+        )
 
     async def handler(api: HassApi) -> None:
-        extra = json.loads(payload) if payload else {}
         _print_json(await api.ws_command(command_type, **extra))
 
     _execute(obj, handler)
@@ -692,7 +726,9 @@ def call_cmd(obj: dict[str, str], service: str, entity_id: str, data: tuple[str,
     The call is refused unless the Connection sensor reports dry_run: true
     (the integration then logs the command instead of sending it to the
     building), unless the entity belongs to this integration, and always
-    for a door button.
+    for a door button. SERVICE must be of the entity's own domain or of
+    smart_place, and DATA must not name further targets (entity_id,
+    device_id, area_id, floor_id, label_id).
     """
 
     async def handler(api: HassApi) -> None:

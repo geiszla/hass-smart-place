@@ -48,9 +48,9 @@ echo 'HASS_URL=http://192.168.1.x:8123' >> .env
 | `reload` | Reload the config entry — re-runs the integration's setup |
 | `restart` | Restart HA core, wait for it to come back, print entry state |
 | `update [--version <git ref>]` | Install a version of the integration through its HACS update entity (`update.smart_place_update`); needs a `restart` afterwards |
-| `call <domain.service> <entity_id> [key=value ...]` | Call a service on a Smart Place entity — **only while the integration is in dry run**, never on a door button (see below) |
+| `call <domain.service> <entity_id> [key=value ...]` | Call a service on a Smart Place entity — **only while the integration is in dry run**, never on a door button. The service must be of the entity's own domain or of `smart_place`; the data must not name further targets (see below) |
 | `get <path>` | Raw REST GET, e.g. `get /api/config` |
-| `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list`. Refuses `call_service`, `execute_script`, `fire_event` and the other commands that make HA act |
+| `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list`. Refuses `call_service`, `execute_script`, `fire_event` and the other commands that make HA act, and a JSON payload with the key `type` or `id` |
 | `config-set <domain> <key> --file <f>` | Create/update an automation, scene, or script (writes HA config; see below) |
 
 `status`, `devices`, `entities`, and `logs` accept `--json` for
@@ -80,11 +80,12 @@ real `friendly_name`/attributes with `state <entity_id>`.
   object including attributes (unit, device_class, last_changed...).
 - **Debug a missing entity**: entities are added when the server first
   delivers their device or value (normally all at setup, after the 2 s
-  observation window, `SETUP_OBSERVATION_WINDOW` in `const.py`). A device
-  the server no longer lists keeps its entity until the next restart and
-  is never removed automatically. `entities --disabled` shows whether the
-  entity exists but is disabled (the door buttons and the "All lights"
-  button are disabled by default).
+  observation window, `SETUP_OBSERVATION_WINDOW` in `const.py`). Nothing
+  is removed automatically: the entity of a device the server no longer
+  lists stays in the entity registry, also after a restart (Home Assistant
+  then shows it as no longer provided), until the user deletes the device.
+  `entities --disabled` shows whether the entity exists but is disabled
+  (the door buttons and the "All lights" button are disabled by default).
 - **Test a control entity without touching the building** (dry run):
   only possible when the installed build has `DRY_RUN = True` in
   `const.py`. `status` then prints "(dry run: ...)" next to the
@@ -186,8 +187,17 @@ payload (`--dry-run` it) before writing, and never add or trigger a door
   sensor reports `dry_run: true` (the integration then logs
   `dry run: would send ...` instead of sending). `ws` refuses `call_service`,
   `execute_script`, `fire_event`, `webhook/handle`, `conversation/process` and
-  `assist_pipeline/run`. Do not work around either guard with curl or another
-  client.
+  `assist_pipeline/run`, and any payload that contains the key `type` or `id`
+  (it would replace the command that was checked). Do not work around either
+  guard with curl or another client.
+- **`call` only reaches the entity it names.** Dry run covers this
+  integration only; entities of other integrations would really act. So
+  `call` also refuses:
+  - a service of another domain than the entity's own, except `smart_place`
+    actions (`light.turn_on light.x` and `smart_place.adjust_setpoint
+    climate.x` pass; `homeassistant.turn_off light.x` does not);
+  - service data with `entity_id`, `device_id`, `area_id`, `floor_id` or
+    `label_id`: Home Assistant reads these as further targets.
 - **Default to read-only.** Unless the user specifically asks for a change,
   use only the read-only commands. The mutating operations — `reload`,
   `restart`, `update`, `config-set`, and any entity-registry rename / helper

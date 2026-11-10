@@ -7,11 +7,15 @@ network, no Home Assistant.
 
 from __future__ import annotations
 
+from collections import deque
 import importlib.util
+import json
 from pathlib import Path
 import sys
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Self
 
+import aiohttp
 from click.testing import CliRunner
 import pytest
 
@@ -33,6 +37,7 @@ _REGISTRY = [
         "unique_id": "entry1_connection",
     },
     {"entity_id": "light.kitchen_lights", "config_entry_id": _ENTRY_ID, "unique_id": "entry1_light_3"},
+    {"entity_id": "climate.bedroom", "config_entry_id": _ENTRY_ID, "unique_id": "entry1_climate_1"},
     {"entity_id": "button.smart_place_front_door", "config_entry_id": _ENTRY_ID, "unique_id": "entry1_door_front_door"},
     {"entity_id": "light.other_lamp", "config_entry_id": "another", "unique_id": "xyz"},
 ]
@@ -106,6 +111,48 @@ async def test_call_is_refused_on_entities_of_other_integrations() -> None:
     assert api.service_calls == []
 
 
+async def test_call_of_an_integration_action_goes_through() -> None:
+    """A ``smart_place`` action may be called on an entity of another domain."""
+    api = _FakeApi(dry_run=True)
+    await ha_live._call_in_dry_run(api, "smart_place.adjust_setpoint", "climate.bedroom", {"steps": -1})
+    assert api.service_calls == [
+        {
+            "domain": "smart_place",
+            "service": "adjust_setpoint",
+            "service_data": {"steps": -1},
+            "target": {"entity_id": "climate.bedroom"},
+        },
+    ]
+
+
+@pytest.mark.parametrize("service", ["homeassistant.turn_off", "switch.turn_on", "script.turn_on", "scene.apply"])
+async def test_call_is_refused_for_a_service_of_another_domain(service: str) -> None:
+    """A service of another domain could act on more than the checked entity."""
+    api = _FakeApi(dry_run=True)
+    with pytest.raises(ha_live.ApiError, match="not a service of the light or the smart_place domain"):
+        await ha_live._call_in_dry_run(api, service, "light.kitchen_lights", {})
+    assert api.commands == []
+
+
+@pytest.mark.parametrize("key", ["entity_id", "device_id", "area_id", "floor_id", "label_id"])
+async def test_call_is_refused_when_the_data_names_further_targets(key: str) -> None:
+    """Home Assistant honours these keys as targets; only the named entity is checked."""
+    api = _FakeApi(dry_run=True)
+    with pytest.raises(ha_live.ApiError, match=f"must not name targets \\({key}\\)"):
+        await ha_live._call_in_dry_run(api, "light.turn_on", "light.kitchen_lights", {key: "other", "brightness": 1})
+    assert api.commands == []
+
+
+def test_call_command_refuses_further_targets_given_as_arguments() -> None:
+    """The same refusal through the command line, where the data is typed as key=value."""
+    result = CliRunner().invoke(
+        ha_live.cli,
+        ["--token", "t", "--url", "http://192.0.2.1:1", "call", "light.turn_off", "light.kitchen_lights", "area_id=x"],
+    )
+    assert result.exit_code == 2
+    assert "must not name targets (area_id)" in result.output
+
+
 async def test_call_needs_a_domain_and_a_service() -> None:
     api = _FakeApi(dry_run=True)
     with pytest.raises(ha_live.ApiError, match=r"<domain>\.<service>"):
@@ -135,3 +182,82 @@ def test_ws_hatch_refuses_commands_that_act(command: str) -> None:
 
 def test_ws_hatch_blocks_the_service_and_event_commands() -> None:
     assert {"call_service", "execute_script", "fire_event"} <= ha_live.BLOCKED_WS_COMMANDS
+
+
+class _FakeSocket:
+    """Scripted Home Assistant WebSocket: accepts the login, answers every command, records what was sent."""
+
+    closed = False
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self._replies: deque[dict[str, Any]] = deque([{"type": "auth_required"}])
+
+    async def send_json(self, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+        if message["type"] == "auth":
+            self._replies.append({"type": "auth_ok"})
+        else:
+            self._replies.append({"id": message.get("id"), "type": "result", "success": True, "result": "done"})
+
+    async def receive(self) -> SimpleNamespace:
+        return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(self._replies.popleft()))
+
+
+@pytest.fixture
+def fake_socket(monkeypatch: pytest.MonkeyPatch) -> _FakeSocket:
+    """Make every session the script opens connect to one fake socket."""
+    socket = _FakeSocket()
+
+    class _FakeSession:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        async def ws_connect(self, _url: str, **_kwargs: object) -> _FakeSocket:
+            return socket
+
+    monkeypatch.setattr(ha_live.aiohttp, "ClientSession", _FakeSession)
+    return socket
+
+
+def _invoke_ws(*args: str) -> Any:
+    return CliRunner().invoke(ha_live.cli, ["--token", "t", "--url", "http://192.0.2.1:1", "ws", *args])
+
+
+def test_ws_hatch_sends_an_allowed_command_with_its_payload(fake_socket: _FakeSocket) -> None:
+    result = _invoke_ws("config_entries/get", '{"domain": "smart_place"}')
+    assert result.exit_code == 0, result.output
+    assert fake_socket.sent == [
+        {"type": "auth", "access_token": "t"},
+        {"id": 1, "type": "config_entries/get", "domain": "smart_place"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"type": "call_service", "domain": "light", "service": "turn_on", "target": {"entity_id": "light.x"}}',
+        '{"type": "ping"}',
+        '{"id": 7}',
+        '{"domain": "light", "id": 1, "type": "fire_event"}',
+    ],
+)
+def test_ws_hatch_refuses_a_payload_that_replaces_the_command(fake_socket: _FakeSocket, payload: str) -> None:
+    """``ws ping '{"type": "call_service", ...}'`` must not reach the box as a service call."""
+    result = _invoke_ws("ping", payload)
+    assert result.exit_code == 2
+    assert "must not contain the key 'type' or 'id'" in result.output
+    assert fake_socket.sent == []
+
+
+@pytest.mark.parametrize("payload", ["[1, 2]", '"type"', "{not json"])
+def test_ws_hatch_refuses_a_payload_that_is_not_a_json_object(fake_socket: _FakeSocket, payload: str) -> None:
+    result = _invoke_ws("ping", payload)
+    assert result.exit_code == 2
+    assert fake_socket.sent == []
