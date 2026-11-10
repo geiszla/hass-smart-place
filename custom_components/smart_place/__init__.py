@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.typing import ConfigType
 
     from .dashboard import SmartPlaceDashboard
-    from .smart_place_client import BlindConfig, LightConfig
+    from .smart_place_client import BlindConfig, LevelGroup, LightConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,13 +183,29 @@ def category_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, cat
     the same pattern the per-room climate sub-devices use.
     Splitting the entities across these keeps the integration from
     rendering as one giant 40-entity card. No area on purpose: an area-wide
-    call must not reach scenes, group buttons or door openers.
+    call must not reach group buttons or door openers.
     """
     identifier = (DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")
     data.device_identifiers.add(identifier)
     return DeviceInfo(
         identifiers={identifier},
         name=f"Smart Place {category}",
+        manufacturer=MANUFACTURER,
+        via_device_id=data.main_device_id,
+    )
+
+
+def level_group_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, group: LevelGroup) -> DeviceInfo:
+    """Return the device of one level group, named after the group alone.
+
+    No "Smart Place" prefix: the fan takes the device name, and the voice
+    assistant matches on that name ("Ventilation").
+    """
+    identifier = (DOMAIN, f"{entry.entry_id}_level_group_{group.scene_ids[0]}")
+    data.device_identifiers.add(identifier)
+    return DeviceInfo(
+        identifiers={identifier},
+        name=group.name,
         manufacturer=MANUFACTURER,
         via_device_id=data.main_device_id,
     )

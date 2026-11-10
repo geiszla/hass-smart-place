@@ -107,10 +107,14 @@ Open **Settings → Devices & Services → Smart Place**. You should see:
   the temperature sensor and a (disabled) humidity sensor.
 - One device per **light**, **socket** and **blind**, named as in the Smart
   Place app.
-- Category devices: **Scenes** (scenes and scene switches), one per level
-  group such as **Ventilation** (a fan), **Groups** ("All blinds up/down";
-  "All lights" is disabled by default), **Intercom** (doorbell mute),
-  **Weather**, **Energy**, **Cameras**, and **Doors**.
+- One device per level group, named after it, such as **Ventilation** (a
+  fan).
+- Category devices: **Groups** ("All blinds up/down"; "All lights" is
+  disabled by default), **Intercom** (doorbell mute), **Weather**,
+  **Energy**, **Cameras**, and **Doors**.
+- **Scenes** and scene switches have no device: they are named like the
+  scene alone ("Night"), so the voice assistant recognises them. Find
+  them in the integration's entity list or on the dashboard's Scenes view.
 - Four **door** buttons (Front door, Ground floor entrance, Garage
   entrance, Mailbox) — disabled by default. They *send* `OEFFNER<n>` when
   pressed and open real doors; enable only the ones you want.

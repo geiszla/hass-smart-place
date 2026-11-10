@@ -956,9 +956,12 @@ Translates the WS dispatch into the canonical HA entity types
 (`identifiers={(DOMAIN, entry_id)}`) and every other device links to it
 with `via_device_id`: one device per heating zone
 (`<entry_id>_zone_<n>`), one per light or socket (`<entry_id>_light_<n>`),
-one per blind (`<entry_id>_blind_<n>`), and category devices
-(`<entry_id>_cat_<name>`: Weather, Energy, Scenes, Groups, Intercom,
-Doors, Cameras, and one per level group such as Ventilation). The
+one per blind (`<entry_id>_blind_<n>`), one per level group
+(`<entry_id>_level_group_<first scene id>`, named after the group alone,
+such as "Ventilation"), and category devices (`<entry_id>_cat_<name>`:
+Weather, Energy, Groups, Intercom, Doors, Cameras). Scenes and scene
+switches have no device: Home Assistant names an entity "<device>
+<entity>", and the voice assistant has to match a spoken "Night". The
 deprecated identifier-based `via_device` must not be used: Home Assistant
 raises on it whenever it cannot attribute the call to an integration,
 which made the two tariff sensors unavailable (IMPLEMENT.md, 2026-11-10).

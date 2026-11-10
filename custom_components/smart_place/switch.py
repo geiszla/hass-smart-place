@@ -3,8 +3,8 @@
 - A light of kind ``steckdose`` is an outlet switch on its own device, so
   it stays out of light groups and "all lights off".
 - An ``OnOff`` scene has a real state (``SZENEN<id>:00|01``) and becomes a
-  switch on the "Scenes" device — unless it is one level of a level group,
-  which is a fan (``fan.py``).
+  switch without a device (see ``scene.py``) — unless it is one level of a
+  level group, which is a fan (``fan.py``).
 - ``MUTE<n>`` is the doorbell mute, on the "Intercom" device.
 
 All three only have a toggle command, so on/off is decided against the
@@ -92,7 +92,6 @@ class SmartPlaceSceneSwitch(SmartPlaceToggleEntity, SwitchEntity):
         self._scene_id = scene.id
         self._attr_name = scene.name
         self._attr_unique_id = f"{entry.entry_id}_scene_switch_{scene.id}"
-        self._attr_device_info = category_device_info(entry, data, "Scenes")
 
     def _server_is_on(self) -> bool | None:
         return self._data.state.scene_states.get(self._scene_id)

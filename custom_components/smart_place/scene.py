@@ -4,6 +4,9 @@ An ``OnOn`` scene only triggers: activating it sends ``SZENEN<id>``. Its
 ``SZENEN<id>`` flag latches at ``01`` once the scene ran, so it is not a
 state and is not exposed. On/off scenes are switches (``switch.py``) or
 levels of a fan (``fan.py``); scenes protected by a PIN get no entity.
+
+Scenes have no device: with one, the name would be "<device> <scene>" and
+the voice assistant would not match a spoken "Night".
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.scene import Scene
 
-from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
+from . import SmartPlaceConfigEntry, SmartPlaceData
 from .entity import SmartPlacePushEntity, async_add_discovered, async_classify_scenes
 from .smart_place_client import Commands, SceneConfig
 
@@ -56,7 +59,6 @@ class SmartPlaceScene(SmartPlacePushEntity, Scene):
         self._scene_id = scene.id
         self._attr_name = scene.name
         self._attr_unique_id = f"{entry.entry_id}_scene_{scene.id}"
-        self._attr_device_info = category_device_info(entry, data, "Scenes")
 
     async def async_activate(self, **kwargs: Any) -> None:
         """Trigger the scene."""

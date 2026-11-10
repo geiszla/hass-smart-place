@@ -841,10 +841,13 @@ Energy dashboard has no grid consumption for that period.
 
 ### Decisions and divergences from the plan
 
-- **Level-group fan device.** The plan puts the fan on a category device
-  "Ventilation" and names the entity after the group. Both together would
-  read "Smart Place Ventilation Ventilation". Each level group gets a
-  category device named after the group and the entity takes that name.
+- **Short names for voice (user decision, 2026-11-10).** The plan put
+  scenes and scene switches on a category device "Scenes" and the fan on
+  "Ventilation", which gives names like "Smart Place Scenes Night" that
+  the voice assistant does not match. Scenes and scene switches have no
+  device and are named like the scene alone (`scene.night`). Each level
+  group gets a device named after the group alone and the fan takes that
+  name (`fan.ventilation`).
 - **Plan image availability.** The image entity is available once the
   image was fetched, also while the connection is down (the picture does
   not depend on the connection), like the price sensor.

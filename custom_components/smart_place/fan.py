@@ -21,7 +21,7 @@ from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.percentage import percentage_to_ranged_value, ranged_value_to_percentage
 
-from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
+from . import SmartPlaceConfigEntry, SmartPlaceData, level_group_device_info
 from .const import DOMAIN
 from .entity import SmartPlacePushEntity, async_add_discovered, async_classify_scenes
 from .smart_place_client import Commands, ExpectedState, LevelGroup
@@ -70,7 +70,7 @@ class SmartPlaceLevelFan(SmartPlacePushEntity, FanEntity):
         self._scene_ids = group.scene_ids
         self._attr_speed_count = len(group.scene_ids)
         self._attr_unique_id = f"{entry.entry_id}_level_group_{group.scene_ids[0]}"
-        self._attr_device_info = category_device_info(entry, data, group.name)
+        self._attr_device_info = level_group_device_info(entry, data, group)
         self._expected_level: ExpectedState[int] = ExpectedState()
 
     def _server_level(self) -> int | None:
