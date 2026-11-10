@@ -528,6 +528,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         data.async_notify_listeners()
 
     @callback
+    def burst_missing(now: datetime) -> None:
+        _LOGGER.warning(
+            "Smart Place did not send the values of all listed devices within %.0f s after its device list; "
+            "the entities are created without them and take each value when it arrives",
+            VALUE_BURST_TIMEOUT,
+        )
+        observation_over(now)
+
+    @callback
     def stop_observation() -> None:
         nonlocal cancel_observation, burst_seen
         if cancel_observation is not None:
@@ -560,7 +569,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
                 cancel_observation = async_call_later(hass, SETUP_OBSERVATION_WINDOW, observation_over)
             elif cancel_observation is None:
                 # No burst (yet): the devices must not be withheld for good.
-                cancel_observation = async_call_later(hass, VALUE_BURST_TIMEOUT, observation_over)
+                cancel_observation = async_call_later(hass, VALUE_BURST_TIMEOUT, burst_missing)
 
     client.subscribe(_on_frame)
 
