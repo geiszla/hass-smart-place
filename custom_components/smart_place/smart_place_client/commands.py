@@ -432,7 +432,9 @@ class Commands:
         description=(
             "Press a lights sub-menu button by sending its group message verbatim "
             "(wire: ``LEUCHTENZENTRAL<n>``, taken from the ``LightSubMenu`` frame). "
-            "What the server does with it (all off, all on, toggle) is untested."
+            "What the server does with it (all off, all on, toggle) is untested. "
+            'The integration does not issue it: its "all lights" buttons switch '
+            "each light through its own entity."
         ),
         encode=_encode_group_message,
         example="LEUCHTENZENTRAL1",

@@ -1,6 +1,12 @@
 {
   "entity": {
     "button": {
+      "all_lights_off": {
+        "default": "mdi:lightbulb-group-off"
+      },
+      "all_lights_on": {
+        "default": "mdi:lightbulb-group"
+      },
       "blinds_group": {
         "default": "mdi:blinds"
       },
@@ -9,9 +15,6 @@
       },
       "blinds_group_up": {
         "default": "mdi:arrow-up-box"
-      },
-      "lights_group": {
-        "default": "mdi:lightbulb-group"
       }
     },
     "image": {

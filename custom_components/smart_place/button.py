@@ -1,4 +1,4 @@
-"""Button platform for Smart Place — door openers and group buttons.
+"""Button platform for Smart Place — door openers, "all lights" and the blinds group buttons.
 
 The four ``OEFFNER<n>`` commands map to physical doors at the
 property: front door, ground-floor entrance, garage, mailbox. They're
@@ -7,13 +7,17 @@ same app WebSocket. Per the ``smart-place-observe-only`` memory, the
 client library never sends them unprompted — pressing the HA button
 is the explicit, user-driven trigger.
 
-The vendor app's sub-menus add group buttons: per lights sub-menu one
-button that sends the sub-menu's group message (what the server does
-with it is untested, so the button is disabled by default). The blinds
-sub-menu that covers its whole plan gets "all up" and "all down" for the
-blinds of that plan; any other blinds sub-menu gets one button that
-sends its own group message, like the lights one and disabled by default
-for the same reason.
+"All lights off" and "All lights on" switch every light and socket
+through its own entity, one after the other. The vendor app's lights
+sub-menu has a group message for this, but it is not used: what the
+server does with it is not known, and a protected socket could not be
+kept out of it.
+
+The vendor app's blinds sub-menus add group buttons: the one that covers
+its whole plan gets "all up" and "all down" for the blinds of that plan;
+any other blinds sub-menu gets one button that sends its own group
+message (what the server does with it is untested, so that button is
+disabled by default).
 """
 
 from __future__ import annotations
@@ -25,10 +29,13 @@ from functools import partial
 from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_ON, STATE_OFF, STATE_ON, Platform
+from homeassistant.helpers import entity_registry as er
 
 from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, main_device_info
+from .const import DOMAIN
 from .entity import SmartPlacePushEntity, async_add_discovered
-from .smart_place_client import CommandDefinition, Commands, blinds_menu_plan
+from .smart_place_client import LIGHT_KIND_SOCKET, CommandDefinition, Commands, blinds_menu_plan
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -64,7 +71,7 @@ async def async_setup_entry(
     entry: SmartPlaceConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create one button per known door and the group buttons of the sub-menus."""
+    """Create one button per known door, the two "all lights" buttons and the blinds group buttons."""
     data = entry.runtime_data
     state = data.state
 
@@ -74,21 +81,9 @@ async def async_setup_entry(
         }
         if not data.devices_listed:
             return found
-        for menu in state.light_sub_menus.values():
-            # The message is sent back verbatim, so only a well-formed one gets a button.
-            with contextlib.suppress(ValueError):
-                Commands.GroupMessage.encode(menu.group_message)
-                found["lights_group", menu.id] = partial(
-                    SmartPlaceGroupButton,
-                    entry,
-                    data,
-                    name=f"{menu.name} lights",
-                    unique_id=f"lights_group_{menu.id}",
-                    translation_key="lights_group",
-                    command=Commands.GroupMessage,
-                    argument=menu.group_message,
-                    enabled_default=False,
-                )
+        if state.lights:
+            for on in (False, True):
+                found["all_lights", on] = partial(SmartPlaceAllLightsButton, entry, data, on=on)
         for menu in state.blind_sub_menus.values():
             if (plan_id := blinds_menu_plan(menu)) is not None:
                 for direction, command in (("up", Commands.BlindsGroupUp), ("down", Commands.BlindsGroupDown)):
@@ -103,7 +98,8 @@ async def async_setup_entry(
                         argument=plan_id,
                     )
                 continue
-            # Any other sub-menu must not move the whole plan: it sends its own message.
+            # Any other sub-menu must not move the whole plan: it sends its own
+            # message, verbatim, so only a well-formed one gets a button.
             with contextlib.suppress(ValueError):
                 Commands.BlindsGroupMessage.encode(menu.group_message)
                 found["blinds_group", menu.id] = partial(
@@ -152,8 +148,43 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
         await self._async_issue(self._door.command)
 
 
+class SmartPlaceAllLightsButton(SmartPlacePushEntity, ButtonEntity):
+    """Switch every light and socket of the entry off, or on.
+
+    Each light and socket entity that is not in the wanted state yet gets
+    its own turn-off (or turn-on) call, one after the other. So the
+    toggle rule, the expected state and the protection of a socket apply
+    as for a single press, and a protected socket is never switched.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, *, on: bool) -> None:
+        """Wire the direction, the unique_id and the translated name."""
+        self._data = data
+        self._entry_id = entry.entry_id
+        self._on = on
+        self._attr_translation_key = "all_lights_on" if on else "all_lights_off"
+        self._attr_unique_id = f"{entry.entry_id}_{self._attr_translation_key}"
+        self._attr_device_info = main_device_info(entry)
+
+    async def async_press(self) -> None:
+        """Call turn-off (or turn-on) for every light and socket in the other state."""
+        registry = er.async_get(self.hass)
+        service, other_state = (SERVICE_TURN_ON, STATE_OFF) if self._on else (SERVICE_TURN_OFF, STATE_ON)
+        for light in self._data.state.lights.values():
+            domain, kind = (Platform.SWITCH, "socket") if light.kind == LIGHT_KIND_SOCKET else (Platform.LIGHT, "light")
+            entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{self._entry_id}_{kind}_{light.id}")
+            # A disabled entity has no state; an unknown or unavailable one is left alone.
+            if entity_id is None or (state := self.hass.states.get(entity_id)) is None or state.state != other_state:
+                continue
+            await self.hass.services.async_call(
+                domain, service, {ATTR_ENTITY_ID: entity_id}, blocking=True, context=self._context
+            )
+
+
 class SmartPlaceGroupButton(SmartPlacePushEntity, ButtonEntity):
-    """A sub-menu group button: lights, all blinds up, all blinds down, a group of blinds."""
+    """A blinds sub-menu group button: all blinds up, all blinds down, a group of blinds."""
 
     _attr_has_entity_name = True
 

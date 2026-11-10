@@ -69,7 +69,8 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         fans=existing([entity_id(Platform.FAN, f"level_group_{group.scene_ids[0]}") for group in scenes.level_groups]),
         buttons=existing(
             [
-                *(entity_id(Platform.BUTTON, f"lights_group_{menu_id}") for menu_id in sorted(state.light_sub_menus)),
+                entity_id(Platform.BUTTON, "all_lights_off"),
+                entity_id(Platform.BUTTON, "all_lights_on"),
                 *(
                     entity_id(Platform.BUTTON, f"blinds_group_{kind}{menu_id}")
                     for menu_id in sorted(state.blind_sub_menus)

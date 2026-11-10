@@ -34,7 +34,7 @@
           "lower_delay_minutes": "Wait before lowering (minutes)"
         },
         "data_description": {
-          "protected_sockets": "Home Assistant sends no command for a protected socket: turning it on or off from Home Assistant does nothing. Smart Place scenes, the 'All lights' button, wall buttons and the Smart Place app can still switch it.",
+          "protected_sockets": "Home Assistant sends no command for a protected socket: turning it on or off from Home Assistant does nothing. Smart Place scenes, wall buttons and the Smart Place app can still switch it.",
           "lower_delay_minutes": "For blinds whose switch 'Lower after weather alarm' is on: how long Home Assistant waits after the end of the alarm before it lowers the blind. 0 lowers it at once. The wait ends without lowering if the alarm comes back, the blind is moved, or the connection to Smart Place is lost."
         }
       }
@@ -44,6 +44,14 @@
     }
   },
   "entity": {
+    "button": {
+      "all_lights_off": {
+        "name": "All lights off"
+      },
+      "all_lights_on": {
+        "name": "All lights on"
+      }
+    },
     "sensor": {
       "weather_alarm": {
         "state": {
