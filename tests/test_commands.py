@@ -114,6 +114,7 @@ _WRITE_COMMANDS = {
     "Setpoint",
     "Scene",
     "GroupMessage",
+    "BlindsGroupMessage",
     "MuteToggle",
 }
 _READ_COMMANDS = {
@@ -157,6 +158,8 @@ def test_control_commands_encode_vendor_wire_strings() -> None:
     assert Commands.Setpoint.encode(6, 26) == "TEMPSOLL6:26"
     assert Commands.Scene.encode(11) == "SZENEN11"
     assert Commands.GroupMessage.encode("LEUCHTENZENTRAL1") == "LEUCHTENZENTRAL1"
+    assert Commands.BlindsGroupMessage.encode("JALZENTRAL2") == "JALZENTRAL2"
+    assert Commands.BlindsGroupMessage.encode("JALGRUPPE12") == "JALGRUPPE12"
     assert Commands.MuteToggle.encode(1) == "MUTE1"
 
 
@@ -188,9 +191,21 @@ def test_control_commands_encode_vendor_wire_strings() -> None:
         (Commands.GroupMessage, ("JALZENTRAL1",)),
         (Commands.GroupMessage, ("",)),
         (Commands.GroupMessage, (1,)),
+        # The same for a blinds sub-menu: only a frame name of the blinds family.
+        (Commands.BlindsGroupMessage, ("OEFFNER1",)),
+        (Commands.BlindsGroupMessage, ("LEUCHTENZENTRAL1",)),
+        (Commands.BlindsGroupMessage, ("SZENEN7",)),
+        (Commands.BlindsGroupMessage, ("leuchte13",)),
+        (Commands.BlindsGroupMessage, ("PwReset1",)),
+        (Commands.BlindsGroupMessage, ("JALZENTRAL2\nOEFFNER1",)),
+        (Commands.BlindsGroupMessage, ("JALZENTRAL2:01",)),
+        (Commands.BlindsGroupMessage, ("JALZENTRAL",)),
+        (Commands.BlindsGroupMessage, ("TEMPSOLL5:18",)),
+        (Commands.BlindsGroupMessage, ("",)),
+        (Commands.BlindsGroupMessage, (2,)),
     ],
 )
 def test_control_commands_reject_bad_arguments(command: CommandDefinition, args: tuple[object, ...]) -> None:
     """Out-of-range or wrongly typed arguments raise instead of reaching the wire."""
-    with pytest.raises(ValueError, match=r"must be|not a lights group message"):
+    with pytest.raises(ValueError, match=r"must be|not a lights group message|not a blinds group message"):
         command.encode(*args)

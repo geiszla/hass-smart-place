@@ -42,6 +42,7 @@ from .devices import (
     PlanConfig,
     SceneConfig,
     SubMenuConfig,
+    blinds_menu_plan,
 )
 from .expected import EXPECTED_STATE_TIMEOUT, ExpectedState
 from .messages import KNOWN_MESSAGES, parse_frame
@@ -159,6 +160,7 @@ __all__ = [
     "Temperature",
     "UnknownFrame",
     "blind_centre",
+    "blinds_menu_plan",
     "build_dashboard",
     "chart_target_status",
     "classify_scenes",

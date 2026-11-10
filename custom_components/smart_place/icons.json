@@ -1,6 +1,9 @@
 {
   "entity": {
     "button": {
+      "blinds_group": {
+        "default": "mdi:blinds"
+      },
       "blinds_group_down": {
         "default": "mdi:arrow-down-box"
       },

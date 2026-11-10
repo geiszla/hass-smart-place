@@ -9,8 +9,11 @@ is the explicit, user-driven trigger.
 
 The vendor app's sub-menus add group buttons: per lights sub-menu one
 button that sends the sub-menu's group message (what the server does
-with it is untested, so the button is disabled by default), and per
-blinds sub-menu "all up" and "all down" for the blinds of its plan.
+with it is untested, so the button is disabled by default). The blinds
+sub-menu that covers its whole plan gets "all up" and "all down" for the
+blinds of that plan; any other blinds sub-menu gets one button that
+sends its own group message, like the lights one and disabled by default
+for the same reason.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from homeassistant.components.button import ButtonEntity
 
 from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
 from .entity import SmartPlacePushEntity, async_add_discovered
-from .smart_place_client import CommandDefinition, Commands
+from .smart_place_client import CommandDefinition, Commands, blinds_menu_plan
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -87,18 +90,32 @@ async def async_setup_entry(
                     enabled_default=False,
                 )
         for menu in state.blind_sub_menus.values():
-            if menu.plan_id is None:
+            if (plan_id := blinds_menu_plan(menu)) is not None:
+                for direction, command in (("up", Commands.BlindsGroupUp), ("down", Commands.BlindsGroupDown)):
+                    found[f"blinds_group_{direction}", menu.id] = partial(
+                        SmartPlaceGroupButton,
+                        entry,
+                        data,
+                        name=f"{menu.name} blinds {direction}",
+                        unique_id=f"blinds_group_{direction}_{menu.id}",
+                        translation_key=f"blinds_group_{direction}",
+                        command=command,
+                        argument=plan_id,
+                    )
                 continue
-            for direction, command in (("up", Commands.BlindsGroupUp), ("down", Commands.BlindsGroupDown)):
-                found[f"blinds_group_{direction}", menu.id] = partial(
+            # Any other sub-menu must not move the whole plan: it sends its own message.
+            with contextlib.suppress(ValueError):
+                Commands.BlindsGroupMessage.encode(menu.group_message)
+                found["blinds_group", menu.id] = partial(
                     SmartPlaceGroupButton,
                     entry,
                     data,
-                    name=f"{menu.name} blinds {direction}",
-                    unique_id=f"blinds_group_{direction}_{menu.id}",
-                    translation_key=f"blinds_group_{direction}",
-                    command=command,
-                    argument=menu.plan_id,
+                    name=f"{menu.name} blinds",
+                    unique_id=f"blinds_group_{menu.id}",
+                    translation_key="blinds_group",
+                    command=Commands.BlindsGroupMessage,
+                    argument=menu.group_message,
+                    enabled_default=False,
                 )
         return found
 
@@ -141,7 +158,7 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
 
 
 class SmartPlaceGroupButton(SmartPlacePushEntity, ButtonEntity):
-    """A sub-menu group button: all lights, all blinds up, all blinds down."""
+    """A sub-menu group button: lights, all blinds up, all blinds down, a group of blinds."""
 
     _attr_has_entity_name = True
 

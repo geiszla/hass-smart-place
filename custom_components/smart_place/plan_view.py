@@ -71,9 +71,9 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
             [
                 *(entity_id(Platform.BUTTON, f"lights_group_{menu_id}") for menu_id in sorted(state.light_sub_menus)),
                 *(
-                    entity_id(Platform.BUTTON, f"blinds_group_{direction}_{menu_id}")
+                    entity_id(Platform.BUTTON, f"blinds_group_{kind}{menu_id}")
                     for menu_id in sorted(state.blind_sub_menus)
-                    for direction in ("up", "down")
+                    for kind in ("up_", "down_", "")
                 ),
             ],
         ),

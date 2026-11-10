@@ -21,6 +21,7 @@ from smart_place_client import (
     PlanConfig,
     SceneConfig,
     SubMenuConfig,
+    blinds_menu_plan,
     parse_frame,
 )
 from smart_place_client.devices import (
@@ -153,6 +154,33 @@ def test_sub_menu_reads_group_message_and_plan() -> None:
     assert lights == SubMenuConfig(id=1, name="All", top=70, left=10, group_message="LEUCHTENZENTRAL1", plan_id=1)
     assert blinds is not None
     assert (blinds.group_message, blinds.plan_id) == ("JALZENTRAL1", 1)
+
+
+def _blinds_menu(name: str, group_message: str, plan: str = "Uebersicht1") -> SubMenuConfig:
+    menu = parse_sub_menu(_fields(f"UnterMenuJalousien2:{name},70px,10px,Jalousien,OnOn,{group_message},{plan}"))
+    assert menu is not None
+    return menu
+
+
+def test_the_plan_wide_blinds_menu_is_recognised_by_its_group_message() -> None:
+    """Only that sub-menu gets "all up" / "all down"; its name does not matter."""
+    reference = parse_sub_menu(_fields("UnterMenuJalousien1:All,70px,10px,Jalousien,OffOff,JALZENTRAL1,Uebersicht1"))
+    assert reference is not None
+    assert blinds_menu_plan(reference) == 1
+    assert blinds_menu_plan(_blinds_menu("Alle", "JALZENTRAL1")) == 1
+    assert blinds_menu_plan(_blinds_menu("All", "JALZENTRAL2", "Uebersicht2")) == 2
+
+
+def test_any_other_blinds_menu_does_not_cover_a_plan() -> None:
+    """A sub-menu "South" must not close every blind of the plan."""
+    assert blinds_menu_plan(_blinds_menu("South", "JALGRUPPE2")) is None
+    assert blinds_menu_plan(_blinds_menu("South", "JALZENTRAL2")) is None
+    assert blinds_menu_plan(_blinds_menu("South", "JALUPZENTRAL1")) is None
+    assert blinds_menu_plan(_blinds_menu("South", "")) is None
+    # The name alone does not make it plan-wide, and without a plan there is nothing to send.
+    assert blinds_menu_plan(_blinds_menu("All", "SZENEN7")) is None
+    assert blinds_menu_plan(_blinds_menu("All", "JALZENTRAL1", "")) is None
+    assert blinds_menu_plan(_blinds_menu("All", "JALZENTRALNone", "")) is None
 
 
 def test_plan_config_splits_functions() -> None:

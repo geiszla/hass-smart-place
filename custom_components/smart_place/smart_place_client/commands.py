@@ -36,6 +36,11 @@ SETPOINT_MAX: Final = 26
 # is ever sent back.
 _LIGHTS_GROUP_MESSAGE_RE = re.compile(r"LEUCHTENZENTRAL\d+")
 
+# A blinds sub-menu other than the plan-wide one names its own command the
+# same way. No such sub-menu exists in the reference installation, so its
+# exact shape is not known: any frame name of the blinds family may go back.
+_BLINDS_GROUP_MESSAGE_RE = re.compile(r"JAL[A-Z]*\d+")
+
 
 @dataclass(frozen=True, slots=True)
 class CommandDefinition:
@@ -136,6 +141,12 @@ def _encode_scene(scene_id: int) -> str:
 def _encode_group_message(message: str) -> str:
     if not isinstance(message, str) or not _LIGHTS_GROUP_MESSAGE_RE.fullmatch(message):
         raise ValueError(f"not a lights group message: {message!r}")
+    return message
+
+
+def _encode_blinds_group_message(message: str) -> str:
+    if not isinstance(message, str) or not _BLINDS_GROUP_MESSAGE_RE.fullmatch(message):
+        raise ValueError(f"not a blinds group message: {message!r}")
     return message
 
 
@@ -353,7 +364,9 @@ class Commands:
         name="BlindsGroupUp",
         description=(
             "Move every blind of floor plan <plan> up (wire: ``JALUPZENTRAL<plan>``), "
-            "the blinds sub-menu's 'All up' button. The number is the plan id."
+            "the 'All up' button of the plan-wide blinds sub-menu. The number is the "
+            "plan id. The vendor app offers it for that sub-menu only; any other "
+            "blinds sub-menu sends its own group message (``BlindsGroupMessage``)."
         ),
         encode=_encode_blinds_group_up,
         example="JALUPZENTRAL1",
@@ -401,6 +414,19 @@ class Commands:
         encode=_encode_group_message,
         example="LEUCHTENZENTRAL1",
         example_args=("LEUCHTENZENTRAL1",),
+    )
+    BlindsGroupMessage = CommandDefinition(
+        name="BlindsGroupMessage",
+        description=(
+            "Press the button of a blinds sub-menu that is not the plan-wide one by "
+            "sending its group message verbatim (taken from the ``BlindSubMenu`` "
+            "frame), as the vendor app does. No such sub-menu exists in the reference "
+            "installation: the shape of the message and what the server does with it "
+            "are untested."
+        ),
+        encode=_encode_blinds_group_message,
+        example="JALZENTRAL2",
+        example_args=("JALZENTRAL2",),
     )
     MuteToggle = CommandDefinition(
         name="MuteToggle",

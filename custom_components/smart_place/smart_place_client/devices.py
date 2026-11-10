@@ -49,6 +49,10 @@ _BLIND_ALARMS: Final[dict[str, str]] = {
     "hagelalarm": "hail",
 }
 
+# The blinds sub-menu that covers its whole plan has this group message
+# followed by the plan id.
+_PLAN_WIDE_BLINDS_MESSAGE: Final = "JALZENTRAL"
+
 _PX_RE = re.compile(r"^(-?\d+)px$")
 _PLAN_RE = re.compile(r"^Uebersicht(\d+)$")
 
@@ -256,6 +260,20 @@ def parse_sub_menu(frame: NamedFields) -> SubMenuConfig | None:
         group_message=_field(fields, 5),
         plan_id=_plan_id(_field(fields, 6)),
     )
+
+
+def blinds_menu_plan(menu: SubMenuConfig) -> int | None:
+    """Return the plan whose blinds a blinds sub-menu moves all at once, ``None`` for any other sub-menu.
+
+    Only the plan-wide sub-menu has the "up" and "down" buttons that send
+    ``JALUPZENTRAL<plan>`` / ``JALDOWZENTRAL<plan>``; any other blinds
+    sub-menu has one button that sends its own group message. The vendor
+    app tells them apart by the name "All". A name can be changed or
+    translated, so the group message decides here.
+    """
+    if menu.group_message != f"{_PLAN_WIDE_BLINDS_MESSAGE}{menu.plan_id}":
+        return None
+    return menu.plan_id
 
 
 def parse_plan_config(frame: NamedFields) -> PlanConfig | None:

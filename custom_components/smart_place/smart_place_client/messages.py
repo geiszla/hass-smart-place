@@ -583,9 +583,10 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="BlindSubMenu",
         description=(
-            "Blinds sub-menu ('All' buttons) N. Format: UnterMenuJalousien<n>:name,top,left,"
-            "icon,OnOn|OnOff,group-message,Uebersicht<plan>. Its commands are "
-            "JALUPZENTRAL<plan> / JALDOWZENTRAL<plan>."
+            "Blinds sub-menu N. Format: UnterMenuJalousien<n>:name,top,left,icon,"
+            "OnOn|OnOff,group-message,Uebersicht<plan>. The plan-wide one ('All', group "
+            "message JALZENTRAL<plan>) has the commands JALUPZENTRAL<plan> / "
+            "JALDOWZENTRAL<plan>; any other sends its group message back verbatim."
         ),
         pattern=re.compile(r"^UnterMenuJalousien\d+:"),
         parse=_indexed_fields_parser("BlindSubMenu", "UnterMenuJalousien"),
