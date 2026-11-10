@@ -40,7 +40,7 @@ CAPTURE_PATH: Final[str | None] = None
 # binary sensor carries the attribute ``dry_run: true`` while it is on, so
 # tooling can check it before calling a service. Must be ``False`` in a
 # release.
-DRY_RUN: Final = False
+DRY_RUN: Final = True
 
 # Config-entry flag: the one-time area assignment of the heating-zone
 # devices has run (see ``__init__.py``).
