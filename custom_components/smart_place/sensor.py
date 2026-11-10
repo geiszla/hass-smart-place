@@ -28,9 +28,8 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   PIN as free text in PERSINFO, *not* in ``PACKETBOX<N>`` (which only
   ever reported ``Frei`` in practice) — see ``state.py``.
 - One indoor temperature sensor + one humidity sensor per climate
-  zone, paired under a per-zone HA sub-device
-  (``via_device_id``) so they render together in the device
-  card. The zone's room name labels the sub-device. Sensor IDs
+  zone, on the per-zone HA sub-device (``zone_device_info``) so they
+  render together with the zone's climate entity in the device card. The zone's room name labels the sub-device. Sensor IDs
   without a matching ``Klimas<N>`` zone are skipped. Humidity is
   disabled by default — this building reports a constant 0.0 —
   and both fold the 0.0 placeholder to ``unknown``.
@@ -50,15 +49,17 @@ Exposes the read-only metrics surfaced by the WS dispatch:
   helpers, not integrations: the idiomatic pattern is just a normal
   sensor whose ``native_value`` is computed from the shared snapshot.
 
-Discovery is observation-based: entities are created once during
-``async_setup_entry`` from whatever the state snapshot holds at that
-moment (see ``__init__.py``'s observation window). A new sensor ID
-that first appears later needs an HA reload to surface.
+Discovery is observation-based: an entity is created when the state
+snapshot first holds its value — normally all at once at setup, after
+``__init__.py``'s observation window, and later for anything the server
+only delivers then.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
 from datetime import timedelta
+from functools import partial
 import logging
 from typing import TYPE_CHECKING
 
@@ -68,13 +69,12 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfSpeed, UnitOfTemperature, UnitOfVolume
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from . import MANUFACTURER, SmartPlaceData, category_device_info, main_device_info
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, main_device_info, zone_device_info
 from .const import DOMAIN
-from .entity import SmartPlacePushEntity
+from .entity import SmartPlacePushEntity, async_add_discovered
 from .smart_place_client import (
     CHART_RANGE_SERIES_HIGH_TARIFF,
     CHART_RANGE_SERIES_LOW_TARIFF,
@@ -90,11 +90,15 @@ from .smart_place_client.tariff import TARIFF_TZ, local_day_start, local_month_s
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity import Entity
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+
+    from .smart_place_client import SmartPlaceState
 
 _LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 0
 
 # How often the month-to-date cost sensor re-reads its history prefix from
 # recorder statistics. The prefix only changes at local midnight (yesterday
@@ -165,45 +169,48 @@ _WIND_SPEED_UNIT_MAP: dict[str, str] = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: SmartPlaceConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Build sensor entities from the observation-window snapshot."""
-    data: SmartPlaceData = hass.data[DOMAIN][entry.entry_id]
-    state = data.state
+    """Add a sensor for every reading the state snapshot holds, now and later."""
+    data = entry.runtime_data
+    async_add_discovered(entry, async_add_entities, partial(_collect, entry, data))
 
-    entities: list[SensorEntity] = []
+
+def _collect(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> dict[Hashable, Callable[[], Entity]]:
+    """Map every sensor the current snapshot supports to a factory for it."""
+    state = data.state
+    found: dict[Hashable, Callable[[], Entity]] = {}
 
     if state.outdoor_temperature is not None:
-        entities.append(SmartPlaceOutdoorTemperatureSensor(entry, data))
+        found["outdoor_temperature"] = partial(SmartPlaceOutdoorTemperatureSensor, entry, data)
     if state.wind_speed is not None:
-        entities.append(SmartPlaceWindSpeedSensor(entry, data))
+        found["wind_speed"] = partial(SmartPlaceWindSpeedSensor, entry, data)
     # Always created (not observation-gated): a delivery PIN is
-    # transient and rare, so gating on its presence at setup time would
-    # mean the sensor almost never exists. As a permanent entity it
-    # reads ``unknown`` between deliveries and shows the PIN while a
-    # parcel is waiting.
-    entities.append(SmartPlacePackageDeliveryPinSensor(entry, data))
+    # transient and rare, so gating on its presence would mean the
+    # sensor almost never exists. As a permanent entity it reads
+    # ``unknown`` between deliveries and shows the PIN while a parcel
+    # is waiting.
+    found["package_delivery_pin"] = partial(SmartPlacePackageDeliveryPinSensor, entry, data)
     if state.rain_alarm is not None or state.hail_alarm is not None or state.wind_alarms:
-        entities.append(SmartPlaceWeatherAlarmSensor(entry, data))
+        found["weather_alarm"] = partial(SmartPlaceWeatherAlarmSensor, entry, data)
     # Per-zone temperature + humidity, both attached to a per-zone
     # sub-device so they render together in HA's device card.
     # ``TEMPIST<N>`` pairs 1:1 with ``Klimas<N>``; humidity follows
     # the same id convention.
     for zone_id in sorted(state.climate_zones):
         if zone_id in state.indoor_temperatures:
-            entities.append(SmartPlaceIndoorTemperatureSensor(entry, data, zone_id))
+            found["temperature", zone_id] = partial(SmartPlaceIndoorTemperatureSensor, entry, data, zone_id)
         if zone_id in state.humidities:
-            entities.append(SmartPlaceHumiditySensor(entry, data, zone_id))
-    intercom_ids = sorted(set(state.intercom_ringing) | set(state.intercom_callers))
-    entities.extend(SmartPlaceIntercomSensor(entry, data, idx) for idx in intercom_ids)
+            found["humidity", zone_id] = partial(SmartPlaceHumiditySensor, entry, data, zone_id)
+    for intercom_id in sorted(set(state.intercom_ringing) | set(state.intercom_callers)):
+        found["intercom", intercom_id] = partial(SmartPlaceIntercomSensor, entry, data, intercom_id)
     if state.infoboard_contents:
-        entities.append(SmartPlaceInfoboardSensor(entry, data))
+        found["infoboard"] = partial(SmartPlaceInfoboardSensor, entry, data)
     # Always created (not observation-gated): the idle banner is
     # ``PERSINFO:Read`` which folds to ``None``, so gating on presence
-    # would usually skip the sensor at setup and a later banner could
-    # never surface (discovery is one-shot). Reads ``unknown`` when clear.
-    entities.append(SmartPlacePersonInfoSensor(entry, data))
+    # would usually skip the sensor. Reads ``unknown`` when clear.
+    found["person_info"] = partial(SmartPlacePersonInfoSensor, entry, data)
     # Per-meter charts that roll up into a SUMME aggregate (e.g.
     # ``Cold water I`` / ``II`` under ``Cold water``) are registered
     # disabled — the aggregate is the reading users care about, and
@@ -217,46 +224,61 @@ async def async_setup_entry(
             continue
         device_class, native_unit = mapped
         enabled_default = chart_id not in summed_chart_ids
-        entities.append(
-            SmartPlaceChartSensor(
-                entry,
-                data,
-                chart_id,
-                device_class,
-                native_unit,
-                enabled_default=enabled_default,
-            ),
+        found["chart", chart_id] = partial(
+            SmartPlaceChartSensor,
+            entry,
+            data,
+            chart_id,
+            device_class,
+            native_unit,
+            enabled_default=enabled_default,
         )
         # Target companions only exist where the SPA sets a daily goal
         # (verified live 2026-06-11: targets on the four user-facing
         # charts, none on PV). CHARTZIEL arrives in the same bootstrap
-        # as the chart definitions, so gating at setup time is safe.
+        # as the chart definitions.
         if chart_id in state.chart_targets:
-            entities.append(SmartPlaceChartTargetPercentSensor(entry, data, chart_id, enabled_default=enabled_default))
-            entities.append(SmartPlaceChartTargetStatusSensor(entry, data, chart_id, enabled_default=enabled_default))
+            found["chart_target_percent", chart_id] = partial(
+                SmartPlaceChartTargetPercentSensor, entry, data, chart_id, enabled_default=enabled_default
+            )
+            found["chart_target_status", chart_id] = partial(
+                SmartPlaceChartTargetStatusSensor, entry, data, chart_id, enabled_default=enabled_default
+            )
 
     # Electricity price + cost entities, attached to the grid meter chart
     # (label "Electricity" — excludes the PV allocation chart, whose
     # server-side history is empty, and any SUMME aggregate).
     electricity_chart_id = _find_electricity_chart_id(state)
     if electricity_chart_id is not None:
-        _, stale = rates_for(dt_util.now())
-        if stale:
-            _LOGGER.warning(
-                "No EWZ tariff table for the current year - electricity price/cost "
-                "sensors are using the latest known year's rates. Add the new year "
-                "to smart_place_client/tariff.py (published by ewz each September)."
-            )
-        entities.append(SmartPlaceElectricityPriceSensor(entry, data))
-        entities.append(SmartPlaceElectricityCostTodaySensor(entry, data, electricity_chart_id))
-        entities.append(SmartPlaceElectricityCostMonthSensor(entry, data, electricity_chart_id))
-        entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=True))
-        entities.append(SmartPlaceElectricityTariffEnergySensor(entry, data, electricity_chart_id, high=False))
+        found["electricity_price"] = partial(_electricity_price_sensor, entry, data)
+        found["electricity_cost_today"] = partial(
+            SmartPlaceElectricityCostTodaySensor, entry, data, electricity_chart_id
+        )
+        found["electricity_cost_month"] = partial(
+            SmartPlaceElectricityCostMonthSensor, entry, data, electricity_chart_id
+        )
+        found["electricity_high_tariff"] = partial(
+            SmartPlaceElectricityTariffEnergySensor, entry, data, electricity_chart_id, high=True
+        )
+        found["electricity_low_tariff"] = partial(
+            SmartPlaceElectricityTariffEnergySensor, entry, data, electricity_chart_id, high=False
+        )
+    return found
 
-    async_add_entities(entities)
+
+def _electricity_price_sensor(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> SmartPlaceElectricityPriceSensor:
+    """Create the price sensor; warn once if this year's rate table is missing."""
+    _, stale = rates_for(dt_util.now())
+    if stale:
+        _LOGGER.warning(
+            "No EWZ tariff table for the current year - electricity price/cost "
+            "sensors are using the latest known year's rates. Add the new year "
+            "to smart_place_client/tariff.py (published by ewz each September)."
+        )
+    return SmartPlaceElectricityPriceSensor(entry, data)
 
 
-def _find_electricity_chart_id(state) -> int | None:
+def _find_electricity_chart_id(state: SmartPlaceState) -> int | None:
     """Return the grid electricity meter's chart id, or None.
 
     Matches the cleaned ``ChartDefinition`` label exactly: this
@@ -273,24 +295,6 @@ def _find_electricity_chart_id(state) -> int | None:
     return None
 
 
-def _climate_zone_device_info(entry: ConfigEntry, data: SmartPlaceData, room: str, zone_id: int) -> DeviceInfo:
-    """Return a per-zone sub-device that pairs temp + humidity under one card.
-
-    The device is named after the room alone — ``has_entity_name``
-    composes friendly names as "<device> <entity>", so a "climate"
-    qualifier in the device name produced clunky names like
-    "Bedroom climate Temperature". "Bedroom Temperature" reads better
-    and the model field carries the climate-zone context instead.
-    """
-    return DeviceInfo(
-        identifiers={(DOMAIN, f"{entry.entry_id}_zone_{zone_id}")},
-        name=room,
-        manufacturer=MANUFACTURER,
-        model="Climate zone",
-        via_device_id=data.main_device_id,
-    )
-
-
 class _SmartPlaceSensorBase(SmartPlacePushEntity, SensorEntity):
     """Common wiring: device_info, push-update subscription.
 
@@ -305,7 +309,7 @@ class _SmartPlaceSensorBase(SmartPlacePushEntity, SensorEntity):
     _attr_has_entity_name = True
     _category: str | None = None
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
         self._attr_device_info = (
@@ -335,7 +339,7 @@ class SmartPlaceOutdoorTemperatureSensor(_SmartPlaceSensorBase):
     _attr_suggested_display_precision = 1
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id + server-hinted unit."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_outdoor_temperature"
@@ -365,7 +369,7 @@ class SmartPlaceWindSpeedSensor(_SmartPlaceSensorBase):
     _attr_suggested_display_precision = 1
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id + server-hinted unit."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_wind_speed"
@@ -397,7 +401,7 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         sensor_id: int,
     ) -> None:
@@ -405,8 +409,7 @@ class SmartPlaceIndoorTemperatureSensor(_SmartPlaceSensorBase):
         super().__init__(entry, data)
         self._sensor_id = sensor_id
         self._attr_unique_id = f"{entry.entry_id}_indoor_temperature_{sensor_id}"
-        room = data.state.climate_zones.get(sensor_id) or f"Zone {sensor_id}"
-        self._attr_device_info = _climate_zone_device_info(entry, data, room, sensor_id)
+        self._attr_device_info = zone_device_info(entry, data, sensor_id)
 
     @property
     def native_value(self) -> float | None:
@@ -440,7 +443,7 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         zone_id: int,
     ) -> None:
@@ -448,8 +451,7 @@ class SmartPlaceHumiditySensor(_SmartPlaceSensorBase):
         super().__init__(entry, data)
         self._zone_id = zone_id
         self._attr_unique_id = f"{entry.entry_id}_humidity_{zone_id}"
-        room = data.state.climate_zones.get(zone_id) or f"Zone {zone_id}"
-        self._attr_device_info = _climate_zone_device_info(entry, data, room, zone_id)
+        self._attr_device_info = zone_device_info(entry, data, zone_id)
 
     @property
     def native_value(self) -> float | None:
@@ -473,7 +475,7 @@ class _SmartPlaceChartScopedSensor(_SmartPlaceSensorBase):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         chart_id: int,
         *,
@@ -531,7 +533,7 @@ class SmartPlaceChartSensor(_SmartPlaceChartScopedSensor):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         chart_id: int,
         device_class: SensorDeviceClass,
@@ -608,7 +610,7 @@ class SmartPlaceChartTargetPercentSensor(_SmartPlaceChartScopedSensor):
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_icon = "mdi:gauge"
+    _attr_translation_key = "chart_target_use"
     # The originally reported case: the more-info view showed a 5-minute
     # mean like ``4.7000000001%``. ``native_value`` is already rounded to
     # one decimal, but HA averages those states for the statistics graph
@@ -619,7 +621,7 @@ class SmartPlaceChartTargetPercentSensor(_SmartPlaceChartScopedSensor):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         chart_id: int,
         *,
@@ -653,7 +655,6 @@ class SmartPlaceChartTargetStatusSensor(_SmartPlaceChartScopedSensor):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "chart_target_status"
-    _attr_icon = "mdi:traffic-light"
     # Hidden by default: the traffic-light status is a derived convenience
     # for automations; the percent + daily-reading sensors carry the data
     # users watch, so it stays out of the default UI.
@@ -662,7 +663,7 @@ class SmartPlaceChartTargetStatusSensor(_SmartPlaceChartScopedSensor):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         chart_id: int,
         *,
@@ -698,7 +699,7 @@ class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
     _category = "Energy"
     _attr_name = "Electricity price"
     _attr_native_unit_of_measurement = "CHF/kWh"
-    _attr_icon = "mdi:cash-multiple"
+    _attr_translation_key = "electricity_price"
     _attr_suggested_display_precision = 4
     # Hidden by default: the price is plumbing for the Energy dashboard's
     # "entity with current price" cost tracking (hidden entities still
@@ -706,7 +707,7 @@ class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
     # — the tariff window + rates stay inspectable via its attributes.
     _attr_entity_registry_visible_default = False
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the unique_id; no chart data is consumed."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_electricity_price"
@@ -755,6 +756,11 @@ class SmartPlaceElectricityPriceSensor(_SmartPlaceSensorBase):
             self._boundary_unsub()
             self._boundary_unsub = None
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes: the timer is not keyed on the entity_id."""
+        super().async_entity_id_changed(old_entity_id)
+
     def _schedule_boundary_refresh(self) -> None:
         boundary = next_tariff_boundary(dt_util.now())
         self._boundary_unsub = async_track_point_in_time(self.hass, self._on_tariff_boundary, boundary)
@@ -794,7 +800,7 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceChartScopedSensor):
     _attr_suggested_display_precision = 2
     _name_suffix = "cost (today)"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
         """Wire the per-chart unique_id."""
         super().__init__(entry, data, chart_id)
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_today"
@@ -859,7 +865,7 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceChartScopedSensor):
     _attr_suggested_display_precision = 2
     _name_suffix = "cost (this month)"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, chart_id: int) -> None:
         """Wire the per-chart unique_id and the prefix cache."""
         super().__init__(entry, data, chart_id)
         self._attr_unique_id = f"{entry.entry_id}_chart_{chart_id}_cost_month"
@@ -914,6 +920,11 @@ class SmartPlaceElectricityCostMonthSensor(_SmartPlaceChartScopedSensor):
             self._refresh_unsub()
             self._refresh_unsub = None
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes: the timer is not keyed on the entity_id."""
+        super().async_entity_id_changed(old_entity_id)
+
     async def _async_refresh_prefix(self, _now: datetime | None = None) -> None:
         """Re-read the month-through-yesterday cost from recorder statistics."""
         if not self._cost_stat_id:
@@ -963,7 +974,7 @@ class SmartPlaceElectricityTariffEnergySensor(_SmartPlaceChartScopedSensor):
     # the dashboard and recorder use hidden entities just fine.
     _attr_entity_registry_visible_default = False
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, chart_id: int, *, high: bool) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, chart_id: int, *, high: bool) -> None:
         """Wire the tariff window (high/low) this share tracks."""
         super().__init__(entry, data, chart_id)
         self._series = CHART_RANGE_SERIES_HIGH_TARIFF if high else CHART_RANGE_SERIES_LOW_TARIFF
@@ -995,9 +1006,9 @@ class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
     updates when the server pushes a fresh banner.
     """
 
-    _attr_icon = "mdi:lock-open-variant"
+    _attr_translation_key = "package_delivery_pin"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped name + unique_id."""
         super().__init__(entry, data)
         self._attr_name = "Package delivery PIN"
@@ -1020,12 +1031,11 @@ class SmartPlaceWeatherAlarmSensor(_SmartPlaceSensorBase):
     """
 
     _attr_name = "Weather alarm"
-    _attr_icon = "mdi:weather-cloudy-alert"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "weather_alarm"
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_weather_alarm"
@@ -1078,9 +1088,9 @@ class SmartPlaceIntercomSensor(_SmartPlaceSensorBase):
     rule as the wind alarms).
     """
 
-    _attr_icon = "mdi:phone-incoming"
+    _attr_translation_key = "intercom"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, intercom_id: int) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, intercom_id: int) -> None:
         """Wire the per-intercom name + unique_id."""
         super().__init__(entry, data)
         self._intercom_id = intercom_id
@@ -1118,9 +1128,9 @@ class SmartPlaceInfoboardSensor(_SmartPlaceSensorBase):
     """
 
     _attr_name = "Infoboard"
-    _attr_icon = "mdi:message-text"
+    _attr_translation_key = "infoboard"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_infoboard"
@@ -1149,13 +1159,13 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
     """
 
     _attr_name = "Personal info"
-    _attr_icon = "mdi:account-alert"
+    _attr_translation_key = "person_info"
     # Hidden by default: a diagnostic raw-banner feed that's ``unknown``
     # most of the time. Always registered (see async_setup_entry) so a
     # late banner can surface, but kept out of the default UI.
     _attr_entity_registry_visible_default = False
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_person_info"

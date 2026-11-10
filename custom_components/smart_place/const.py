@@ -32,3 +32,20 @@ CHART_POLL_INTERVAL: Final = 60.0
 # synchronous (blocking I/O in the event loop on every frame, ~2-3x/s)
 # and appends forever, so the file grows unbounded if left on.
 CAPTURE_PATH: Final[str | None] = None
+
+# Developer dry run. When ``True`` the client does not transmit any command
+# that changes something in the building (lights, blinds, heating, scenes,
+# doors): it logs ``dry run: would send <name> (<wire>)`` at WARNING instead.
+# Reads (bootstrap, heartbeat, chart polls) are unaffected. The Connection
+# binary sensor carries the attribute ``dry_run: true`` while it is on, so
+# tooling can check it before calling a service. Must be ``False`` in a
+# release.
+DRY_RUN: Final = False
+
+# Config-entry flag: the one-time area assignment of the heating-zone
+# devices has run (see ``__init__.py``).
+CONF_ZONE_AREAS_SET: Final = "zone_areas_set"
+
+# Give up on the first bootstrap after this long and set the platforms up
+# anyway; entities for whatever arrives later are added when it does.
+SETUP_BOOTSTRAP_TIMEOUT: Final = 10.0

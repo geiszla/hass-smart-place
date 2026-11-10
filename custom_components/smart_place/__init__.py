@@ -15,12 +15,22 @@ from dataclasses import dataclass, field
 import logging
 from typing import TYPE_CHECKING
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CAPTURE_PATH, CHART_POLL_INTERVAL, CONF_TOKEN, DOMAIN, SETUP_OBSERVATION_WINDOW
+from .const import (
+    CAPTURE_PATH,
+    CHART_POLL_INTERVAL,
+    CONF_TOKEN,
+    CONF_ZONE_AREAS_SET,
+    DOMAIN,
+    DRY_RUN,
+    SETUP_BOOTSTRAP_TIMEOUT,
+    SETUP_OBSERVATION_WINDOW,
+)
 from .smart_place_client import (
     DISCOVERY_ORIGIN,
     ServerFrame,
@@ -33,7 +43,6 @@ from .smart_place_client import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,41 +66,14 @@ HEALTHY_PHASES: frozenset[SessionPhase] = frozenset(
     },
 )
 
-
 MANUFACTURER = "smart PLACE AG"
 
-
-def main_device_info(entry: ConfigEntry) -> DeviceInfo:
-    """Reference to the main Smart Place device, shared by all platforms.
-
-    Identifiers only: ``async_setup_entry`` registers the device itself
-    (name, manufacturer, configuration URL) before any platform loads.
-    """
-    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
-
-
-def category_device_info(entry: ConfigEntry, data: SmartPlaceData, category: str) -> DeviceInfo:
-    """Sub-device grouping one family of entities under its own dashboard card.
-
-    ``category`` is both the human label (rendered as ``Smart Place
-    <category>``) and, lower-cased, the identifier suffix. Hung off the
-    main device via ``via_device_id`` so HA's auto dashboard renders it as a
-    separate card while the Devices page still nests it under Smart Place —
-    the same pattern the per-room climate sub-devices use (sensor.py).
-    Splitting the entities across these keeps the integration from
-    rendering as one giant 40-entity card.
-    """
-    return DeviceInfo(
-        identifiers={(DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")},
-        name=f"Smart Place {category}",
-        manufacturer=MANUFACTURER,
-        via_device_id=data.main_device_id,
-    )
+type SmartPlaceConfigEntry = ConfigEntry[SmartPlaceData]
 
 
 @dataclass(slots=True)
 class SmartPlaceData:
-    """Per-config-entry runtime data stored on hass.data[DOMAIN][entry_id]."""
+    """Per-config-entry runtime data, stored on ``entry.runtime_data``."""
 
     client: SmartPlaceClient
     state: SmartPlaceState
@@ -99,6 +81,9 @@ class SmartPlaceData:
     # ``via_device_id``.
     main_device_id: str
     listeners: list[Callable[[], None]] = field(default_factory=list)
+    # Identifiers of the devices this run created entities for. A device
+    # outside this set is no longer provided and may be deleted by the user.
+    device_identifiers: set[tuple[str, str]] = field(default_factory=set)
 
     @property
     def is_healthy(self) -> bool:
@@ -111,9 +96,69 @@ class SmartPlaceData:
         return self.client.connected and self.client.state.phase in HEALTHY_PHASES
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+def main_device_info(entry: SmartPlaceConfigEntry) -> DeviceInfo:
+    """Reference to the main Smart Place device, shared by all platforms.
+
+    Identifiers only: ``async_setup_entry`` registers the device itself
+    (name, manufacturer, configuration URL) before any platform loads.
+    """
+    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
+
+
+def category_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, category: str) -> DeviceInfo:
+    """Sub-device grouping one family of entities under its own dashboard card.
+
+    ``category`` is both the human label (rendered as ``Smart Place
+    <category>``) and, lower-cased, the identifier suffix. Hung off the
+    main device via ``via_device_id`` so HA's auto dashboard renders it as a
+    separate card while the Devices page still nests it under Smart Place —
+    the same pattern the per-room climate sub-devices use.
+    Splitting the entities across these keeps the integration from
+    rendering as one giant 40-entity card. No area on purpose: an area-wide
+    call must not reach scenes, group buttons or door openers.
+    """
+    identifier = (DOMAIN, f"{entry.entry_id}_cat_{category.lower()}")
+    data.device_identifiers.add(identifier)
+    return DeviceInfo(
+        identifiers={identifier},
+        name=f"Smart Place {category}",
+        manufacturer=MANUFACTURER,
+        via_device_id=data.main_device_id,
+    )
+
+
+def zone_device_identifier(entry: SmartPlaceConfigEntry, zone_id: int) -> tuple[str, str]:
+    """Device identifier of a climate zone."""
+    return (DOMAIN, f"{entry.entry_id}_zone_{zone_id}")
+
+
+def zone_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, zone_id: int) -> DeviceInfo:
+    """Return the per-zone sub-device: climate, temperature and humidity on one card.
+
+    The device is named after the room alone — ``has_entity_name``
+    composes friendly names as "<device> <entity>", so a "climate"
+    qualifier in the device name produced clunky names like
+    "Bedroom climate Temperature". "Bedroom Temperature" reads better
+    and the model field carries the climate-zone context instead.
+    """
+    room = data.state.climate_zones.get(zone_id) or f"Zone {zone_id}"
+    identifier = zone_device_identifier(entry, zone_id)
+    data.device_identifiers.add(identifier)
+    return DeviceInfo(
+        identifiers={identifier},
+        name=room,
+        manufacturer=MANUFACTURER,
+        model="Climate zone",
+        suggested_area=room,
+        via_device_id=data.main_device_id,
+    )
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> bool:
     """Set up Smart Place from a config entry."""
     install_token_redaction_filter()
+    if DRY_RUN:
+        _LOGGER.warning("Smart Place dry run is on: commands are logged, not sent to the Smart Place server")
 
     token: str = entry.data[CONF_TOKEN]
     session = async_get_clientsession(hass)
@@ -121,12 +166,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def trigger_reauth() -> None:
         entry.async_start_reauth(hass)
 
-    # Last health state propagated to entities. Drives the reconnect
-    # re-notify in ``_on_frame``: the server re-broadcasts unchanged
+    # Last (health, main menu received) pair propagated to entities. Drives
+    # the extra fan-out in ``_on_frame``: the server re-broadcasts unchanged
     # values, so the first frames after a reconnect can be no-ops that the
-    # fan-out gate would skip — leaving entities stuck "unavailable" — so
-    # a health transition forces a fan-out regardless.
-    connection_healthy = False
+    # fan-out gate would skip — leaving entities stuck "unavailable" — and
+    # the end of a main-menu reply changes no value at all, yet it is the
+    # moment the platforms look for new devices.
+    notified_status = (False, False)
 
     # ``data`` is bound below but the closures only fire after
     # ``client.run()`` starts — which happens after the binding —
@@ -135,8 +181,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Push the WS drop to every entity so ``available`` flips False
         # for the whole reconnect-backoff gap (otherwise listeners only
         # wake on the next frame, which doesn't arrive until reconnect).
-        nonlocal connection_healthy
-        connection_healthy = False
+        # Control values of the lost connection must not decide a toggle
+        # after the reconnect; the server replays them then.
+        nonlocal notified_status
+        data.state.clear_control_values()
+        notified_status = (False, False)
         _notify_listeners()
 
     client = SmartPlaceClient.live(
@@ -146,6 +195,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         chart_poll_interval=CHART_POLL_INTERVAL,
         on_reauth=trigger_reauth,
         on_disconnect=trigger_disconnect_notify,
+        dry_run=DRY_RUN,
     )
 
     # Registered before any platform so sub-devices can link to it by id
@@ -164,7 +214,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     data = SmartPlaceData(client=client, state=SmartPlaceState(), main_device_id=main_device.id)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
+    data.device_identifiers.add((DOMAIN, entry.entry_id))
+    entry.runtime_data = data
 
     def _notify_listeners() -> None:
         # Isolate each entity: a raised listener (e.g. a bad native_value)
@@ -176,16 +227,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.exception("Smart Place entity update listener raised; continuing")
 
     async def _on_frame(frame: ServerFrame) -> None:
-        nonlocal connection_healthy
+        nonlocal notified_status
+        # Chart range replies do not say which day they cover; the fold
+        # stamps them with the range the client asked for.
+        data.state.chart_range_request = client.state.chart_range_request
         changed = data.state.apply(frame)
         # Skip the per-entity fan-out when the snapshot didn't change — the
         # server re-broadcasts the full sensor set ~2-3x/s even when nothing
-        # changes. Always fan out on a health transition so a reconnect
-        # restores availability even if its first frames are unchanged.
-        healthy = data.is_healthy
-        if changed or healthy != connection_healthy:
+        # changes.
+        status = (data.is_healthy, client.state.main_menu_loaded)
+        if changed or status != notified_status:
             _notify_listeners()
-        connection_healthy = healthy
+        notified_status = status
 
     client.subscribe(_on_frame)
 
@@ -195,13 +248,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name=f"smart_place_ws_{entry.entry_id}",
     )
 
-    # Entity families exposed until 2026-06 and then dropped — scenes
-    # (the server reports several "active" at once, so on/off carries
-    # no usable meaning) and the LEUCHTENZENTRAL / JALZENTRAL rollups
-    # (actually the SPA's "All" master-button states, not aggregates);
-    # see binary_sensor.py for both. Their registry entries would
-    # otherwise linger forever as dead "restored" entities, so prune
-    # them here.
+    # Binary sensors exposed until 2026-06 and then dropped — scenes
+    # (trigger scenes latch their flag, so on/off carried no usable
+    # meaning) and the LEUCHTENZENTRAL / JALZENTRAL rollups (actually the
+    # SPA's "All" master-button states, not aggregates). Their registry
+    # entries would otherwise linger forever as dead "restored" entities,
+    # so prune them here. Only in the binary_sensor domain: today's scene
+    # entities use the same unique-id prefix.
     retired_unique_id_prefixes = (
         f"{entry.entry_id}_scene_",
         f"{entry.entry_id}_lights_central_",
@@ -209,27 +262,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     registry = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if reg_entry.unique_id.startswith(retired_unique_id_prefixes):
+        if reg_entry.domain == Platform.BINARY_SENSOR and reg_entry.unique_id.startswith(retired_unique_id_prefixes):
             registry.async_remove(reg_entry.entity_id)
 
     # Wait for the bootstrap + a brief observation window so the initial
     # broadcast pushes (TEMPIST<N>, PACKETBOX<N>, REGEN, ...) and the
     # chart-stand replies have a chance to land before platforms
     # enumerate entities. Failing to bootstrap doesn't abort setup —
-    # the connection background task keeps retrying, and the
-    # connectivity binary_sensor will report the WS as down.
+    # the connection background task keeps retrying, the connectivity
+    # binary_sensor reports the WS as down, and the platforms add the
+    # entities when the server delivers them.
     with contextlib.suppress(TimeoutError):
-        async with asyncio.timeout(SETUP_OBSERVATION_WINDOW + 10):
+        async with asyncio.timeout(SETUP_BOOTSTRAP_TIMEOUT + SETUP_OBSERVATION_WINDOW):
             await client.wait_for_bootstrap()
             await asyncio.sleep(SETUP_OBSERVATION_WINDOW)
+
+    _async_assign_zone_areas(hass, entry, data)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+def _async_assign_zone_areas(hass: HomeAssistant, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
+    """Give heating-zone devices without an area the area of their room, once.
+
+    New zone devices get their area through ``suggested_area``, which HA
+    only applies when it creates a device. This covers the zone devices
+    of an install that predates it. The config-entry flag keeps it from
+    ever running again, so an area the user clears later stays cleared.
+    """
+    if entry.data.get(CONF_ZONE_AREAS_SET) or not data.client.state.main_menu_loaded:
+        return
+    devices = dr.async_get(hass)
+    areas = ar.async_get(hass)
+    for zone in data.state.climate.values():
+        device = devices.async_get_device_by_identifier(zone_device_identifier(entry, zone.id), entry.entry_id)
+        if device is not None and device.area_id is None:
+            devices.async_update_device(device.id, area_id=areas.async_get_or_create(zone.room).id)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_ZONE_AREAS_SET: True})
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> bool:
     """Unload a Smart Place config entry — clean up the client and platforms."""
-    data: SmartPlaceData | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    if data is not None:
-        await data.client.aclose()
+    await entry.runtime_data.client.aclose()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    entry: SmartPlaceConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow deleting a device the server no longer lists.
+
+    Devices are never removed automatically. A device this run created
+    entities for is still provided and cannot be deleted.
+    """
+    return not device_entry.identifiers & entry.runtime_data.device_identifiers

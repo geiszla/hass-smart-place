@@ -10,23 +10,20 @@ Two families of entities live here:
   so a uniform Problem/OK reading fits all of them — including
   rain, which previously used ``MOISTURE`` and stuck out.
 
-Scenes (``SceneConfig`` + ``SZENEN<N>``) are deliberately *not*
-exposed: the server reports several "active" at once (verified live
-2026-06-11 — six of twelve on simultaneously), so an on/off entity
-has no usable meaning. The client library still parses and tracks
-them in ``SmartPlaceState`` for future use; ``async_setup_entry``
-in ``__init__.py`` removes the previously-registered scene entities
-from the registry.
+Scenes are not binary sensors: a trigger scene's ``SZENEN<N>`` flag
+latches once it ran (verified live 2026-06-11 — six of twelve on
+simultaneously), so on/off has no usable meaning there. They are scene,
+switch and fan entities now (``scene.py`` / ``switch.py`` / ``fan.py``);
+``async_setup_entry`` in ``__init__.py`` removes the binary sensors
+registered for them before 2026-06.
 
 ``Any light on`` (``LEUCHTENZENTRAL<N>``) and ``Any blind closed``
 (``JALZENTRAL<N>``) were likewise dropped: each flag is the state of
 the SPA's per-type "All" master button, not an aggregate (verified
 live 2026-06-11 — LEUCHTENZENTRAL1 read 00 while two lights were on;
 the blinds menu wires JALZENTRAL1 to the same button mechanism, and
-no JALZENTRAL broadcast has ever been observed). Truthful
-replacements should fold the per-device pushes — ``leuchte<n>``
-(``LightState``) and ``JALICO<n>`` — which stay in the message
-registry for that.
+no JALZENTRAL broadcast has ever been observed). The truthful sources
+are the per-device light and cover entities.
 
 Parcel deliveries are exposed as a ``sensor`` entity (not binary):
 the useful state is the unlock PIN (text), surfaced as the ``Package
@@ -39,41 +36,46 @@ ringing flag surfaces as an attribute.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
+from functools import partial
 from typing import TYPE_CHECKING
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
-from homeassistant.helpers.entity import EntityCategory
+from homeassistant.const import EntityCategory
 
-from . import SmartPlaceData, category_device_info, main_device_info
-from .const import DOMAIN
-from .entity import SmartPlacePushEntity
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, main_device_info
+from .entity import SmartPlacePushEntity, async_add_discovered
 
 if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity import Entity
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: SmartPlaceConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Build binary sensors from the observation-window snapshot + diagnostics."""
-    data: SmartPlaceData = hass.data[DOMAIN][entry.entry_id]
+    """Add the Connection sensor and an alarm sensor per alarm the server reports."""
+    data = entry.runtime_data
     state = data.state
 
-    entities: list[BinarySensorEntity] = [SmartPlaceConnectionSensor(entry, data)]
+    def collect() -> dict[Hashable, Callable[[], Entity]]:
+        found: dict[Hashable, Callable[[], Entity]] = {"connection": partial(SmartPlaceConnectionSensor, entry, data)}
+        if state.rain_alarm is not None:
+            found["rain"] = partial(SmartPlaceRainSensor, entry, data)
+        if state.hail_alarm is not None:
+            found["hail"] = partial(SmartPlaceHailSensor, entry, data)
+        if state.blinds_maintenance is not None:
+            found["blinds_maintenance"] = partial(SmartPlaceBlindsMaintenanceSensor, entry, data)
+        for zone_id in sorted(state.wind_alarms):
+            found["wind_alarm", zone_id] = partial(SmartPlaceWindAlarmSensor, entry, data, zone_id)
+        return found
 
-    if state.rain_alarm is not None:
-        entities.append(SmartPlaceRainSensor(entry, data))
-    if state.hail_alarm is not None:
-        entities.append(SmartPlaceHailSensor(entry, data))
-    if state.blinds_maintenance is not None:
-        entities.append(SmartPlaceBlindsMaintenanceSensor(entry, data))
-    entities.extend(SmartPlaceWindAlarmSensor(entry, data, zone_id) for zone_id in sorted(state.wind_alarms))
-
-    async_add_entities(entities)
+    async_add_discovered(entry, async_add_entities, collect)
 
 
 class _SmartPlaceBinarySensorBase(SmartPlacePushEntity, BinarySensorEntity):
@@ -88,7 +90,7 @@ class _SmartPlaceBinarySensorBase(SmartPlacePushEntity, BinarySensorEntity):
     _attr_has_entity_name = True
     _category: str | None = None
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the shared per-entry device + state-listener machinery."""
         self._data = data
         self._attr_device_info = (
@@ -103,7 +105,7 @@ class SmartPlaceConnectionSensor(_SmartPlaceBinarySensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_connection"
@@ -118,6 +120,11 @@ class SmartPlaceConnectionSensor(_SmartPlaceBinarySensorBase):
         """Return True iff the session is in a healthy phase."""
         return self._data.is_healthy
 
+    @property
+    def extra_state_attributes(self) -> dict[str, bool] | None:
+        """Flag dry run, so tooling can check it before calling a service."""
+        return {"dry_run": True} if self._data.client.dry_run else None
+
 
 class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
     """Rain alarm — on iff the SPA reports a non-zero REGEN code."""
@@ -130,7 +137,7 @@ class SmartPlaceRainSensor(_SmartPlaceBinarySensorBase):
     _attr_entity_registry_visible_default = False
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_rain"
@@ -150,7 +157,7 @@ class SmartPlaceHailSensor(_SmartPlaceBinarySensorBase):
     _attr_entity_registry_visible_default = False
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_hail"
@@ -169,7 +176,7 @@ class SmartPlaceBlindsMaintenanceSensor(_SmartPlaceBinarySensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> None:
         """Wire the entry-scoped unique_id."""
         super().__init__(entry, data)
         self._attr_unique_id = f"{entry.entry_id}_blinds_maintenance"
@@ -183,10 +190,9 @@ class SmartPlaceBlindsMaintenanceSensor(_SmartPlaceBinarySensorBase):
 class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
     """Per-zone wind alarm — on iff WINDALARM<N> reports a non-zero code.
 
-    The zone suffix only appears when more than one zone has been
-    discovered — with a single zone, "Wind alarm 1" is just noise.
-    A second zone surfacing later goes through an HA reload anyway
-    (observation-based discovery), which re-derives the names.
+    The zone suffix only appears when more than one zone is known when
+    the entity is created — with a single zone, "Wind alarm 1" is just
+    noise.
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
@@ -194,7 +200,7 @@ class SmartPlaceWindAlarmSensor(_SmartPlaceBinarySensorBase):
     _attr_entity_registry_visible_default = False
     _category = "Weather"
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, zone_id: int) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, zone_id: int) -> None:
         """Wire the per-zone name + unique_id."""
         super().__init__(entry, data)
         self._zone_id = zone_id

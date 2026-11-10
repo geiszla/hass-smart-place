@@ -32,14 +32,15 @@ Proxying the stream ourselves (rather than ``async_aiohttp_proxy_web``)
 also lets us pre-flight the upstream status so a stale route can be
 re-discovered before we hand the stream to the frontend.
 
-Discovery is observation-based: one camera entity per id present in
-``state.gsa_cameras`` at setup time (see ``__init__.py``'s observation
-window). A camera that first appears later needs an HA reload to surface.
+One camera entity per id in ``state.gsa_cameras``, added when the id
+first appears in a ``GlobalGsa`` reply.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Hashable
+from functools import partial
 import logging
 from typing import TYPE_CHECKING
 
@@ -47,17 +48,18 @@ import aiohttp
 from homeassistant.components.camera import Camera
 from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_stream, async_get_clientsession
 
-from . import SmartPlaceData, category_device_info
-from .const import DOMAIN
-from .entity import SmartPlacePushEntity
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
+from .entity import SmartPlacePushEntity, async_add_discovered
 
 if TYPE_CHECKING:
     from aiohttp import web
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity import Entity
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 _LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 0
 
 # Snapshot fetch: read the live MJPEG stream just long enough to slice
 # out one complete JPEG frame (SOI ``FF D8`` … EOI ``FF D9``). The cap
@@ -89,15 +91,19 @@ _CAMERA_NAMES: dict[int, str] = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: SmartPlaceConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Create one camera per intercom feed seen in the GlobalGsa reply."""
-    data: SmartPlaceData = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        SmartPlaceIntercomCamera(entry, data, camera_id, link)
-        for camera_id, link in sorted(data.state.gsa_cameras.items())
-    )
+    data = entry.runtime_data
+
+    def collect() -> dict[Hashable, Callable[[], Entity]]:
+        return {
+            camera_id: partial(SmartPlaceIntercomCamera, entry, data, camera_id, link)
+            for camera_id, link in sorted(data.state.gsa_cameras.items())
+        }
+
+    async_add_discovered(entry, async_add_entities, collect)
 
 
 class SmartPlaceIntercomCamera(SmartPlacePushEntity, Camera):
@@ -113,7 +119,7 @@ class SmartPlaceIntercomCamera(SmartPlacePushEntity, Camera):
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry: SmartPlaceConfigEntry,
         data: SmartPlaceData,
         camera_id: int,
         link: str,

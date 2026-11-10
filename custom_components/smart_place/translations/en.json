@@ -44,5 +44,13 @@
         }
       }
     }
+  },
+  "exceptions": {
+    "not_connected": {
+      "message": "The command was not sent: there is no connection to the Smart Place server."
+    },
+    "state_unknown": {
+      "message": "The command was not sent: the current state is not known yet, and Smart Place can only toggle."
+    }
   }
 }

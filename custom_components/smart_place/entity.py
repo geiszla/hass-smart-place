@@ -8,24 +8,65 @@ on every callback therefore re-reported each entity ~2x/s. Those writes fire
 into downstream consumers — most visibly a Statistics helper, whose rolling
 buffer fills from the broadcast cadence instead of from real value changes.
 
-``SmartPlacePushEntity`` subscribes to the same fan-out but compares a
-signature of what HA would actually write and skips the write when it is
-unchanged, so ``last_reported`` only advances on a genuine state or
-availability change.
+``SmartPlacePushEntity`` subscribes to the same fan-out but compares what HA
+would actually write and skips the write when it is unchanged, so
+``last_reported`` only advances on a genuine state or availability change.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
 import contextlib
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.event import async_call_later
+
+from .const import DOMAIN
+from .smart_place_client import ExpectedState, SmartPlaceNotConnectedError
 
 if TYPE_CHECKING:
-    from . import SmartPlaceData
+    from datetime import datetime
 
-_UNSET: Any = object()
+    from homeassistant.core import CALLBACK_TYPE
+    from homeassistant.helpers.entity import CalculatedState
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+
+    from . import SmartPlaceConfigEntry, SmartPlaceData
+    from .smart_place_client import CommandDefinition
+
+# The timer may fire a moment before the expectation's own deadline.
+_EXPECTATION_TIMER_MARGIN = 0.1
+
+
+@callback
+def async_add_discovered(
+    entry: SmartPlaceConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    collect: Callable[[], dict[Hashable, Callable[[], Entity]]],
+) -> None:
+    """Add an entity for everything ``collect`` finds, now and whenever more appears.
+
+    ``collect`` maps a key per discoverable thing to a factory for its
+    entity. It runs on every listener fan-out; a key seen before is
+    skipped, so each thing gets its entity once. Nothing is ever removed.
+    """
+    data = entry.runtime_data
+    known: set[Hashable] = set()
+
+    @callback
+    def discover() -> None:
+        found = collect()
+        new = [factory() for key, factory in found.items() if key not in known]
+        if new:
+            known.update(found)
+            async_add_entities(new)
+
+    discover()
+    data.listeners.append(discover)
+    entry.async_on_unload(lambda: data.listeners.remove(discover))
 
 
 class SmartPlacePushEntity(Entity):
@@ -33,46 +74,63 @@ class SmartPlacePushEntity(Entity):
 
     _attr_should_poll = False
     _data: SmartPlaceData
-    _sp_last_signature: Any = _UNSET
+    _sp_last_written: CalculatedState | None = None
+    _sp_expectation_timer: CALLBACK_TYPE | None = None
 
     @property
     def available(self) -> bool:
         """Unavailable while the Smart Place WebSocket is down."""
         return self._data.is_healthy
 
-    def _report_signature(self) -> Any:
-        """Snapshot of what HA would write, so unchanged frames are skipped.
-
-        ``None`` stands for the unavailable state (HA writes ``unavailable``
-        and drops the normal attributes then). When available, the resolved
-        state plus the entity-supplied attributes capture every value or
-        attribute change the subclasses expose. ``name`` is included because
-        a few entities rename dynamically (e.g. a chart sensor when its
-        ``ChartDefinition`` label arrives late) without any state change.
-        """
-        if not self.available:
-            return None
-        return (self.name, self.state, repr(self.extra_state_attributes))
-
     @callback
     def _handle_frame_update(self) -> None:
         """Write to HA only when the reported state actually changed.
 
-        The signature is recorded *after* a successful write: if
-        ``async_write_ha_state`` raises (caught + logged by the fan-out in
-        ``__init__.py``), the unchanged signature means the next
-        notification retries instead of skipping the value forever.
+        Compares the state and the full attribute set HA would write (so
+        brightness, position, target temperature and a late-arriving name
+        count as changes). The comparison value is recorded *after* a
+        successful write: if ``async_write_ha_state`` raises (caught +
+        logged by the fan-out in ``__init__.py``), the next notification
+        retries instead of skipping the value forever.
         """
-        signature = self._report_signature()
-        if signature == self._sp_last_signature:
+        calculated = self._async_calculate_state()
+        if calculated == self._sp_last_written:
             return
         self.async_write_ha_state()
-        self._sp_last_signature = signature
+        self._sp_last_written = calculated
+
+    async def _async_issue(self, command: CommandDefinition, *args: object) -> None:
+        """Issue a command; raise a translated error if it cannot be sent."""
+        try:
+            await self._data.client.issue(command, *args)
+        except SmartPlaceNotConnectedError as err:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="not_connected") from err
+
+    @callback
+    def _async_expect(self, expected: ExpectedState[Any], value: object) -> None:
+        """Show ``value`` at once and look again when the expectation times out.
+
+        No frame arrives at the timeout, so a timer writes the state then.
+        """
+        expected.expect(value)
+        if self._sp_expectation_timer is not None:
+            self._sp_expectation_timer()
+        self._sp_expectation_timer = async_call_later(
+            self.hass,
+            expected.timeout + _EXPECTATION_TIMER_MARGIN,
+            self._async_expectation_ended,
+        )
+        self._handle_frame_update()
+
+    @callback
+    def _async_expectation_ended(self, _now: datetime) -> None:
+        self._sp_expectation_timer = None
+        self._handle_frame_update()
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to the frame fan-out (HA writes the initial state itself)."""
         await super().async_added_to_hass()
-        self._sp_last_signature = self._report_signature()
+        self._sp_last_written = self._async_calculate_state()
         self._data.listeners.append(self._handle_frame_update)
 
     async def async_will_remove_from_hass(self) -> None:
@@ -80,3 +138,57 @@ class SmartPlacePushEntity(Entity):
         await super().async_will_remove_from_hass()
         with contextlib.suppress(ValueError):
             self._data.listeners.remove(self._handle_frame_update)
+        if self._sp_expectation_timer is not None:
+            self._sp_expectation_timer()
+            self._sp_expectation_timer = None
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes: nothing here is keyed on the entity_id."""
+        super().async_entity_id_changed(old_entity_id)
+
+
+class SmartPlaceToggleEntity(SmartPlacePushEntity):
+    """On/off entity whose only vendor command is a toggle.
+
+    Home Assistant asks for a target ("turn on"), the vendor only flips.
+    Every call is therefore decided against the *effective* state: the
+    state expected from the commands already sent, else the last server
+    value. Mix in before the platform's entity class.
+    """
+
+    def __init__(self) -> None:
+        """Set up the expected on/off state."""
+        self._expected_on: ExpectedState[bool] = ExpectedState()
+
+    def _server_is_on(self) -> bool | None:
+        """Return the last on/off state from the server, ``None`` if not received."""
+        raise NotImplementedError
+
+    def _toggle_command(self) -> tuple[CommandDefinition, int]:
+        """Return the toggle command and the vendor id it takes."""
+        raise NotImplementedError
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the effective on/off state."""
+        return self._expected_on.resolve(self._server_is_on())
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on: toggle unless already on."""
+        await self._async_switch(on=True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off: toggle unless already off."""
+        await self._async_switch(on=False)
+
+    async def _async_switch(self, *, on: bool) -> None:
+        current = self.is_on
+        if current is None:
+            # A toggle against an unknown state could switch the wrong way.
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="state_unknown")
+        if current is on:
+            return
+        command, vendor_id = self._toggle_command()
+        await self._async_issue(command, vendor_id)
+        self._async_expect(self._expected_on, on)

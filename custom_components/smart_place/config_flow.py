@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import voluptuous as vol
+import probatio
 
 from .const import CONF_TOKEN, CONFIG_FLOW_TIMEOUT, DOMAIN
 from .smart_place_client import DISCOVERY_ORIGIN, SmartPlaceAuthError, SmartPlaceClient, SmartPlaceOfflineError
@@ -65,7 +65,7 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
+            data_schema=probatio.Schema({probatio.Required(CONF_TOKEN): str}),
             errors=errors,
             # hassfest forbids literal URLs in strings.json; the example
             # URL is injected here instead (strings reference it as {url}).
@@ -98,7 +98,7 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
+            data_schema=probatio.Schema({probatio.Required(CONF_TOKEN): str}),
             errors=errors,
         )
 

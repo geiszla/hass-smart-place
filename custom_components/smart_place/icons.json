@@ -1,0 +1,30 @@
+{
+  "entity": {
+    "sensor": {
+      "chart_target_status": {
+        "default": "mdi:traffic-light"
+      },
+      "chart_target_use": {
+        "default": "mdi:gauge"
+      },
+      "electricity_price": {
+        "default": "mdi:cash-multiple"
+      },
+      "infoboard": {
+        "default": "mdi:message-text"
+      },
+      "intercom": {
+        "default": "mdi:phone-incoming"
+      },
+      "package_delivery_pin": {
+        "default": "mdi:lock-open-variant"
+      },
+      "person_info": {
+        "default": "mdi:account-alert"
+      },
+      "weather_alarm": {
+        "default": "mdi:weather-cloudy-alert"
+      }
+    }
+  }
+}

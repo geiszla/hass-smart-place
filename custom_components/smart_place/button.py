@@ -11,23 +11,19 @@ is the explicit, user-driven trigger.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
 from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.button import ButtonEntity
 
-from . import SmartPlaceData, category_device_info
-from .const import DOMAIN
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
 from .entity import SmartPlacePushEntity
 from .smart_place_client import CommandDefinition, Commands
 
 if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-
-_LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +49,11 @@ _DOORS: Final[tuple[_DoorButton, ...]] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: SmartPlaceConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Always create one button per known door — no discovery needed."""
-    data: SmartPlaceData = hass.data[DOMAIN][entry.entry_id]
+    data = entry.runtime_data
     async_add_entities(SmartPlaceDoorButton(entry, data, door) for door in _DOORS)
 
 
@@ -78,7 +74,7 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
     # door on their property.
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, entry: ConfigEntry, data: SmartPlaceData, door: _DoorButton) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, door: _DoorButton) -> None:
         """Wire the door's name, unique_id, and write command."""
         self._data = data
         self._door = door
@@ -90,15 +86,7 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
         """Send the door's OEFFNER command on the live WS.
 
         Issued via ``client.issue`` so the actuation lands in the audit
-        trail (door openers are ``audit=True``).
+        trail (door openers are ``audit=True``). A press that cannot be
+        sent raises, so the caller does not take it for an opened door.
         """
-        try:
-            await self._data.client.issue(self._door.command)
-        except RuntimeError:
-            # send() raises RuntimeError before the WS opens — log it
-            # so the user sees the press happened but the connection
-            # wasn't ready, instead of failing silently.
-            _LOGGER.warning(
-                "%s pressed before Smart Place WS was open; press ignored",
-                self._door.name,
-            )
+        await self._async_issue(self._door.command)
