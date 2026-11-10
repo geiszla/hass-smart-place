@@ -37,5 +37,10 @@
         "default": "mdi:palette-outline"
       }
     }
+  },
+  "services": {
+    "adjust_setpoint": {
+      "service": "mdi:thermometer-lines"
+    }
   }
 }

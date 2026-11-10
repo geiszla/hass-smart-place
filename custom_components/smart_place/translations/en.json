@@ -52,5 +52,17 @@
     "state_unknown": {
       "message": "The command was not sent: the current state is not known yet, and Smart Place can only toggle."
     }
+  },
+  "services": {
+    "adjust_setpoint": {
+      "name": "Adjust setpoint",
+      "description": "Moves the setpoint of a heating zone up or down along the Smart Place scale 18-26 °C, where 18 means off. The result is limited to that scale.",
+      "fields": {
+        "steps": {
+          "name": "Steps",
+          "description": "Number of whole degrees to move: positive raises, negative lowers."
+        }
+      }
+    }
   }
 }

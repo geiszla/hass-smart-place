@@ -1,0 +1,15 @@
+adjust_setpoint:
+  target:
+    entity:
+      integration: smart_place
+      domain: climate
+  fields:
+    steps:
+      required: true
+      example: 1
+      selector:
+        number:
+          min: -8
+          max: 8
+          step: 1
+          mode: box

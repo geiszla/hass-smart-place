@@ -17,9 +17,16 @@ from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    area_registry as ar,
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+    service,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
+import probatio
 
 from .const import (
     CAPTURE_PATH,
@@ -54,15 +61,22 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.typing import ConfigType
 
     from .smart_place_client import BlindConfig, LightConfig
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+SERVICE_ADJUST_SETPOINT = "adjust_setpoint"
+ATTR_STEPS = "steps"
+
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.CAMERA,
+    Platform.CLIMATE,
     Platform.COVER,
     Platform.LIGHT,
     Platform.SENSOR,
@@ -253,6 +267,19 @@ def blind_device_info(entry: SmartPlaceConfigEntry, data: SmartPlaceData, blind:
         suggested_area=_suggested_area(entry, data, blind.name, centre, blind.plan_id),
         via_device_id=data.main_device_id,
     )
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration's actions."""
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_ADJUST_SETPOINT,
+        entity_domain=Platform.CLIMATE,
+        schema={probatio.Required(ATTR_STEPS): int},
+        func="async_adjust_setpoint",
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -> bool:
