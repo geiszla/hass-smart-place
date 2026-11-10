@@ -21,7 +21,7 @@ A Home Assistant custom integration for the Smart Place (smartplace.ch) Swiss re
 ## Commands
 
 ```bash
-./scripts/setup        # uv sync --all-extras (uv-based project, Python 3.13+)
+./scripts/setup        # uv sync --all-extras (uv-based project; .python-version selects 3.14, which HA 2026.11 runs on)
 ./scripts/lint         # ruff format + ruff check --fix (autofix)
 ./scripts/lint-check   # CI version: ruff format --check, ruff check, pyright
 ./scripts/test         # uv run pytest --cov; forwards args
