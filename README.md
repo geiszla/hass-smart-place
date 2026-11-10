@@ -319,9 +319,9 @@ new install gets its entity ids from these names
 On an install from before these names, the devices are renamed by themselves
 at the first start; **entity ids do not change**. Two devices of that
 version, "Smart Place Groups" and "Smart Place Intercom", are no longer used
-and stay behind empty: delete them on their device pages. The old "All
-lights" button stays behind as an entity that is no longer provided: delete
-it in the entity list.
+and stay behind: delete them on their device pages (⋮ → Delete). "Smart Place
+Groups" still holds the old "All lights" button, which is no longer provided;
+it is deleted with the device.
 
 ### Scenes and the voice assistant
 

@@ -1300,18 +1300,20 @@ still take a new name at the next start only.
 - Type check of a copy against `homeassistant==2026.11.1`: 0 errors.
 - hassfest: valid.
 - Runtime checks on a real Home Assistant core with scripted sockets:
-  146 passed — the 107 earlier ones (some adapted: device names, the
+  147 passed — the 107 earlier ones (some adapted: device names, the
   removed devices and button, the view list of the dashboard, the plan
-  marker of a protected socket) and 39 new ones. The scratch copy ran
+  marker of a protected socket) and 40 new ones. The scratch copy ran
   with `DRY_RUN = False`; the branch tip sets it to `True` for the live
   test, and the checks look at what is sent on the scripted socket.
   New checks: a burst that comes after the setup gave up waiting, while
   it still waits, after a single stray value, never, and without lights,
   blinds and zones (first intercom state is the caller, no "unknown" in
   its history, count-dependent names, parcel PIN from unavailable to its
-  value); device names and what is on which device; aliases (default,
-  edited, existing ids, reload); "all lights" (order, context, protected,
-  disabled and unknown entities, lost connection); the hidden flag (set,
+  value); device names and what is on which device; an install of the
+  first round carried over (names, moved entities, ids, what is left
+  behind); aliases (default, edited, existing ids, reload); "all lights"
+  (order, context, protected, disabled and unknown entities, lost
+  connection); the hidden flag (set,
   cleared, a user's flag, shown again by the user) and a whole room
   switched off by area with a protected socket in it; renames (area
   follows, a moved device stays, `name_by_user`, no suggestion, restart);
@@ -1335,10 +1337,13 @@ still take a new name at the next start only.
 
 Nothing is migrated in code. After the update:
 
-- Delete the two empty devices "Smart Place Groups" and "Smart Place
-  Intercom" (device page → ⋮ → Delete).
-- Delete the old "All lights" button, unique id
-  `<entry id>_lights_group_<n>`: it is no longer provided.
+- Delete the devices "Smart Place Groups" and "Smart Place Intercom"
+  (device page → ⋮ → Delete). Their entities moved to the main device.
+  "Smart Place Groups" still holds the old "All lights" button (unique id
+  `<entry id>_lights_group_<n>`, disabled, no longer provided); it goes
+  with the device.
 - Entity ids did not change. The friendly names did ("Scene Night",
   "Weather Outdoor temperature", "Smart Place Doorbell mute").
+- With a dashboard of the user's own at `/smart-place`, the integration's
+  dashboard is at `/smart-place-plan`.
 

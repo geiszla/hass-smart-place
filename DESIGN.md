@@ -1021,7 +1021,8 @@ The main device "Smart Place" carries the Connection sensor, the plan
 image, the intercom, parcel and info-board sensors, the doorbell mute, the
 two "all lights" buttons and the blinds group buttons. The category
 devices "Groups" and "Intercom" of the first round are no longer used;
-nothing migrates them (they stay behind empty and can be deleted).
+nothing migrates them. They stay behind ("Groups" with the old lights
+group button on it, which is no longer provided) and can be deleted.
 
 **Scenes and the spoken name** (user decision, 2026-11-10). On a device
 Home Assistant's full name of a scene is "<device> <entity>" ("Scene
