@@ -139,7 +139,7 @@ def test_lights_view_has_one_toggle_icon_per_light_and_socket(flat_state: SmartP
 
 
 def test_protected_socket_shows_a_lock_and_cannot_be_toggled(flat_state: SmartPlaceState) -> None:
-    """A tap on a protected socket opens its details; the other markers still toggle."""
+    """A tap on a protected socket does nothing (a long press opens its details); the other markers still toggle."""
     office, bedroom = (
         next(light for light in flat_state.lights.values() if light.name == name)
         for name in ("Office socket", "Bedroom socket")
@@ -149,7 +149,7 @@ def test_protected_socket_shows_a_lock_and_cannot_be_toggled(flat_state: SmartPl
     (locked,) = _elements_of(view, f"switch.device_{office.id}")
     assert locked["type"] == "state-icon"
     assert locked["icon"] == "mdi:lock"
-    assert locked["tap_action"] == {"action": "more-info"}
+    assert locked["tap_action"] == {"action": "none"}
     assert locked["hold_action"] == {"action": "more-info"}
 
     (free,) = _elements_of(view, f"switch.device_{bedroom.id}")

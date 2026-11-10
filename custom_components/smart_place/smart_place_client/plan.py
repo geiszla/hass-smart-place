@@ -156,10 +156,10 @@ def _light_elements(entity_id: str, centre: Point, image: PlanBackground, *, pro
         "style": _style(centre, image),
     }
     if protected:
-        # No command is sent for a protected device: say so instead of
-        # offering a toggle that does nothing.
+        # No command is sent for a protected device: say so, and offer no
+        # tap that looks like a toggle. A long press still opens the details.
         element["icon"] = "mdi:lock"
-        element["tap_action"] = {"action": "more-info"}
+        element["tap_action"] = {"action": "none"}
     return [element]
 
 
@@ -407,8 +407,8 @@ def build_dashboard(
     the first plan's views. With several plans the views repeat per plan
     with the plan label in the title; with one plan the label is not shown.
     Without any entity the dashboard has one view that says so. A light or
-    socket whose vendor id is in ``protected_lights`` shows a lock, and a
-    tap opens its details instead of toggling it.
+    socket whose vendor id is in ``protected_lights`` shows a lock and has
+    no tap action; a long press opens its details.
     """
     plan_ids: list[int | None] = [*sorted(plans)] or [None]
     several_plans = len(plan_ids) > 1

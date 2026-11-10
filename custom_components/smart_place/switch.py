@@ -26,6 +26,7 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 
 from . import (
@@ -106,7 +107,10 @@ class SmartPlaceSocket(SmartPlaceToggleEntity, SwitchEntity):
     """A switched socket.
 
     While it is protected (integration options) no command is sent for it
-    — see ``SmartPlacePushEntity._async_issue`` — and it shows a lock.
+    — see ``SmartPlacePushEntity._async_issue`` — it shows a lock, and it
+    is hidden in Home Assistant: a hidden entity is left out of calls for
+    an area, a device, a floor or a label, and out of the automatic
+    dashboards.
     """
 
     _attr_has_entity_name = True
@@ -120,9 +124,49 @@ class SmartPlaceSocket(SmartPlaceToggleEntity, SwitchEntity):
         self._light_id = light.id
         self._attr_unique_id = f"{entry.entry_id}_socket_{light.id}"
         self._attr_device_info = light_device_info(entry, data, light)
+        # The protection the hidden flag was last set for; ``None`` before the first time.
+        self._hidden_for: bool | None = None
 
     def _protected(self) -> bool:
         return self._light_id in self._data.protected[DEVICE_LIGHT]
+
+    @callback
+    def _async_follow_protection(self) -> None:
+        """Hide the switch when the socket becomes protected; show it again if that hid it.
+
+        Done when the entity is added and when the option changes, not on
+        every update: the user may show a protected socket again. A flag
+        the user set is never cleared.
+        """
+        protected = self._protected()
+        if protected == self._hidden_for:
+            return
+        self._hidden_for = protected
+        entry = self.registry_entry
+        assert entry is not None
+        if protected and entry.hidden_by is None:
+            hidden_by = er.RegistryEntryHider.INTEGRATION
+        elif not protected and entry.hidden_by is er.RegistryEntryHider.INTEGRATION:
+            hidden_by = None
+        else:
+            return
+        er.async_get(self.hass).async_update_entity(self.entity_id, hidden_by=hidden_by)
+
+    @callback
+    def _handle_frame_update(self) -> None:
+        """Follow a changed protection (the options changed), then write if anything changed."""
+        self._async_follow_protection()
+        super()._handle_frame_update()
+
+    async def async_added_to_hass(self) -> None:
+        """Apply the protection the options hold now."""
+        await super().async_added_to_hass()
+        self._async_follow_protection()
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes: nothing here is keyed on the entity_id."""
+        super().async_entity_id_changed(old_entity_id)
 
     @property
     def icon(self) -> str | None:
