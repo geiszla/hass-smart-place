@@ -5,9 +5,10 @@ app WS → bootstrap-read flow the integration uses at runtime
 (DESIGN §6.2). This avoids accepting a token that can route but cannot
 open the real app channel.
 
-The options flow sets the protected sockets. Options take effect without
-a reload: the entry has an update listener (``__init__.py``), so no flow
-here may use Home Assistant's reloading helpers together with it.
+The options flow sets the protected sockets and the waiting time of
+"Lower after weather alarm". Options take effect without a reload: the
+entry has an update listener (``__init__.py``), so no flow here may use
+Home Assistant's reloading helpers together with it.
 """
 
 from __future__ import annotations
@@ -20,10 +21,18 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntryState, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectOptionDict, SelectSelector, SelectSelectorConfig, SelectSelectorMode
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 import probatio
 
-from .const import CONF_PROTECTED_SOCKETS, CONF_TOKEN, CONFIG_FLOW_TIMEOUT, DOMAIN
+from .const import CONF_LOWER_DELAY_MINUTES, CONF_PROTECTED_SOCKETS, CONF_TOKEN, CONFIG_FLOW_TIMEOUT, DOMAIN
 from .smart_place_client import (
     DISCOVERY_ORIGIN,
     LIGHT_KIND_SOCKET,
@@ -51,6 +60,9 @@ if TYPE_CHECKING:
     from . import SmartPlaceConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# Longest wait between the end of a weather alarm and the down command.
+_MAX_LOWER_DELAY_MINUTES = 240
 
 
 class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -157,22 +169,23 @@ class SmartPlaceConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SmartPlaceOptionsFlow(OptionsFlow):
-    """Smart Place options: the protected sockets."""
+    """Smart Place options: the protected sockets and the wait before a blind is lowered after its alarm."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Choose the sockets no command may be sent for."""
+        """Choose the sockets no command may be sent for, and the waiting time."""
         entry: SmartPlaceConfigEntry = self.config_entry
         if entry.state is not ConfigEntryState.LOADED:
             # The sockets are only known while the integration runs.
             return self.async_abort(reason="not_loaded")
         if user_input is not None:
-            # Other options (set elsewhere) stay as they are.
+            # The switches "Lower after weather alarm" keep their state in the options too.
             return self.async_create_entry(
                 data={
                     **entry.options,
                     CONF_PROTECTED_SOCKETS: sorted(
                         int(light_id) for light_id in user_input.get(CONF_PROTECTED_SOCKETS, [])
                     ),
+                    CONF_LOWER_DELAY_MINUTES: int(user_input.get(CONF_LOWER_DELAY_MINUTES, 0)),
                 },
             )
 
@@ -198,12 +211,24 @@ class SmartPlaceOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.LIST,
                     ),
                 ),
+                probatio.Optional(CONF_LOWER_DELAY_MINUTES): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0,
+                        max=_MAX_LOWER_DELAY_MINUTES,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="min",
+                    ),
+                ),
             },
         )
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
                 schema,
-                {CONF_PROTECTED_SOCKETS: [str(light_id) for light_id in protected]},
+                {
+                    CONF_PROTECTED_SOCKETS: [str(light_id) for light_id in protected],
+                    CONF_LOWER_DELAY_MINUTES: entry.options.get(CONF_LOWER_DELAY_MINUTES, 0),
+                },
             ),
         )

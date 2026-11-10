@@ -70,7 +70,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.typing import ConfigType
 
     from .dashboard import SmartPlaceDashboard
-    from .smart_place_client import BlindConfig, LevelGroup, LightConfig
+    from .smart_place_client import BlindConfig, CommandDefinition, LevelGroup, LightConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +136,8 @@ class SmartPlaceData:
     # ``via_device_id``.
     main_device_id: str
     listeners: list[Callable[[], None]] = field(default_factory=list)
+    # Called with every command an entity is about to send (``entity.py``).
+    command_listeners: list[Callable[[CommandDefinition, tuple[object, ...]], None]] = field(default_factory=list)
     # Identifiers of the devices this run created entities for. A device
     # outside this set is no longer provided and may be deleted by the user.
     device_identifiers: set[tuple[str, str]] = field(default_factory=set)

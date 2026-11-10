@@ -52,6 +52,9 @@
           "on": "mdi:bell-off"
         }
       },
+      "lower_after_alarm": {
+        "default": "mdi:arrow-collapse-down"
+      },
       "scene_switch": {
         "default": "mdi:palette-outline"
       }

@@ -156,6 +156,8 @@ class SmartPlacePushEntity(Entity):
         """
         if self._command_refused(command, args):
             return
+        for listener in self._data.command_listeners:
+            listener(command, args)
         try:
             await self._data.client.issue(command, *args)
         except SmartPlaceNotConnectedError as err:

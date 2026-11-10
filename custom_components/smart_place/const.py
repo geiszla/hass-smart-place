@@ -51,6 +51,12 @@ CONF_ZONE_AREAS_SET: Final = "zone_areas_set"
 # effect without a reload.
 CONF_PROTECTED_SOCKETS: Final = "protected_sockets"
 
+# Config-entry options of "Lower after weather alarm" (``switch.py``): the
+# vendor ids of the blinds whose switch is on, and the wait between the end
+# of an alarm and the down command in whole minutes (0 if not set).
+CONF_LOWER_AFTER_ALARM: Final = "lower_after_alarm"
+CONF_LOWER_DELAY_MINUTES: Final = "lower_delay_minutes"
+
 # Give up on the first bootstrap after this long and set the platforms up
 # anyway; entities for whatever arrives later are added when it does.
 SETUP_BOOTSTRAP_TIMEOUT: Final = 10.0
