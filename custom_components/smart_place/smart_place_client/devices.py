@@ -33,11 +33,16 @@ BLIND_KIND_AWNING: Final = "markise"
 SCENE_KIND_TRIGGER: Final = "OnOn"
 SCENE_KIND_SWITCH: Final = "OnOff"
 
+# The vendor app treats a scene as PIN-protected unless this field says
+# ``NoPw``, and shows a scene tile only when the display field says
+# ``SollDisplayON`` (a missing display field counts as shown).
 _SCENE_PIN_FIELD: Final = 11
-_SCENE_PIN_REQUIRED: Final = "Pw"
+_SCENE_NO_PIN: Final = "NoPw"
+_SCENE_DISPLAY_FIELD: Final = 16
+_SCENE_DISPLAYED: Final = "SollDisplayON"
 
-# ``JALICO<n>:<a>-<b>`` reports one of these instead of a position while a
-# weather alarm holds the blind.
+# ``JALICO<n>:<a>-<b>`` reports a word instead of a position while a weather
+# alarm holds the blind. The known words; any other is kept as it is.
 _BLIND_ALARMS: Final[dict[str, str]] = {
     "regenalarm": "rain",
     "windalarm": "wind",
@@ -97,7 +102,10 @@ class ClimateZoneConfig:
 
 @dataclass(frozen=True, slots=True)
 class SceneConfig:
-    """One ``INHALTSZENEN<id>`` scene."""
+    """One ``INHALTSZENEN<id>`` scene.
+
+    ``displayed`` is whether the vendor app shows the scene's tile.
+    """
 
     id: int
     name: str
@@ -105,6 +113,7 @@ class SceneConfig:
     top: int | None
     left: int | None
     pin_protected: bool
+    displayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,8 +144,9 @@ class BlindValue:
     """One ``JALICO<id>`` value.
 
     ``position`` is the vendor percentage (0 = fully up, 100 = fully down),
-    ``None`` while ``alarm`` (``rain`` / ``wind`` / ``hail``) is set.
-    ``flag`` is the raw second part (``00`` / ``01``), kept unparsed.
+    ``None`` while ``alarm`` is set: ``rain`` / ``wind`` / ``hail``, or the
+    vendor's own word when it is none of the known ones. ``flag`` is the
+    raw second part (``00`` / ``01``), kept unparsed.
     """
 
     position: int | None
@@ -228,7 +238,8 @@ def parse_scene_config(frame: NamedFields) -> SceneConfig | None:
         kind=fields[4],
         top=_px(fields[1]),
         left=_px(fields[2]),
-        pin_protected=fields[_SCENE_PIN_FIELD] == _SCENE_PIN_REQUIRED,
+        pin_protected=fields[_SCENE_PIN_FIELD] != _SCENE_NO_PIN,
+        displayed=len(fields) <= _SCENE_DISPLAY_FIELD or fields[_SCENE_DISPLAY_FIELD] == _SCENE_DISPLAYED,
     )
 
 
@@ -263,12 +274,13 @@ def parse_plan_config(frame: NamedFields) -> PlanConfig | None:
 
 
 def parse_blind_value(raw: str) -> BlindValue | None:
-    """Parse the ``<a>-<b>`` payload of a ``JALICO<id>`` frame."""
+    """Parse the ``<a>-<b>`` payload of a ``JALICO<id>`` frame.
+
+    A first part that is not a number means the blind reports no position.
+    """
     head, sep, flag = raw.rpartition("-")
     if not sep:
         return None
-    if head in _BLIND_ALARMS:
-        return BlindValue(position=None, alarm=_BLIND_ALARMS[head], flag=flag)
-    if not head.isdigit():
-        return None
-    return BlindValue(position=int(head), alarm=None, flag=flag)
+    if head.isdigit():
+        return BlindValue(position=int(head), alarm=None, flag=flag)
+    return BlindValue(position=None, alarm=_BLIND_ALARMS.get(head, head), flag=flag)

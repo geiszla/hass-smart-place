@@ -6,7 +6,7 @@ from smart_place_client import LevelGroup, SceneConfig, SmartPlaceState, classif
 
 
 def _scene(scene_id: int, name: str, kind: str = "OnOff", *, pin: bool = False) -> SceneConfig:
-    return SceneConfig(id=scene_id, name=name, kind=kind, top=None, left=None, pin_protected=pin)
+    return SceneConfig(id=scene_id, name=name, kind=kind, top=None, left=None, pin_protected=pin, displayed=True)
 
 
 def _scenes(*scenes: SceneConfig) -> dict[int, SceneConfig]:
@@ -49,8 +49,17 @@ def test_only_plain_on_off_scenes_can_be_levels() -> None:
     assert find_level_groups(trigger) == ()
     with_pin = _scenes(_scene(1, "Fan 1"), _scene(2, "Fan 2", pin=True), _scene(3, "Fan 3"))
     assert find_level_groups(with_pin) == ()
-    # A bare number is not a name with a level.
+
+
+def test_the_level_follows_a_name_after_whitespace() -> None:
+    """A bare number is not a name with a level, and neither is a number glued to the name."""
     assert find_level_groups(_scenes(_scene(1, "1"), _scene(2, "2"), _scene(3, "3"))) == ()
+    # Not a group named "1" with the levels 1, 2, 3.
+    assert find_level_groups(_scenes(_scene(1, "11"), _scene(2, "12"), _scene(3, "13"))) == ()
+    assert find_level_groups(_scenes(_scene(1, "Fan1"), _scene(2, "Fan2"), _scene(3, "Fan3"))) == ()
+    assert find_level_groups(_scenes(_scene(1, " 1"), _scene(2, " 2"), _scene(3, " 3"))) == ()
+    spaced = _scenes(_scene(1, "Zone 2 fan  1"), _scene(2, "Zone 2 fan 2"), _scene(3, "Zone 2 fan\t3"))
+    assert find_level_groups(spaced) == (LevelGroup(name="Zone 2 fan", scene_ids=(1, 2, 3)),)
 
 
 def test_classify_sorts_scenes_into_entity_kinds() -> None:

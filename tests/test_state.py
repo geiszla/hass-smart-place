@@ -7,6 +7,8 @@ exactly this kind of test.
 
 from __future__ import annotations
 
+import pytest
+
 from smart_place_client import (
     NamedFields,
     NamedValue,
@@ -472,7 +474,41 @@ def test_apply_chart_range_reply_is_stamped_with_the_requested_day() -> None:
     # ... its own complete reply does, together with the new values.
     assert state.apply(parse_frame("SingelStand3Update49:99:4807.9")) is True
     assert state.chart_today_starts == {49: 1783980000}
-    assert state.chart_today_buckets[49] == {98: 63.357, 97: 0.0, 96: 0.02}
+    assert state.chart_today_buckets[49] == {97: 0.0, 96: 0.02}
+
+
+def test_apply_chart_range_reply_for_a_new_day_replaces_the_buckets() -> None:
+    """A series missing in the first reply after midnight is unknown, not yesterday's value."""
+    state = SmartPlaceState()
+    state.chart_range_request = 1783893600
+    for text in _RANGE_REPLY:
+        state.apply(parse_frame(text))
+    state.chart_range_request = 1783980000
+    for text in (
+        "SingelStandUpdate49:98:0.02::::",
+        "SingelStandUpdate49:97:Keine Werte::::",
+        "SingelStandUpdate49:96:0.02::::",
+        "SingelStand3Update49:99:4807.9",
+    ):
+        state.apply(parse_frame(text))
+    assert state.chart_today_buckets[49] == {98: 0.02, 96: 0.02}
+    assert state.chart_today_starts == {49: 1783980000}
+
+
+def test_apply_chart_range_reply_for_the_same_day_keeps_a_series_it_lacks() -> None:
+    """Within a day a poll without a number for one series must not drop that series."""
+    state = SmartPlaceState()
+    state.chart_range_request = 1783893600
+    for text in _RANGE_REPLY:
+        state.apply(parse_frame(text))
+    for text in (
+        "SingelStandUpdate49:98:64.0::::",
+        "SingelStandUpdate49:97:Keine Werte::::",
+        "SingelStandUpdate49:96:22.9::::",
+        "SingelStand3Update49:99:4808.5",
+    ):
+        state.apply(parse_frame(text))
+    assert state.chart_today_buckets[49] == {98: 64.0, 97: 41.0819999999999, 96: 22.9}
 
 
 def test_apply_chart_range_stand_ignores_non_numeric_readings() -> None:
@@ -553,6 +589,9 @@ def test_apply_blind_config_and_value() -> None:
     assert state.blind_values[2].alarm == "rain"
     assert state.apply(parse_frame("JALICO1:48-00")) is False
     assert state.apply(parse_frame("JALICO1:50-00")) is True
+    # An alarm word that is not known here still means "no position".
+    assert state.apply(parse_frame("JALICO1:sturmalarm-00")) is True
+    assert (state.blind_values[1].position, state.blind_values[1].alarm) == (None, "sturmalarm")
 
 
 def test_apply_climate_config_keeps_room_names_for_the_sensors() -> None:
@@ -614,6 +653,26 @@ def test_apply_mute() -> None:
     assert state.apply(parse_frame("MUTE1:01")) is True
     assert state.mutes == {1: True}
     assert state.apply(parse_frame("MUTE1:01")) is False
+
+
+@pytest.mark.parametrize("code", ["", "02", "1", "0", "on", "true", "001"])
+def test_scene_and_mute_flags_other_than_00_and_01_mean_unknown(code: str) -> None:
+    """Such a value must not read as "on" (or "off"): it would decide a toggle."""
+    state = SmartPlaceState()
+    # Never stored when it is the first value ...
+    assert state.apply(parse_frame(f"SZENEN3:{code}")) is False
+    assert state.apply(parse_frame(f"MUTE1:{code}")) is False
+    assert state.scene_states == {}
+    assert state.mutes == {}
+    # ... and it removes a value that was known.
+    state.apply(parse_frame("SZENEN3:01"))
+    state.apply(parse_frame("SZENEN4:00"))
+    state.apply(parse_frame("MUTE1:00"))
+    assert state.apply(parse_frame(f"SZENEN3:{code}")) is True
+    assert state.apply(parse_frame(f"MUTE1:{code}")) is True
+    assert state.scene_states == {4: False}
+    assert state.mutes == {}
+    assert state.apply(parse_frame(f"SZENEN3:{code}")) is False
 
 
 def test_credential_frame_changes_nothing() -> None:

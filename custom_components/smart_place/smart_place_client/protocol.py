@@ -488,10 +488,11 @@ class SessionState:
       ``ClimateConfig`` / ``LightConfig`` / ... config frame for the
       installation, so the snapshot is rich enough to enumerate HA
       entities. The marker signals BOOTSTRAPPED.
-    - ``phase``, ``route``, ``global_config`` and ``main_menu_loaded``
-      describe the current connection; :meth:`reset_connection` clears
-      them before every connection attempt. The chart and plan fields
-      describe the installation and survive reconnects.
+    - ``phase``, ``route``, ``global_config``, ``main_menu_loaded`` and
+      ``plan_ids`` describe the current connection;
+      :meth:`reset_connection` clears them before every connection
+      attempt. The chart fields describe the installation and survive
+      reconnects.
     - ``chart_range_request`` is the start (epoch seconds) of the range the
       client last asked for with ``ChartStandRange``; ``SmartPlaceState``
       stamps each complete reply with it.
@@ -518,6 +519,9 @@ class SessionState:
         self.route = None
         self.global_config = None
         self.main_menu_loaded = False
+        # Every main-menu reply lists the plans again; a plan deleted on the
+        # server must not be fetched (and time out) after each reconnect.
+        self.plan_ids.clear()
 
     def on_discovery_frame(self, frame: ServerFrame) -> SessionPhase:
         """Apply a frame received on the discovery WS.

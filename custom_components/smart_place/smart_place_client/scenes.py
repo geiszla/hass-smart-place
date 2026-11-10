@@ -27,7 +27,8 @@ from .devices import SCENE_KIND_SWITCH, SCENE_KIND_TRIGGER, SceneConfig
 # Two scenes "… 1" and "… 2" alone are an ordinary pair of switches.
 MIN_LEVELS: Final = 3
 
-_LEVEL_NAME_RE = re.compile(r"^(.+?)\s*(\d+)$")
+# A name, whitespace, the level: "Fan 1". Not "Fan1", and not a bare "11".
+_LEVEL_NAME_RE = re.compile(r"^(.*\S)\s+(\d+)$")
 
 # English names for vendor default level-group names. Only names observed
 # live; unknown names pass through unchanged.

@@ -469,7 +469,7 @@ def test_blind_and_setpoint_values_keep_their_raw_payload() -> None:
 
 
 def test_session_state_reset_connection_keeps_installation_facts() -> None:
-    """A new connection starts from scratch; charts and plans are not per connection."""
+    """A new connection starts from scratch; the charts are not per connection."""
     state = SessionState()
     state.on_discovery_frame(GoToLinkSSL("h", 8770, "/Start1", "Leer"))
     state.on_app_open()
@@ -485,5 +485,25 @@ def test_session_state_reset_connection_keeps_installation_facts() -> None:
     assert state.route is None
     assert state.main_menu_loaded is False
     assert state.chart_ids == {49}
-    assert state.plan_ids == {1}
     assert state.chart_range_request == 1783893600
+
+
+def test_session_state_lists_the_plans_per_connection() -> None:
+    """A plan deleted on the server is not fetched again after a reconnect.
+
+    Every main-menu reply lists the plans; a plan id kept from an earlier
+    connection would be fetched (and time out) on every reconnect.
+    """
+    state = SessionState()
+    state.on_discovery_frame(GoToLinkSSL("h", 8770, "/Start1", "Leer"))
+    state.on_app_open()
+    state.on_app_frame(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima"))
+    state.on_app_frame(parse_frame("Floorplan2:Attic,70px,210px,Leuchten"))
+    assert state.plan_ids == {1, 2}
+
+    state.reset_connection()
+    assert state.plan_ids == set()
+    state.on_discovery_frame(GoToLinkSSL("h", 8770, "/Start1", "Leer"))
+    state.on_app_open()
+    state.on_app_frame(parse_frame("Floorplan1:XX00-00-00,70px,10px,Leuchten-Jalousien-Klima"))
+    assert state.plan_ids == {1}

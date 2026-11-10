@@ -5,6 +5,8 @@ Wire strings are frames from the 2026-11-09 capture.
 
 from __future__ import annotations
 
+import pytest
+
 from smart_place_client import (
     BLIND_KIND_FABRIC,
     BLIND_KIND_SLATTED,
@@ -108,11 +110,36 @@ def test_scene_config_reads_type_and_pin_flag() -> None:
         top=250,
         left=535,
         pin_protected=False,
+        displayed=True,
     )
     protected = parse_scene_config(_fields(_EVENING.replace("NoPw", "Pw").replace("OnOn", "OnOff")))
     assert protected is not None
     assert protected.kind == "OnOff"
     assert protected.pin_protected is True
+
+
+@pytest.mark.parametrize("flag", ["Pw", "1234", "pw", "NOPW", "", "undefined"])
+def test_scene_needs_a_pin_unless_the_flag_says_no_pin(flag: str) -> None:
+    """The vendor app asks for the PIN whenever the field is not exactly ``NoPw``."""
+    scene = parse_scene_config(_fields(_EVENING.replace("NoPw", flag)))
+    assert scene is not None
+    assert scene.pin_protected is True
+
+
+@pytest.mark.parametrize("flag", ["SollDisplayOFF", "", "undefined", "solldisplayon"])
+def test_scene_is_hidden_unless_the_display_flag_says_shown(flag: str) -> None:
+    """The vendor app only draws the tile for ``SollDisplayON``."""
+    scene = parse_scene_config(_fields(_EVENING.replace("SollDisplayON", flag)))
+    assert scene is not None
+    assert scene.displayed is False
+    assert scene.pin_protected is False
+
+
+def test_scene_without_a_display_field_counts_as_shown() -> None:
+    """The vendor app falls back to ``SollDisplayON`` when the frame ends before the field."""
+    scene = parse_scene_config(_fields(_EVENING.split(",SzenenSonnenAufOFF", 1)[0]))
+    assert scene is not None
+    assert scene.displayed is True
 
 
 def test_scene_config_too_short_to_classify_is_dropped() -> None:
@@ -152,7 +179,12 @@ def test_blind_value_position_and_alarms() -> None:
     assert parse_blind_value("hagelalarm-00") == BlindValue(position=None, alarm="hail", flag="00")
 
 
-def test_blind_value_garbage_is_dropped() -> None:
+def test_blind_value_with_an_unknown_word_has_no_position() -> None:
+    """A first part that is not a number is an alarm the vendor may add; its word is kept."""
+    assert parse_blind_value("sturmalarm-00") == BlindValue(position=None, alarm="sturmalarm", flag="00")
+    assert parse_blind_value("Regenalarm-01") == BlindValue(position=None, alarm="Regenalarm", flag="01")
+
+
+def test_blind_value_without_its_two_parts_is_dropped() -> None:
     assert parse_blind_value("") is None
     assert parse_blind_value("42") is None
-    assert parse_blind_value("sturm-00") is None

@@ -4,6 +4,8 @@ An ``OnOn`` scene only triggers: activating it sends ``SZENEN<id>``. Its
 ``SZENEN<id>`` flag latches at ``01`` once the scene ran, so it is not a
 state and is not exposed. On/off scenes are switches (``switch.py``) or
 levels of a fan (``fan.py``); scenes protected by a PIN get no entity.
+A scene the vendor app does not display gets its entity disabled by
+default.
 
 Scenes have no device: with one, the name would be "<device> <scene>" and
 the voice assistant would not match a spoken "Night".
@@ -59,6 +61,8 @@ class SmartPlaceScene(SmartPlacePushEntity, Scene):
         self._scene_id = scene.id
         self._attr_name = scene.name
         self._attr_unique_id = f"{entry.entry_id}_scene_{scene.id}"
+        # A scene the vendor app does not show is not meant for daily use.
+        self._attr_entity_registry_enabled_default = scene.displayed
 
     async def async_activate(self, **kwargs: Any) -> None:
         """Trigger the scene."""

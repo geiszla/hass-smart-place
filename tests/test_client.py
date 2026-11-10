@@ -1443,7 +1443,7 @@ async def test_outage_is_logged_once_and_recovery_once(
         return None
 
     monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
-    sockets = [_FakeWebSocket([_ROUTE]), _FakeWebSocket([])]
+    sockets = [_FakeWebSocket([_ROUTE]), _FakeWebSocket(["GiveMeMainMenuFinished"])]
     client = SmartPlaceClient.live(
         token="dummy",
         session=_FakeSession(sockets),  # type: ignore[arg-type]
@@ -1471,6 +1471,49 @@ async def test_outage_is_logged_once_and_recovery_once(
     assert sum("still unavailable" in record.message for record in caplog.records) == 2
     restored = [record for record in caplog.records if "connection restored" in record.message]
     assert [record.levelno for record in restored] == [logging.INFO]
+
+
+async def test_a_server_that_accepts_and_closes_is_one_outage(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An opened socket is not the end of an outage; a completed bootstrap is.
+
+    Regression: a server that accepted the app socket and closed it at
+    once produced a warning and a "restored" line on every attempt.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("smart_place_client.client.asyncio.sleep", fake_sleep)
+    sockets: list[_FakeWebSocket] = []
+    for _ in range(4):
+        sockets += [_FakeWebSocket([_ROUTE]), _FakeWebSocket([])]
+
+    async def stop() -> None:
+        client._closing = True
+
+    sockets += [_FakeWebSocket([_ROUTE]), _FakeWebSocket(["PongOK", "GiveMeMainMenuFinished"], on_drained=stop)]
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=_FakeSession(sockets),  # type: ignore[arg-type]
+        ping_interval=0,
+        chart_poll_interval=0,
+        backoff=ExponentialBackoff(jitter=0.0),
+    )
+    with caplog.at_level(logging.DEBUG, logger="smart_place_client"):
+        await client.run()
+
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == ["Smart Place server unavailable (the server closed the connection); reconnecting"]
+    assert sum("still unavailable" in record.message for record in caplog.records) == 3
+    assert sum("connection restored" in record.message for record in caplog.records) == 1
+    # In the order: outage, three more failed attempts, restored.
+    relevant = [
+        record.message for record in caplog.records if "unavailable" in record.message or "restored" in record.message
+    ]
+    assert "restored" in relevant[-1]
 
 
 # --------------------------- CLI stdin gate ---------------------------

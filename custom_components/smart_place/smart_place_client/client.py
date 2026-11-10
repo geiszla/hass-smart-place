@@ -331,7 +331,8 @@ class SmartPlaceClient:
     _heartbeat_task: asyncio.Task[None] | None = None
     _plan_task: asyncio.Task[None] | None = None
     _last_pong: float = 0.0
-    # Set while an outage has been logged, so it is logged once.
+    # Set from the first failed attempt of an outage until a bootstrap
+    # completes again, so the outage and its end are each logged once.
     _outage_logged: bool = False
     # Route for side HTTP fetches (camera MJPEG proxy, plan images),
     # managed independently of the app WS. Seeded for free from the WS
@@ -923,9 +924,6 @@ class SmartPlaceClient:
             # this lease lapses while the WS stays up (see camera.py).
             self._seed_camera_route(route)
             _LOGGER.info("app WS open at %s%s", route.host, APP_WS_PATH)
-            if self._outage_logged:
-                self._outage_logged = False
-                _LOGGER.info("Smart Place server connection restored")
 
             # Bootstrap reads (DESIGN §10):
             #   1. Commands.StatusContent -> StatusEntry rows +
@@ -1247,6 +1245,11 @@ class SmartPlaceClient:
 
             if isinstance(frame, NamedFields) and frame.name == "MainMenuFinished":
                 self._bootstrap_done.set()
+                # An outage ends here, not when the socket opens: a server
+                # that accepts the socket and closes it again is still down.
+                if self._outage_logged:
+                    self._outage_logged = False
+                    _LOGGER.info("Smart Place server connection restored")
                 self._start_plan_fetch()
 
             if isinstance(frame, NamedValue) and frame.name == "FloorplanRotated":

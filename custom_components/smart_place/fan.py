@@ -71,6 +71,10 @@ class SmartPlaceLevelFan(SmartPlacePushEntity, FanEntity):
         self._attr_speed_count = len(group.scene_ids)
         self._attr_unique_id = f"{entry.entry_id}_level_group_{group.scene_ids[0]}"
         self._attr_device_info = level_group_device_info(entry, data, group)
+        # Disabled by default when the vendor app shows none of the levels.
+        self._attr_entity_registry_enabled_default = any(
+            data.state.scene_configs[scene_id].displayed for scene_id in group.scene_ids
+        )
         self._expected_level: ExpectedState[int] = ExpectedState()
 
     def _server_level(self) -> int | None:

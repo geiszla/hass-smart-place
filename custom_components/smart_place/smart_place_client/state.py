@@ -214,6 +214,11 @@ def _alarm_on(raw: str) -> bool:
     return raw not in ("", "00")
 
 
+# A scene or mute flag decides a toggle command, so only the two values the
+# vendor app knows count; anything else is "unknown", not "on".
+_FLAGS: dict[str, bool] = {"00": False, "01": True}
+
+
 @dataclass(slots=True)
 class ChartReading:
     """Latest values for one consumption chart.
@@ -278,7 +283,8 @@ class SmartPlaceState:
     # — the first ``,``-field of ``INHALTSZENEN<N>``.
     scenes: dict[int, str] = field(default_factory=dict)
     # Whether scene N is currently active, from ``SZENEN<N>``
-    # broadcasts (``"01"`` = active).
+    # broadcasts (``"01"`` = active, ``"00"`` = not; any other value
+    # removes the entry: unknown).
     scene_states: dict[int, bool] = field(default_factory=dict)
     # ``FEUCHTEIST<N>`` indoor humidity in % per climate-zone id —
     # paired 1:1 with ``Klimas<N>`` zones the same way as
@@ -364,7 +370,7 @@ class SmartPlaceState:
     setpoints: dict[int, int] = field(default_factory=dict)
     # ``KLIMASINFO<N>``: ``heizen`` / ``kuehlen``, ``None`` for ``null``.
     climate_info: dict[int, str | None] = field(default_factory=dict)
-    # ``MUTE<N>`` doorbell mute.
+    # ``MUTE<N>`` doorbell mute (``01`` / ``00`` like ``scene_states``).
     mutes: dict[int, bool] = field(default_factory=dict)
     # Series of a ``ChartStandRange`` reply that is still arriving. Folded
     # into ``chart_today_buckets`` in one step so no consumer sees the
@@ -485,7 +491,7 @@ class SmartPlaceState:
     def _apply_control_value(self, name: str, index: int, raw: str) -> bool:
         """Fold one per-device control value (see ``clear_control_values``)."""
         if name == "SceneState":
-            return _set_key(self.scene_states, index, _alarm_on(raw))
+            return _set_flag(self.scene_states, index, raw)
         if name == "LightState":
             level = _safe_float(raw)
             return level is not None and _set_key(self.light_levels, index, round(level))
@@ -497,7 +503,7 @@ class SmartPlaceState:
             return setpoint is not None and _set_key(self.setpoints, index, round(setpoint))
         if name == "ClimateInfo":
             return _set_key(self.climate_info, index, None if raw == "null" else raw)
-        return _set_key(self.mutes, index, _alarm_on(raw))
+        return _set_flag(self.mutes, index, raw)
 
     def _apply_named_fields(self, frame: NamedFields) -> bool:
         name = frame.name
@@ -628,11 +634,17 @@ class SmartPlaceState:
         Publishing per frame exposed a mix of two days right after
         midnight: the new day's high-tariff bucket beside the old day's
         low-tariff bucket.
+
+        A reply for the day the stored buckets cover is merged into them
+        (a series without a number keeps its last value). A reply for
+        another day replaces them, so a series it lacks is unknown rather
+        than yesterday's value stamped as today's.
         """
         pending = self._range_pending.pop(chart_id, None)
         if not pending:
             return False
-        buckets = {**self.chart_today_buckets.get(chart_id, {}), **pending}
+        same_day = self.chart_today_starts.get(chart_id) == self.chart_range_request
+        buckets = {**self.chart_today_buckets.get(chart_id, {}), **pending} if same_day else pending
         changed = _set_key(self.chart_today_buckets, chart_id, buckets)
         if self.chart_range_request is not None:
             changed = _set_key(self.chart_today_starts, chart_id, self.chart_range_request) or changed
@@ -676,6 +688,14 @@ def _set_key(mapping: dict[_K, _V], key: _K, value: _V) -> bool:
         return False
     mapping[key] = value
     return True
+
+
+def _set_flag(mapping: dict[int, bool], key: int, raw: str) -> bool:
+    """Store an ``00`` / ``01`` flag; drop the entry for any other value. Returns whether anything changed."""
+    flag = _FLAGS.get(raw)
+    if flag is None:
+        return mapping.pop(key, None) is not None
+    return _set_key(mapping, key, flag)
 
 
 def _parse_stand_series(series_raw: str) -> int | None:

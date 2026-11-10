@@ -335,9 +335,10 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     MessageDefinition(
         name="SceneState",
         description=(
-            "Push: flag of scene N. Format: SZENEN<n>:<code> ('00' / '01'). For an "
-            "'OnOff' scene it is the real state; for an 'OnOn' (trigger) scene it is "
-            "set on activation and stays latched, so it is not a state."
+            "Push: flag of scene N. Format: SZENEN<n>:<code> ('00' / '01'; any other "
+            "code counts as unknown). For an 'OnOff' scene it is the real state; for an "
+            "'OnOn' (trigger) scene it is set on activation and stays latched, so it is "
+            "not a state."
         ),
         pattern=re.compile(r"^SZENEN\d+:"),
         parse=_indexed_value_parser("SceneState", "SZENEN"),
@@ -358,9 +359,9 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
         name="BlindState",
         description=(
             "Push: state of blind N. Format: JALICO<n>:<a>-<b>. <a> is the position in "
-            "percent (0 = fully up, 100 = fully down) or 'regenalarm' / 'windalarm' / "
-            "'hagelalarm' while a weather alarm holds the blind; <b> is '00' or '01'. "
-            "'JALICO' = Jalousie-Icon."
+            "percent (0 = fully up, 100 = fully down) or a word such as 'regenalarm' / "
+            "'windalarm' / 'hagelalarm' while a weather alarm holds the blind (then no "
+            "position is known); <b> is '00' or '01'. 'JALICO' = Jalousie-Icon."
         ),
         pattern=re.compile(r"^JALICO\d+:"),
         parse=_indexed_value_parser("BlindState", "JALICO"),
@@ -453,7 +454,7 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
     ),
     MessageDefinition(
         name="Mute",
-        description="Push: doorbell mute N. Format: MUTE<n>:<code> ('01' = muted).",
+        description="Push: doorbell mute N. Format: MUTE<n>:<code> ('01' = muted, '00' = not; else unknown).",
         pattern=re.compile(r"^MUTE\d+:"),
         parse=_indexed_value_parser("Mute", "MUTE"),
         example="MUTE1:00",
@@ -532,7 +533,8 @@ KNOWN_MESSAGES: Final[list[MessageDefinition]] = [
             "Scene definition N, 18 comma fields: INHALTSZENEN<n>:name,top,left,icon,type,"
             "Remove|NoRemove,pop-up,<4 timer fields>,NoPw|Pw,<4 sunrise/sunset flags>,"
             "display-flag,tile-shape. type is OnOn (trigger only) or OnOff (real on/off); "
-            "Pw marks a scene that needs a PIN."
+            "anything but NoPw marks a scene that needs a PIN; the vendor app shows the "
+            "scene only when the display flag is SollDisplayON."
         ),
         pattern=re.compile(r"^INHALTSZENEN\d+:"),
         parse=_indexed_fields_parser("SceneConfig", "INHALTSZENEN"),

@@ -92,6 +92,8 @@ class SmartPlaceSceneSwitch(SmartPlaceToggleEntity, SwitchEntity):
         self._scene_id = scene.id
         self._attr_name = scene.name
         self._attr_unique_id = f"{entry.entry_id}_scene_switch_{scene.id}"
+        # A scene the vendor app does not show is not meant for daily use.
+        self._attr_entity_registry_enabled_default = scene.displayed
 
     def _server_is_on(self) -> bool | None:
         return self._data.state.scene_states.get(self._scene_id)
