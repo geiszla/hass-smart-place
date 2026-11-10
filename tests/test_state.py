@@ -7,6 +7,9 @@ exactly this kind of test.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from smart_place_client import (
@@ -20,6 +23,8 @@ from smart_place_client import (
     energy_cost_chf,
     parse_frame,
 )
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_apply_outdoor_temperature_parses_float() -> None:
@@ -727,3 +732,48 @@ def test_clear_control_values_forgets_values_but_keeps_devices() -> None:
     assert state.clear_control_values() is False
     # The server replays the values after the reconnect; that is a change again.
     assert state.apply(parse_frame("leuchte13:255")) is True
+
+
+def test_control_values_received_marks_the_value_burst(flat_state: SmartPlaceState) -> None:
+    """True only when every listed light, blind and zone has its value, as after the server's burst."""
+    assert flat_state.control_values_received is True
+    # A reconnect: the devices stay listed, their values are gone until the next burst.
+    flat_state.clear_control_values()
+    assert flat_state.control_values_received is False
+    # One value that changed in the building before the burst is not the burst.
+    flat_state.apply(parse_frame("leuchte13:255"))
+    assert flat_state.control_values_received is False
+    for light_id in flat_state.lights:
+        flat_state.apply(parse_frame(f"leuchte{light_id}:0"))
+    for blind_id in flat_state.blinds:
+        flat_state.apply(parse_frame(f"JALICO{blind_id}:0-01"))
+    zones = sorted(flat_state.climate)
+    for zone_id in zones[:-1]:
+        flat_state.apply(parse_frame(f"TEMPSOLL{zone_id}:21"))
+    assert flat_state.control_values_received is False
+    flat_state.apply(parse_frame(f"TEMPSOLL{zones[-1]}:21"))
+    assert flat_state.control_values_received is True
+
+
+def test_control_values_received_without_such_devices() -> None:
+    """An installation without lights, blinds and zones has nothing to wait for."""
+    assert SmartPlaceState().control_values_received is True
+
+
+def test_control_values_received_in_the_recorded_bootstrap() -> None:
+    """In the capture the burst follows the main-menu reply: not before the reply's last frame."""
+    rows = [
+        json.loads(line) for line in (FIXTURES / "control-bootstrap.ndjson").read_text(encoding="utf-8").splitlines()
+    ]
+    texts = [row["text"] for row in rows if row["direction"] == "server"]
+    state = SmartPlaceState()
+    turned_true_at = None
+    for index, text in enumerate(texts):
+        state.apply(parse_frame(text))
+        if turned_true_at is None and index >= texts.index("GiveMeMainMenuFinished") and state.control_values_received:
+            turned_true_at = index
+    assert turned_true_at is not None
+    # The last setpoint completes it; the alarm, intercom, parcel and scene values follow.
+    assert texts[turned_true_at].startswith("TEMPSOLL")
+    later = {text.split(":")[0].rstrip("0123456789") for text in texts[turned_true_at + 1 :]}
+    assert {"WINDALARM", "SPRECHEN", "CALLINFO", "MUTE", "PERSINFO", "SZENEN"} <= later

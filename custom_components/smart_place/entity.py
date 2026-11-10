@@ -120,8 +120,13 @@ class SmartPlacePushEntity(Entity):
 
     @property
     def available(self) -> bool:
-        """Unavailable while the Smart Place WebSocket is down."""
-        return self._data.is_healthy
+        """Unavailable while the Smart Place WebSocket is down, and until the first values are in.
+
+        Before the first value burst an entity would read "unknown" or a
+        partial state, and its first real value would look like a change
+        (an intercom that rings, a parcel that arrives).
+        """
+        return self._data.is_healthy and self._data.first_reply_observed
 
     @callback
     def _handle_frame_update(self) -> None:

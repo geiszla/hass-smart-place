@@ -8,15 +8,19 @@ CONF_TOKEN: Final = "token"
 
 CONFIG_FLOW_TIMEOUT: Final = 60.0
 
-# How long after the first main-menu reply to wait before entities are
-# enumerated (at setup, or later when the first bootstrap is slow). Every
-# ``ChartDefinition`` / ``ClimateConfig`` / ``LightConfig`` etc. has
-# arrived with ``MainMenuFinished``, but the post-``SocketConnected:1``
-# broadcast burst (PACKETBOX<N>, REGEN, HAGEL, TEMPOUT, TEMPIST<N>,
-# FEUCHTEIST<N>, SPRECHEN<N>, INFOBOARD<N>INHALT, ...) takes another
-# ~300 ms to land. Two seconds gives a generous ~6× headroom on a slow
-# link while still being much faster than the previous five-second wait.
+# How long after the first value burst began to wait before entities are
+# enumerated (at setup, or later when the first bootstrap is slow). The
+# server sends every value (``leuchte<N>``, ``JALICO<N>``, ``TEMPSOLL<N>``,
+# ..., ``WINDALARM<N>``, ``SPRECHEN<N>``, ``CALLINFO<N>``, ``PERSINFO``,
+# ``SZENEN<N>``, ...) in one burst of about 100 frames within a few
+# milliseconds, without a marker at its end. Two seconds is generous
+# headroom on a slow link.
 SETUP_OBSERVATION_WINDOW: Final = 2.0
+
+# How long after a main-menu reply to wait for that value burst before the
+# entities are enumerated without it. The burst follows the reply 0.1 to
+# 4.8 s later (four captures, 2026-11-09/10).
+VALUE_BURST_TIMEOUT: Final = 10.0
 
 # Refresh interval for consumption charts (electricity, water). The
 # server doesn't push chart values, so we re-issue

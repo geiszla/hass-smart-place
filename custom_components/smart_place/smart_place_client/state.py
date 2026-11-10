@@ -537,6 +537,21 @@ class SmartPlaceState:
             return self._apply_gsa_config(frame)
         return False
 
+    @property
+    def control_values_received(self) -> bool:
+        """Return whether every listed light, blind and heating zone has its control value.
+
+        The server sends all values in one burst, some time after the
+        main-menu reply and without a marker. These values come first in
+        it, so this tells the burst from a single value that changed in
+        the building meanwhile. True when no such device is listed.
+        """
+        return (
+            self.lights.keys() <= self.light_levels.keys()
+            and self.blinds.keys() <= self.blind_values.keys()
+            and self.climate.keys() <= self.setpoints.keys()
+        )
+
     def clear_control_values(self) -> bool:
         """Forget every control value; return whether anything was stored.
 
