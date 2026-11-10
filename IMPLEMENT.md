@@ -923,3 +923,104 @@ Install with `DRY_RUN = True` (the last commit of the branch sets it).
 `./scripts/ha-live status` then shows "(dry run ...)". Commands are logged
 as `dry run: would send <name> (<wire>)` and not sent, so every entity can
 be exercised with `ha-live call`. Revert that commit before real use.
+
+## 2026-11-10 (later) — Review fixes on the control-entities branch
+
+Fixes for the findings of the branch review. Still no command was sent to
+the vendor server and nothing was deployed. Each fix in the client library
+and in `scripts/ha_live.py` has a test in `tests/`; the Home Assistant
+side was checked with the two throwaway setups described above (type
+check: 0 errors; runtime: the 33 earlier checks plus 30 new ones).
+
+### Tooling (`scripts/ha_live.py`)
+
+- `ws` refuses a payload with the key `type` or `id`: it replaced the
+  command that had been checked (`ws ping '{"type": "call_service", ...}'`).
+- `call` refuses a service of another domain than the entity's own
+  (`smart_place` actions excepted) and service data with `entity_id`,
+  `device_id`, `area_id`, `floor_id` or `label_id`: Home Assistant reads
+  those as further targets, and entities of other integrations are not in
+  dry run.
+
+### Client library
+
+- **Blinds sub-menus.** Only the plan-wide sub-menu gets "all up" / "all
+  down"; any other one gets a single button that sends its own group
+  message (`Commands.BlindsGroupMessage`), disabled by default. The
+  vendor app tells them apart by the name "All"; the integration goes by
+  the group message `JALZENTRAL<plan>` instead, because a name can be
+  changed. Untested: no second blinds sub-menu exists here, so the shape
+  of its message is assumed to be a frame name of the blinds family
+  (`JAL…<n>`); with another shape the sub-menu gets no button.
+- **Blind direction.** `BLIND_MOTION_TIMEOUT` is 6 s (was 3 s; the gap
+  between two position frames reaches 4.01 s in the scene-echo fixture).
+  The fixture test now runs on the recorded clock and also reads the
+  direction just before each frame.
+- **Expected state.** A server value that already equalled the
+  expectation when it was set does not confirm it until a different
+  value was seen (on, then off before the first echo). An unknown server
+  value ends an expectation. `ExpectedState.expect` takes the current
+  server value for this.
+- **Settle time.** `client.issue` starts `SettleTime` (1 s,
+  `GROUP_SETTLE_TIME`) for commands flagged `changes_others` (`Scene`,
+  `GroupMessage`, `BlindsGroupMessage`, `BlindsGroupUp`,
+  `BlindsGroupDown`); a toggle entity waits for the rest of it before it
+  decides. Also in dry run.
+- **Scenes.** PIN-protected is "field 11 is not `NoPw`". A scene the
+  vendor app does not display (field 16 is not `SollDisplayON`) keeps its
+  entity, disabled by default. A level name needs whitespace between name
+  and number ("11", "12", "13" are not levels of "1").
+- **State.** Scene and mute flags are stored only for `00` and `01`. A
+  blind value whose first part is not a number has no position; an
+  unknown word is kept as the alarm text. A range reply for another day
+  replaces the buckets instead of merging into them.
+- **Redaction.** Unknown frames are redacted before they reach handlers
+  and the CLI output; the second token of `GoToLinkSSL` is redacted
+  wherever a frame is written; the tokens are out of the `repr` of the
+  client.
+- **Connection.** `plan_ids` is per connection. An outage is logged once
+  and ends with a completed bootstrap, not with an opened socket.
+- **Tests.** The CLI test no longer loads the developer's `.env`. The
+  private-data guard also covers the second token, `CreateChart…`
+  definitions, the test modules and the registry examples; placeholder
+  addresses are from 192.0.2.0/24.
+
+### Home Assistant side
+
+- The expectation is set before the send is awaited and dropped if the
+  send fails (`SmartPlacePushEntity._async_issue_expecting`).
+- Fan: the level is unknown unless every member flag is known;
+  `fan.toggle` raises `no_off_level` instead of `NotImplementedError`.
+- Slow first bootstrap: entities that take a unit, a count-dependent
+  name or a chart label from other frames at creation wait for the
+  complete main-menu reply. Limit: see DESIGN.md §11 "Discovery".
+- Monthly cost: a prefix read for a new day that did not deliver the
+  prefix is repeated a minute later (was: not before the 15-minute
+  refresh).
+- Dashboard: a placeholder view while no entity is known; `hold_action:
+  none` on the plan's icon buttons; refresh after an entity of the entry
+  was renamed, enabled or disabled.
+- `_async_assign_zone_areas` is marked `@callback`.
+
+### User decisions (2026-11-10)
+
+- **Heating stays out of broad "turn off" calls.** The climate entity
+  keeps `TARGET_TEMPERATURE` as its only feature. Consequence, now in the
+  README and DEPLOY.md: `homeassistant.turn_off` / `turn_on` / `toggle`
+  on an area acts on the area's lights and sockets, and Home Assistant
+  raises "does not support action climate.turn_off" for the thermostat.
+- **Level groups need exactly one active member** when the integration
+  first sees them; with none or several on, the scenes become switches;
+  until all flags are known they get no entity. A fan or scene switches
+  that exist already (entity registry, or decided earlier in the run)
+  are never converted.
+
+### Still open
+
+- With several wind zones, intercoms or doorbell mutes, a slow first
+  bootstrap can still name the first one without its number: their value
+  frames arrive after the main-menu reply. A fix needs a short wait after
+  that reply (as the normal setup has); not done.
+- `chart_ids` in `SessionState` still only grows (a chart deleted on the
+  server is polled until the next restart; one frame per minute, no
+  timeout).

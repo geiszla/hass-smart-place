@@ -100,21 +100,27 @@ devices. The areas are filled in from the room names of your heating zones
 Open **Settings → Devices & Services → Smart Place**. You should see:
 
 - A **Smart Place** device with the **Connection** diagnostic sensor — it
-  should read **Connected**. This is the one entity that stays *available*
-  even when the connection is down, so you can build automations on it
-  (e.g. notify when it flips Off). The floor plan image is here too.
+  should read **Connected**. It stays *available* when the connection is
+  down, so you can build automations on it (e.g. notify when it flips
+  Off). The floor plan image is here too; once fetched it stays available
+  as well, and so does the electricity price sensor. Every other entity
+  shows *Unavailable* while the connection is down.
 - One device per **heating zone**, named after the room: a climate entity,
   the temperature sensor and a (disabled) humidity sensor.
 - One device per **light**, **socket** and **blind**, named as in the Smart
   Place app.
 - One device per level group, named after it, such as **Ventilation** (a
-  fan).
-- Category devices: **Groups** ("All blinds up/down"; "All lights" is
-  disabled by default), **Intercom** (doorbell mute), **Weather**,
-  **Energy**, **Cameras**, and **Doors**.
+  fan). A level group is three or more on/off scenes with the same name
+  and the numbers 1..N of which exactly one is on when the integration
+  first sees them; otherwise the scenes are switches.
+- Category devices: **Groups** ("All blinds up/down"; "All lights" and
+  the button of a blinds group other than "All" are disabled by default),
+  **Intercom** (doorbell mute), **Weather**, **Energy**, **Cameras**, and
+  **Doors**.
 - **Scenes** and scene switches have no device: they are named like the
   scene alone ("Night"), so the voice assistant recognises them. Find
   them in the integration's entity list or on the dashboard's Scenes view.
+  A scene the Smart Place app does not display is disabled by default.
 - Four **door** buttons (Front door, Ground floor entrance, Garage
   entrance, Mailbox) — disabled by default. They *send* `OEFFNER<n>` when
   pressed and open real doors; enable only the ones you want.
@@ -123,7 +129,9 @@ Open **Settings → Devices & Services → Smart Place**. You should see:
 Entities are added when the server first delivers their device or value —
 normally all at once at setup. A device added in the Smart Place app later
 appears after the next reconnect or restart. A device removed there keeps its
-entity; delete the device in Home Assistant when you no longer want it.
+entity; delete the device in Home Assistant when you no longer want it. Home
+Assistant refuses that until the integration was reloaded or Home Assistant
+was restarted: until then the integration still provides the device.
 
 ---
 
@@ -137,6 +145,13 @@ entity; delete the device in Home Assistant when you no longer want it.
 - **After a reconnect** lights, blinds and heating read *Unknown* for a
   moment, until the server has sent their states again. A turn-on or
   turn-off in that moment is refused.
+- **"Turn off" for a whole area** (`homeassistant.turn_off`, `turn_on`,
+  `toggle`) acts on the area's lights, sockets and other entities, but not
+  on its heating: the thermostat has no "turn off". Home Assistant reports
+  an error for it ("does not support action climate.turn_off") and an
+  automation stops at that step. Use `light.turn_off` / `switch.turn_off`
+  for the area, or name the entities. Heating is switched off only on the
+  thermostat itself (mode *Off*).
 - **Heartbeat:** every 60 s the client pings the server; if no pong
   arrives within 30 s it tears the connection down and reconnects — no
   action needed from you.

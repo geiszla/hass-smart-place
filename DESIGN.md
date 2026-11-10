@@ -167,9 +167,12 @@ repo-root/
 │   ├── manifest.json
 │   ├── config_flow.py              # UI flow to capture the token
 │   ├── const.py
-│   ├── coordinator.py              # (Optional) DataUpdateCoordinator for fallback
-│   ├── sensor.py / switch.py / …   # Entity platforms (added incrementally)
-│   └── strings.json
+│   ├── entity.py                   # Shared entity base: write gate, toggle rule, discovery
+│   ├── sensor.py / switch.py / …   # Entity platforms
+│   ├── dashboard.py / plan_view.py # The plan dashboard
+│   ├── diagnostics.py
+│   ├── icons.json / services.yaml
+│   └── translations/en.json        # The only translation file (no strings.json)
 │
 ├── tests/
 │   ├── test_protocol.py            # Pure-function tests of parse_frame / encode_frame.
@@ -899,13 +902,15 @@ and ``tests/fixtures/scene-echo.ndjson``.
 - Config ``INHALTSZENEN<id>:`` with 18 comma fields: 0 name, 1 top,
   2 left, 3 icon file, 4 type (``OnOn`` = trigger only, ``OnOff`` = real
   on/off), 5 ``Remove``/``NoRemove``, 6 pop-up reference, 7–10 timer
-  fields, 11 PIN flag (``NoPw``/``Pw``), 12–15 sunrise/sunset flags,
-  16 display flag, 17 tile shape [JS][L].
+  fields, 11 PIN flag (``NoPw``; anything else, such as ``Pw``, means
+  the scene needs a PIN [JS]), 12–15 sunrise/sunset flags, 16 display
+  flag (the vendor app shows the scene only for ``SollDisplayON``; a
+  missing field counts as shown [JS]), 17 tile shape [JS][L].
 - Value ``SZENEN<id>:00|01``. For ``OnOff`` it is the real state. For
   ``OnOn`` it is set on activation and stays latched, so it is not a
-  state [L].
+  state [L]. Any other value is folded as unknown.
 - Command ``SZENEN<id>`` (no value): toggles an ``OnOff`` scene, triggers
-  an ``OnOn`` scene [JS]. A ``Pw`` scene needs a PIN exchange
+  an ``OnOn`` scene [JS]. A scene with a PIN needs a PIN exchange
   (``EnteredPinCode:SZENENENTERPIN:...``); not implemented.
 - Observed echo of a trigger scene [L]: ``SZENEN11:01``, 0.2 s later the
   affected ``leuchte`` frames, 0.7 s later blind position frames.
@@ -915,9 +920,14 @@ and ``tests/fixtures/scene-echo.ndjson``.
 - ``UnterMenuLeuchten<n>:name,top,left,icon,OnOn|OnOff,<group message>,Uebersicht<plan>``;
   the group message (``LEUCHTENZENTRAL<n>``) is sent back as a command
   without value. What it does (all off, all on, toggle) is [U].
-- ``UnterMenuJalousien<n>:...,JALZENTRAL<n>,Uebersicht<plan>``; the
-  commands are ``JALUPZENTRAL<plan>`` and ``JALDOWZENTRAL<plan>`` — the
-  number is the plan id [JS].
+- ``UnterMenuJalousien<n>:...,JALZENTRAL<n>,Uebersicht<plan>``. The
+  vendor app gives only the sub-menu named ``All`` the two buttons that
+  send ``JALUPZENTRAL<plan>`` and ``JALDOWZENTRAL<plan>`` (the number is
+  the plan id); any other blinds sub-menu gets one button that sends its
+  own group message [JS]. No other sub-menu exists here, so the shape of
+  such a message is [U]. The integration does not go by the name (it can
+  be changed): the plan-wide sub-menu is the one whose group message is
+  ``JALZENTRAL<plan>``.
 - The value frames ``LEUCHTENZENTRAL<n>`` and ``JALZENTRAL<n>`` are
   placeholders and stay ignored.
 - ``MUTE<n>:00|01``, ``01`` = doorbell muted; command ``MUTE<n>`` =
@@ -925,7 +935,9 @@ and ``tests/fixtures/scene-echo.ndjson``.
 - ``Floorplan<id>:<label>,<top>,<left>,<functions>``; ``functions`` is a
   ``-``-joined list such as ``Leuchten-Jalousien-Klima``.
   ``Uebersicht<n>`` in a device config names plan n. The label can be an
-  installation tag; it is never shown or logged.
+  installation tag. It is not logged and is redacted in the diagnostics.
+  With one plan it is not shown anywhere; with several plans it is in
+  the titles of the dashboard views, to tell the plans apart.
 - Plan image: ``GET https://<routed host>:<routed port>/uebersichten/upload/Floorplan<id>.png``,
   no login, works right after a discovery handshake [L]. It is on the
   routed port, not the camera port. Only ids from ``Floorplan<n>`` frames
@@ -976,7 +988,22 @@ added when its key first appears. `async_setup_entry` still waits for
 `wait_for_bootstrap` plus a brief window so that everything normally
 appears at once and count-dependent names ("Wind alarm" vs "Wind alarm
 1") stay stable. Control entities are created after a complete main-menu
-reply. Nothing is removed automatically.
+reply (`SmartPlaceData.devices_listed`). So is every sensor, binary
+sensor and switch that takes something from other frames when it is
+created: a unit hint (outdoor temperature, wind speed), a name that
+depends on a count (wind alarms, intercoms, doorbell mutes), a chart's
+label, unit and "part of a sum" default (the chart sensors and what hangs
+on them). When the first bootstrap is slower than the setup timeout,
+they are therefore not created from half a reply. The Connection sensor
+and the other entities that need nothing of that kind are created at
+once. Nothing is removed automatically.
+
+Known limit: the value frames (`WINDALARM<n>`, `SPRECHEN<n>`, `MUTE<n>`)
+arrive after the main-menu reply. In the slow case the platforms are
+already set up then and add an entity per frame, so with several wind
+zones, intercoms or mutes the first one can still get the name without a
+number. The normal setup is not affected (it waits for the observation
+window).
 
 ### sensor
 
@@ -1098,7 +1125,19 @@ state while one is pending (`smart_place_client.expected`, 3 s), else the
 last server value. Already in the wanted state: nothing is sent. State
 not known yet: the call raises `state_unknown`. The server value is
 unknown after every reconnect until the server replays it
-(`clear_control_values`).
+(`clear_control_values`), and an unknown server value ends a pending
+expectation: the command may never have arrived.
+
+The expectation is set before the send is awaited (a second call that
+arrives meanwhile is decided against it) and dropped if the send fails.
+A server value equal to the expectation confirms it, except when the
+server reported that value already when the expectation was set (on,
+then off again before the first echo): then it only confirms after a
+different value was seen. Within `GROUP_SETTLE_TIME` (1 s) after the
+integration issued a scene or group command (`changes_others` in
+`commands.py`), a turn-on or turn-off first waits for the rest of that
+time, because the scene's echoes are about to change the values the
+decision is made against. No other command waits.
 
 ### cover
 
@@ -1107,13 +1146,15 @@ One `SmartPlaceCover` per `INHALTJalousien<N>`. Device class: `jalousie`
 set explicitly: `OPEN | CLOSE`, plus `OPEN_TILT` on slatted blinds (vent).
 No stop, no set-position. `current_cover_position = 100 − <a>`;
 `is_closed` when 0. During a weather alarm both are `None` and the
-attribute `weather_alarm` holds `rain`, `wind` or `hail`.
+attribute `weather_alarm` holds `rain`, `wind` or `hail` (or the vendor's
+own word, if the server reports an alarm that is not known here).
 `assumed_state` is set: the position is the server's own estimate, and
 Home Assistant then keeps both direction buttons enabled.
 
 `is_opening` / `is_closing` come from `smart_place_client.motion`: the
 sign of the change between two distinct positions, ended at 0 or 100, by
-a missing position, and by a timer 3 s after the last change.
+a missing position, and by a timer 6 s after the last change (the gap
+between two position frames of a moving blind reaches 4 s).
 
 "Up is just up": Home Assistant's scene restore calls `open_cover` and
 then `open_cover_tilt` for a cover stored as open. Sent to the vendor
@@ -1126,7 +1167,11 @@ One `SmartPlaceClimate` per `INHALTKlimas<N>`, on the zone device.
 `hvac_modes = [HEAT, OFF]`; vendor setpoint 18 is `OFF`. Target range
 19–26, step 1; the measured value keeps its decimal. Features:
 `TARGET_TEMPERATURE` only — no turn-on/turn-off, so a broad "turn off"
-cannot reach the heating. `hvac_action` from `KLIMASINFO<N>`. Switching
+cannot reach the heating (user decision, 2026-11-10). The price: a
+`homeassistant.turn_off` / `turn_on` / `toggle` on an area still acts on
+the area's lights and sockets, but Home Assistant raises
+`ServiceNotSupported` for the thermostat, and an automation stops at that
+step. `hvac_action` from `KLIMASINFO<N>`. Switching
 to `HEAT` from off sends the remembered setpoint (the last 19–26 value
 seen or sent, restored across restarts, 21 if none). The setpoint uses
 the expected-state helper, so two quick steps add up.
@@ -1138,16 +1183,30 @@ moves along the vendor scale 18–26, clamped. It is registered in
 ### scene, fan
 
 `smart_place_client.scenes.classify_scenes` decides per scene, after a
-complete main-menu reply: `Pw` → nothing; `OnOn` → `SmartPlaceScene`
-(activation sends `SZENEN<N>`; the latched flag is not exposed); `OnOff`
-→ switch, unless it is one level of a level group. A level group is three
-or more on/off scenes whose names differ only in a trailing number 1..N
-(compared ignoring case). It becomes one `SmartPlaceLevelFan` with N
-speeds on a device named after the group (the vendor default "Lüftung
-Stufe" reads "Ventilation"). Selecting level k sends the scene of level k
-unless it is already the active one; 0 % raises (there is no off); with
-no level active the fan is off and turn-on selects level 1. A scene that
-already is a switch in the entity registry is never moved into a group.
+complete main-menu reply: PIN flag other than `NoPw` → nothing; `OnOn` →
+`SmartPlaceScene` (activation sends `SZENEN<N>`; the latched flag is not
+exposed); `OnOff` → switch, unless it is one level of a level group. A
+scene the vendor app does not display gets its entity disabled by
+default.
+
+A level group is three or more on/off scenes whose names differ only in a
+trailing number 1..N, separated from the name by whitespace (compared
+ignoring case), **of which exactly one is on when the integration first
+sees the group** (user decision, 2026-11-10: the server keeps one level
+active; scenes that are merely named alike are independent). With none or
+several on, the scenes become ordinary switches. The decision needs the
+flags of all members; until they are known the scenes get neither a fan
+nor switches. What exists decides first, so nothing is ever converted: a
+fan in the entity registry stays a fan, scene switches in the registry
+stay switches, and so does whatever was decided earlier in the same run
+(`SmartPlaceData.level_group_ids` / `scene_switch_ids`).
+
+A level group becomes one `SmartPlaceLevelFan` with N speeds on a device
+named after the group (the vendor default "Lüftung Stufe" reads
+"Ventilation"). Selecting level k sends the scene of level k unless it is
+already the active one; 0 %, turn-off and toggle raise (there is no off);
+with no level active the fan is off and turn-on selects level 1. The
+level is unknown unless the flag of every level is known.
 
 ### image and the plan dashboard
 
@@ -1165,6 +1224,15 @@ guards it so that a change in those internals disables the dashboard
 only. The action `smart_place.get_plan_config` returns the same
 configuration.
 
+While no entity is known the dashboard has one placeholder view (the
+frontend opens a dashboard without views in edit mode, and this one
+cannot be edited). The icon buttons on the plan set `hold_action: none`:
+they have no entity, and the default hold action would end in an error
+toast. Open frontends are told to load the configuration again
+(`lovelace_updated`) when it changed: after new entities or a plan image,
+and after an entity of the entry was renamed, enabled or disabled in the
+entity registry.
+
 ### button
 
 The four `OEFFNER<n>` write commands surface as `Button` entities so
@@ -1174,9 +1242,14 @@ cannot be sent the press raises a translated `HomeAssistantError`
 (`not_connected`) — there is no command queue.
 
 `SmartPlaceGroupButton`: per lights sub-menu one button that sends the
-sub-menu's group message (disabled by default, its effect is untested);
-per blinds sub-menu "all up" and "all down" (`JALUPZENTRAL<plan>` /
-`JALDOWZENTRAL<plan>`).
+sub-menu's group message (disabled by default, its effect is untested).
+The blinds sub-menu that covers its whole plan (group message
+`JALZENTRAL<plan>`) gets "all up" and "all down" (`JALUPZENTRAL<plan>` /
+`JALDOWZENTRAL<plan>`); any other blinds sub-menu gets one button that
+sends its own group message, disabled by default like the lights one. A
+group message is only sent back when it has the expected shape
+(`LEUCHTENZENTRAL<n>` for lights, a `JAL…<n>` frame name for blinds);
+otherwise the sub-menu gets no button.
 
 ### Polling
 
@@ -1212,7 +1285,7 @@ sensor entity names are kept generic — "Electricity chart 49",
 
 ### Notably **not** mapped
 
-- Scenes that need a PIN (`Pw`).
+- Scenes that need a PIN (PIN flag other than `NoPw`).
 - Changing the daily consumption targets (`CHARTZIEL` / `ZielUpdate`).
 - Media and speakers, ring and speak volume, RGB lights, fan coils,
   alarm devices, sauna.

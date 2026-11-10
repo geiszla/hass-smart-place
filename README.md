@@ -28,8 +28,8 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Heating zone | `climate` | Heat / Off, target 19–26 °C in whole degrees, measured temperature, heating or idle |
 | Scene that only triggers | `scene` | Usable from the voice assistant |
 | Scene with on/off state | `switch` | |
-| Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds |
-| "All" buttons of the lights and blinds pages | `button` | "All blinds up", "All blinds down"; "All lights" is disabled by default |
+| Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds, if exactly one of them is on when the integration first sees them. Otherwise they become switches |
+| Group buttons of the lights and blinds pages | `button` | "All blinds up", "All blinds down"; "All lights" and the button of a blinds group other than "All" are disabled by default |
 | Doorbell mute | `switch` | |
 | Door openers | `button` | Disabled by default: they open real doors |
 | Floor plan | `image` and a dashboard | See [Plan dashboard](#plan-dashboard) |
@@ -44,17 +44,30 @@ Good to know:
   on the Smart Place side. The integration therefore decides "turn on" and
   "turn off" from the last known state. Right after a start or a reconnect,
   until the server has reported the state, such a command is refused with an
-  error instead of risking a switch in the wrong direction.
+  error instead of risking a switch in the wrong direction. Within one second
+  after the integration sent a scene or a group button, such a command waits
+  for the rest of that second: the scene is about to change the states.
 - **Blinds have no stop and no "go to position" command.** The position shown
   is the Smart Place server's own estimate.
 - **Heating:** Smart Place setpoint 18 is shown as mode *Off*. Switching back
-  to *Heat* restores the previous target. The climate entity has no on/off
-  buttons on purpose, so that "turn off everything" does not switch the
-  heating off.
+  to *Heat* restores the previous target. Heating is switched off only on the
+  thermostat itself (mode *Off*, or the `smart_place.adjust_setpoint` action):
+  the climate entity has no "turn on" / "turn off" on purpose, so that "turn
+  off everything" does not switch the heating off.
+- **"Turn off" for a whole area.** `homeassistant.turn_off`, `turn_on` and
+  `toggle` on an area still act on that area's lights, sockets and other
+  entities. Home Assistant then reports an error for the thermostat ("does
+  not support action climate.turn_off"), and an automation stops at that
+  step. To avoid it, use `light.turn_off` / `switch.turn_off` for the area,
+  or name the entities.
 - **Ventilation has no off.** One level is always active; setting the fan to
   0 % or turning it off gives an error.
+- A scene that the Smart Place app does not display gets an entity that is
+  disabled by default.
 - A device that disappears from the Smart Place server is not removed. Delete
-  its device in Home Assistant when you no longer want it.
+  its device in Home Assistant when you no longer want it. Home Assistant
+  refuses that until the integration was reloaded or Home Assistant was
+  restarted: until then the integration still provides the device.
 
 ## What is not supported
 
@@ -84,6 +97,11 @@ used, and Home Assistant creates the area.
 The suggestion is made **once, when Home Assistant creates the device**. The
 integration never changes the area of a light, socket or blind afterwards. To
 change it, open the device in Home Assistant and pick another area.
+
+On an install that existed before this version, the devices of the heating
+zones are already there. A heating-zone device without an area gets the area
+of its room once, on the first start with this version. An area you clear
+afterwards stays cleared.
 
 Everything works without areas: control, the plan dashboard and the automatic
 dashboards do not depend on them. Scenes, group buttons and door buttons get
