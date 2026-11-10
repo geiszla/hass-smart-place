@@ -261,3 +261,80 @@ def test_ws_hatch_refuses_a_payload_that_is_not_a_json_object(fake_socket: _Fake
     result = _invoke_ws("ping", payload)
     assert result.exit_code == 2
     assert fake_socket.sent == []
+
+
+# ------------------------------ update ------------------------------
+
+
+class _FakeUpdateApi:
+    """Stand-in for ``HassApi`` with the Marketplace's update entity; records the service calls."""
+
+    calls: list[tuple[str, dict[str, Any]]]
+    refusal: str | None
+
+    def __init__(self, *_args: object) -> None:
+        pass
+
+    async def get(self, path: str) -> Any:
+        assert path == "/api/states/update.smart_place_update"
+        return {"state": "on", "attributes": {"installed_version": "aaa1111", "latest_version": "bbb2222"}}
+
+    async def ws_command(self, command_type: str, **payload: Any) -> Any:
+        self.calls.append((command_type, payload))
+        if self.refusal is not None:
+            raise ha_live.ApiError(f"WS command 'call_service' failed: home_assistant_error: {self.refusal}")
+
+
+@pytest.fixture
+def update_api(monkeypatch: pytest.MonkeyPatch) -> type[_FakeUpdateApi]:
+    _FakeUpdateApi.calls = []
+    _FakeUpdateApi.refusal = None
+    monkeypatch.setattr(ha_live, "HassApi", _FakeUpdateApi)
+    return _FakeUpdateApi
+
+
+def _invoke_update(*args: str) -> Any:
+    return CliRunner().invoke(ha_live.cli, ["--token", "t", "--url", "http://192.0.2.1:1", "update", *args])
+
+
+def test_update_installs_through_the_marketplace_update_entity(update_api: type[_FakeUpdateApi]) -> None:
+    """``update`` calls ``update.install`` on the Marketplace's update entity of the integration, nothing else."""
+    assert ha_live.MARKETPLACE_UPDATE_ENTITY == "update.smart_place_update"
+    result = _invoke_update("--version", "ccc3333")
+    assert result.exit_code == 0, result.output
+    assert update_api.calls == [
+        (
+            "call_service",
+            {
+                "max_wait": ha_live.UPDATE_TIMEOUT,
+                "domain": "update",
+                "service": "install",
+                "service_data": {"version": "ccc3333"},
+                "target": {"entity_id": "update.smart_place_update"},
+            },
+        ),
+    ]
+    assert "Installing ccc3333 (installed: aaa1111)" in result.output
+
+
+def test_update_without_a_version_installs_what_the_marketplace_offers(update_api: type[_FakeUpdateApi]) -> None:
+    result = _invoke_update()
+    assert result.exit_code == 0, result.output
+    assert [payload["service_data"] for _, payload in update_api.calls] == [{}]
+    assert "Installing bbb2222" in result.output
+
+
+def test_update_reports_a_refusal_of_the_marketplace(update_api: type[_FakeUpdateApi]) -> None:
+    """Until the Marketplace warning was accepted in the UI, Home Assistant refuses the install."""
+    update_api.refusal = "Open the Marketplace and read the warning first"
+    result = _invoke_update()
+    assert result.exit_code == 2
+    assert "Open the Marketplace and read the warning first" in result.output
+
+
+def test_update_help_names_the_marketplace_and_its_warning() -> None:
+    result = CliRunner().invoke(ha_live.cli, ["update", "--help"])
+    assert result.exit_code == 0
+    assert "Marketplace" in result.output
+    assert "warning not accepted" in result.output
+    assert "HACS" not in result.output

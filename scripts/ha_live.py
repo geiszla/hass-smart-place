@@ -90,12 +90,13 @@ DOOR_UNIQUE_ID_MARKER = "_door_"
 # which are not in dry run.
 SERVICE_TARGET_KEYS = frozenset({"entity_id", "device_id", "area_id", "floor_id", "label_id"})
 
-# HACS creates this update entity for the integration's repository.
-HACS_UPDATE_ENTITY = "update.smart_place_update"
+# Home Assistant's Marketplace (the successor of HACS, built in since
+# 2026.11) provides this update entity for the integration's repository.
+MARKETPLACE_UPDATE_ENTITY = "update.smart_place_update"
 
 REST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 WS_TIMEOUT = 15.0
-# HACS downloads the repository before ``update.install`` returns.
+# The Marketplace downloads the repository before ``update.install`` returns.
 UPDATE_TIMEOUT = 300.0
 # Entry reload re-runs the Smart Place bootstrap (CONFIG_FLOW_TIMEOUT=60s)
 # plus the 2s observation window, so give it headroom.
@@ -741,22 +742,34 @@ def call_cmd(obj: dict[str, str], service: str, entity_id: str, data: tuple[str,
 
 
 @cli.command()
-@click.option("--version", "version", default=None, help="Git ref (commit, tag) to install; default: the latest.")
+@click.option(
+    "--version",
+    "version",
+    default=None,
+    help="Git ref (commit, tag) to install; default: the version the Marketplace offers.",
+)
 @click.pass_obj
 def update(obj: dict[str, str], version: str | None) -> None:
-    """Install a version of the integration through its HACS update entity.
+    """Install a version of the integration through its Marketplace update entity.
 
-    Calls update.install on the HACS update entity of this integration.
+    Calls update.install on the update entity the Home Assistant
+    Marketplace provides for this integration's repository.
     The new code only runs after a core restart: ./scripts/ha-live restart
+
+    Home Assistant refuses with "warning not accepted" until the user the
+    token belongs to has opened Settings > Marketplace once and accepted
+    its warning. It also refuses a version that is already installed.
     """
 
     async def handler(api: HassApi) -> None:
         try:
-            before = await api.get(f"/api/states/{HACS_UPDATE_ENTITY}")
+            before = await api.get(f"/api/states/{MARKETPLACE_UPDATE_ENTITY}")
         except aiohttp.ClientResponseError as err:
             if err.status != 404:
                 raise
-            raise ApiError(f"{HACS_UPDATE_ENTITY} not found — is the integration installed through HACS?") from err
+            raise ApiError(
+                f"{MARKETPLACE_UPDATE_ENTITY} not found — is the integration installed through the Marketplace?"
+            ) from err
         target = version or before["attributes"].get("latest_version")
         print(f"Installing {target} (installed: {before['attributes'].get('installed_version')})...")
         await api.ws_command(
@@ -765,9 +778,9 @@ def update(obj: dict[str, str], version: str | None) -> None:
             domain="update",
             service="install",
             service_data={"version": version} if version else {},
-            target={"entity_id": HACS_UPDATE_ENTITY},
+            target={"entity_id": MARKETPLACE_UPDATE_ENTITY},
         )
-        after = await api.get(f"/api/states/{HACS_UPDATE_ENTITY}")
+        after = await api.get(f"/api/states/{MARKETPLACE_UPDATE_ENTITY}")
         print(f"  installed version: {after['attributes'].get('installed_version')}")
         print("  restart Home Assistant to load it: ./scripts/ha-live restart")
 

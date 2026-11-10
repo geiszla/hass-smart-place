@@ -1,6 +1,6 @@
 ---
 name: ha-live
-description: Query the live Home Assistant box for Smart Place integration data using ./scripts/ha-live — config entry status, devices, entities and their current values, full state objects, system logs with tracebacks, live state streaming, plus update (HACS), reload/restart, a service call that only works in dry run, and raw REST/WebSocket escape hatches. Use when asked to verify the deployed integration, check entity values on the Pi, debug unavailable or missing entities, inspect HA logs for smart_place errors, or watch live updates.
+description: Query the live Home Assistant box for Smart Place integration data using ./scripts/ha-live — config entry status, devices, entities and their current values, full state objects, system logs with tracebacks, live state streaming, plus update (Marketplace), reload/restart, a service call that only works in dry run, and raw REST/WebSocket escape hatches. Use when asked to verify the deployed integration, check entity values on the Pi, debug unavailable or missing entities, inspect HA logs for smart_place errors, or watch live updates.
 ---
 
 # Inspect the live Smart Place deployment
@@ -47,7 +47,7 @@ echo 'HASS_URL=http://192.168.1.x:8123' >> .env
 | `watch --seconds N` | Live stream of Smart Place state changes (default 60 s) |
 | `reload` | Reload the config entry — re-runs the integration's setup |
 | `restart` | Restart HA core, wait for it to come back, print entry state |
-| `update [--version <git ref>]` | Install a version of the integration through its HACS update entity (`update.smart_place_update`); needs a `restart` afterwards |
+| `update [--version <git ref>]` | Install a version of the integration through its Marketplace update entity (`update.smart_place_update`); needs a `restart` afterwards. Fails with "warning not accepted" until the Marketplace warning was accepted in the UI (see below) |
 | `call <domain.service> <entity_id> [key=value ...]` | Call a service on a Smart Place entity — **only while the integration is in dry run**, never on a door button. The service must be of the entity's own domain or of `smart_place`; the data must not name further targets (see below) |
 | `get <path>` | Raw REST GET, e.g. `get /api/config` |
 | `ws <type> [json]` | Raw WebSocket command, e.g. `ws system_log/list`. Refuses `call_service`, `execute_script`, `fire_event` and the other commands that make HA act, and a JSON payload with the key `type` or `id` |
@@ -64,16 +64,43 @@ real `friendly_name`/attributes with `state <entity_id>`.
 ## Verification recipes
 
 - **Installing new code** (only when the user asks for it). The box has
-  no SSH; the integration is installed through HACS, which tracks the
-  GitHub repository. So the code must be pushed first, then:
+  no SSH; the integration is installed through Home Assistant's
+  **Marketplace** (Settings → Marketplace; built in since 2026.11, it
+  replaced HACS and took over its repositories and update entities), which
+  tracks the GitHub repository. So the code must be pushed first, then:
 
   ```bash
-  ./scripts/ha-live update                      # latest commit of the default branch
-  ./scripts/ha-live update --version <git ref>  # or a specific commit / tag
+  ./scripts/ha-live update                      # the version the Marketplace offers
+  ./scripts/ha-live update --version <commit>   # right after a push, see below
   ./scripts/ha-live restart                     # changed Python needs a core restart
   ./scripts/ha-live status
   ./scripts/ha-live logs
   ```
+
+  What to know about `update` (it calls `update.install` on
+  `update.smart_place_update`, which the `marketplace` integration
+  provides):
+
+  - **The Marketplace warning must be accepted first.** On first use the
+    Marketplace shows a warning. Until it is accepted, Home Assistant
+    installs and updates nothing from the Marketplace, also not through
+    `update.install`: the command fails with "Open the Marketplace and
+    read the warning first ...". For a call made with a user's token,
+    Home Assistant checks that this user has accepted it, so the user
+    `HASS_TOKEN` belongs to has to open **Settings → Marketplace** once
+    and accept. Only the user can do this, in the UI.
+  - **This repository has no releases, so the Marketplace installs the
+    default branch.** A requested version does not select another branch
+    or an older commit.
+  - **The Marketplace looks for new commits only every 48 hours** (for a
+    repository added from a link, and only while GitHub is connected).
+    `update.install` refuses when the requested version equals the
+    installed one. To install right after a push, before the Marketplace
+    has noticed the new commit, name it:
+    `./scripts/ha-live update --version <new commit>`. The version then
+    differs from the installed one, and the Marketplace installs the
+    current default branch. This is read from the Home Assistant 2026.11.1
+    source; it has not been tried on the box yet.
 
 - **Check a specific value or its configuration**: `entities` to find the
   entity_id, then `state sensor.smart_place_outdoor_temperature` for the full
