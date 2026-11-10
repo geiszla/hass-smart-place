@@ -3,7 +3,8 @@
 The layout itself is pure and lives in ``smart_place_client.plan``. This
 module supplies what only Home Assistant knows: which entity belongs to
 which vendor device (resolved by unique id, disabled entities left out),
-the image entities and the temperature unit.
+the image entities, the temperature unit, and the door buttons and
+cameras of the Intercom view.
 """
 
 from __future__ import annotations
@@ -16,7 +17,15 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .entity import async_classify_scenes
-from .smart_place_client import DEVICE_LIGHT, LIGHT_KIND_SOCKET, DashboardEntities, PlanBackground, build_dashboard
+from .smart_place_client import (
+    DEVICE_LIGHT,
+    DOORS,
+    LIGHT_KIND_SOCKET,
+    DashboardEntities,
+    NamedEntity,
+    PlanBackground,
+    build_dashboard,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -40,6 +49,15 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
 
     def existing(candidates: list[str | None]) -> list[str]:
         return [candidate for candidate in candidates if candidate is not None]
+
+    def camera(camera_id: int) -> NamedEntity | None:
+        """Return the enabled camera entity with the name the integration gave it."""
+        found = entity_id(Platform.CAMERA, f"camera_{camera_id}")
+        if found is None:
+            return None
+        name = registry.entities[found].original_name
+        assert name is not None
+        return NamedEntity(found, name)
 
     scenes = async_classify_scenes(entry, data)
     lights = {
@@ -78,6 +96,10 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
                 ),
             ],
         ),
+        doors=[
+            NamedEntity(found, door.name) for door in DOORS if (found := entity_id(Platform.BUTTON, f"door_{door.key}"))
+        ],
+        cameras=[found for camera_id in sorted(state.gsa_cameras) if (found := camera(camera_id))],
     )
     images = {
         plan_id: PlanBackground(entity_id=found, width=image.width, height=image.height)

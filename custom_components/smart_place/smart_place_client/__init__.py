@@ -46,6 +46,7 @@ from .devices import (
     blinds_menu_plan,
 )
 from .expected import EXPECTED_STATE_TIMEOUT, GROUP_SETTLE_TIME, ExpectedState, SettleTime
+from .intercom import DOORS, Door, NamedEntity, camera_door, intercom_view
 from .messages import KNOWN_MESSAGES, parse_frame
 from .motion import BLIND_MOTION_TIMEOUT, BlindMotion
 from .plan import (
@@ -112,6 +113,7 @@ __all__ = [
     "DEVICE_BLIND",
     "DEVICE_LIGHT",
     "DISCOVERY_ORIGIN",
+    "DOORS",
     "EXPECTED_STATE_TIMEOUT",
     "GROUP_SETTLE_TIME",
     "KNOWN_COMMANDS",
@@ -134,6 +136,7 @@ __all__ = [
     "Commands",
     "DashboardEntities",
     "DisconnectCallback",
+    "Door",
     "ExpectedState",
     "ExponentialBackoff",
     "FrameHandler",
@@ -144,6 +147,7 @@ __all__ = [
     "LowerAfterAlarm",
     "MessageDefinition",
     "MonthToDateCost",
+    "NamedEntity",
     "NamedFields",
     "NamedValue",
     "PlanBackground",
@@ -171,6 +175,7 @@ __all__ = [
     "blind_centre",
     "blinds_menu_plan",
     "build_dashboard",
+    "camera_door",
     "chart_target_status",
     "classify_scenes",
     "climate_centre",
@@ -182,6 +187,7 @@ __all__ = [
     "find_level_groups",
     "heating_is_off",
     "install_token_redaction_filter",
+    "intercom_view",
     "is_high_tariff",
     "is_level_group",
     "light_centre",

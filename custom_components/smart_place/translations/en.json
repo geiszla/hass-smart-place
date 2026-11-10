@@ -95,7 +95,7 @@
     },
     "get_plan_config": {
       "name": "Get plan dashboard configuration",
-      "description": "Returns the configuration of the Smart Place dashboard (floor plan views for lights, blinds and climate, and the scenes view), for use in a dashboard of your own.",
+      "description": "Returns the configuration of the Smart Place dashboard (floor plan views for lights, blinds and climate, the scenes view and the intercom view), for use in a dashboard of your own.",
       "fields": {
         "config_entry_id": {
           "name": "Smart Place entry",

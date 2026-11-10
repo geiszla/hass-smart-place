@@ -6,7 +6,8 @@ frame. The helpers here turn those page positions into marker centres in
 image pixels (offsets measured in the vendor app, 2026-11-09) and build
 the configuration of Home Assistant's ``picture-elements`` card from them:
 one view per function (lights, blinds, climate), as in the vendor app,
-because markers of different kinds overlap, plus a view with the scenes.
+because markers of different kinds overlap, plus a view with the scenes
+and the Intercom view (``intercom.py``).
 
 Pure functions, no HA imports: the caller supplies entity ids and image
 sizes and gets plain dicts back.
@@ -20,6 +21,7 @@ import struct
 from typing import Any, Final, TypeVar
 
 from .devices import BLIND_KIND_SLATTED, BlindConfig, ClimateZoneConfig, LightConfig, PlanConfig
+from .intercom import NamedEntity, intercom_view
 
 Point = tuple[float, float]
 
@@ -105,7 +107,9 @@ class DashboardEntities:
     """Entity ids the dashboard may use; anything missing is left out.
 
     The three mappings are keyed by vendor id (a socket's switch entity
-    sits in ``lights`` next to the light entities).
+    sits in ``lights`` next to the light entities). ``doors`` are the
+    door buttons, in the order to show them; ``cameras`` the intercom
+    cameras.
     """
 
     lights: Mapping[int, str] = field(default_factory=dict)
@@ -115,6 +119,8 @@ class DashboardEntities:
     switches: Sequence[str] = ()
     fans: Sequence[str] = ()
     buttons: Sequence[str] = ()
+    doors: Sequence[NamedEntity] = ()
+    cameras: Sequence[NamedEntity] = ()
 
 
 def _style(point: Point, image: PlanBackground) -> dict[str, str]:
@@ -406,6 +412,7 @@ def build_dashboard(
     card, so it stays reachable; devices of an unknown plan are listed in
     the first plan's views. With several plans the views repeat per plan
     with the plan label in the title; with one plan the label is not shown.
+    The Scenes view and the Intercom view follow the plan views.
     Without any entity the dashboard has one view that says so. A light or
     socket whose vendor id is in ``protected_lights`` shows a lock and has
     no tap action; a long press opens its details.
@@ -475,9 +482,9 @@ def build_dashboard(
             if elements or unplaced
         )
 
-    scenes_view = _scenes_view(entities)
-    if scenes_view is not None:
-        views.append(scenes_view)
+    views.extend(
+        view for view in (_scenes_view(entities), intercom_view(entities.doors, entities.cameras)) if view is not None
+    )
     if not views:
         # The frontend opens a dashboard without views in edit mode, and this one cannot be edited.
         views.append(_WAITING_VIEW)

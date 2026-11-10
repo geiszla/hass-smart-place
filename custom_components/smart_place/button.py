@@ -24,9 +24,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable
 import contextlib
-from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_ON, STATE_OFF, STATE_ON, Platform
@@ -35,7 +34,7 @@ from homeassistant.helpers import entity_registry as er
 from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, main_device_info
 from .const import DOMAIN
 from .entity import SmartPlacePushEntity, async_add_discovered
-from .smart_place_client import LIGHT_KIND_SOCKET, CommandDefinition, Commands, blinds_menu_plan
+from .smart_place_client import DOORS, LIGHT_KIND_SOCKET, CommandDefinition, Commands, Door, blinds_menu_plan
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -43,27 +42,6 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 PARALLEL_UPDATES = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _DoorButton:
-    """Static definition of one door-opener button."""
-
-    key: str
-    name: str
-    command: CommandDefinition
-
-
-_DOORS: Final[tuple[_DoorButton, ...]] = (
-    _DoorButton(key="front_door", name="Front door", command=Commands.OpenFrontDoor),
-    _DoorButton(
-        key="ground_floor_entrance",
-        name="Ground floor entrance",
-        command=Commands.OpenGroundFloorEntrance,
-    ),
-    _DoorButton(key="garage_entrance", name="Garage entrance", command=Commands.OpenGarageEntrance),
-    _DoorButton(key="mailbox", name="Mailbox", command=Commands.OpenMailbox),
-)
 
 
 async def async_setup_entry(
@@ -77,7 +55,7 @@ async def async_setup_entry(
 
     def collect() -> dict[Hashable, Callable[[], Entity]]:
         found: dict[Hashable, Callable[[], Entity]] = {
-            ("door", door.key): partial(SmartPlaceDoorButton, entry, data, door) for door in _DOORS
+            ("door", door.key): partial(SmartPlaceDoorButton, entry, data, door) for door in DOORS
         }
         if not data.devices_listed:
             return found
@@ -130,7 +108,7 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, door: _DoorButton) -> None:
+    def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, door: Door) -> None:
         """Wire the door's name, unique_id, and write command."""
         self._data = data
         self._door = door
