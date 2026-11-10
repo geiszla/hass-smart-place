@@ -189,7 +189,8 @@ payload (`--dry-run` it) before writing, and never add or trigger a door
 
 - `status`: entry state `loaded`. `setup_retry`/`setup_error` with a reason
   means the Smart Place server is unreachable from the Pi or the URL token
-  rotated (the user must re-authenticate via the Repairs flow, DEPLOY.md §6).
+  rotated (the user must re-authenticate via the Repairs flow; README.md,
+  "Troubleshooting").
 - Connection sensor `on`. If `off` while the entry is loaded, the upstream
   Smart Place WS dropped; the client reconnects with backoff on its own —
   check `logs` and re-run `status` after a minute.

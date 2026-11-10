@@ -5,16 +5,215 @@ Custom Home Assistant integration for the
 plus a standalone Python client library that can be exercised from the CLI
 without running Home Assistant.
 
+**Contents**
+
+- [Installation](#installation)
+  - [Updating](#updating)
+  - [Troubleshooting](#troubleshooting)
+- [What is supported](#what-is-supported)
+- [What is not supported](#what-is-not-supported)
+- [Options](#options)
+- [Protected sockets](#protected-sockets)
+- [Blinds and weather alarms](#blinds-and-weather-alarms)
+  - [Lower after weather alarm](#lower-after-weather-alarm)
+- [Rooms](#rooms)
+- [Plan dashboard](#plan-dashboard)
+- [Actions](#actions)
+- [Development](#development)
+- [Reference](#reference)
+- [License](#license)
+
 > **Unofficial.** The integration talks to the same WebSocket the vendor's web
 > app uses. That protocol is not documented and was worked out from the web
 > app; smart PLACE AG does not support it and can change it without notice.
 > Use it at your own risk: the entities switch real lights, blinds, heating
 > and doors.
 
-Requires Home Assistant **2026.11** or newer. Install it from the Home
-Assistant Marketplace (*Settings → Marketplace → Add from link*); the steps are
-in [`DEPLOY.md`](DEPLOY.md). Update it under *Settings → Updates*, then restart
-Home Assistant.
+## Installation
+
+### Requirements
+
+- Home Assistant **2026.11** or newer.
+- The token from the address of your Smart Place web app (step 1).
+- Internet access from Home Assistant: the integration connects to the Smart
+  Place server.
+
+### 1. Get the Smart Place token
+
+The integration signs in with the secret token from the address of your Smart
+Place web app. Treat it like a password: anyone who has it can control your
+home.
+
+1. Open the Smart Place web app in a desktop browser (the same address the
+   mobile app uses). The address bar looks like this:
+
+   ```text
+   https://spr1.smartplace.ch:8770/Start5?<LONG-OPAQUE-TOKEN>
+   ```
+
+2. Copy **everything after the `?`**. That is the token: usually more than 60
+   letters, digits and symbols, without spaces.
+3. Keep it where only you can read it (a password manager). Do not paste it
+   into chats or screenshots, and do not commit it to git.
+
+### 2. Before the first start: entity ids
+
+By default Home Assistant puts the area name in front of new entity ids. The
+integration gives every light, socket and blind its own device and suggests an
+area for it (see [Rooms](#rooms)), so the ids get long:
+`light.living_room_dining_room_kitchen_kitchen_lights`. If you prefer
+`light.kitchen_lights`, remove "area" from Home Assistant's "Entity ID format"
+setting **before** you install, or before you update to a version that adds
+entities. Entities that already exist keep their ids.
+
+### 3. Install the integration
+
+**From the Marketplace (recommended).** Home Assistant 2026.11 has a built-in
+**Marketplace** for custom integrations. It replaces HACS, which cannot be
+installed on 2026.11 or newer. The Marketplace is for administrators and is
+not in the sidebar.
+
+1. Open **Settings → Marketplace**. On first use it shows a warning; read and
+   accept it. Until an administrator has accepted it, Home Assistant does not
+   install or update anything from the Marketplace.
+2. Select **Add from link** in the upper-right corner, enter
+   `https://github.com/geiszla/hass-smart-place` under **GitHub link** and
+   select **Add**. If the Marketplace asks for the type, choose the
+   integration type and select **Add** again. If GitHub is not connected yet,
+   the Marketplace asks you to connect it: select **Continue**, open the
+   GitHub link it shows, enter the code and approve.
+3. Open **Smart Place** in the list, select **Install**, check the version and
+   select **Install** again.
+4. Restart Home Assistant when the Marketplace asks for it.
+
+*Coming from HACS:* there is nothing to do. When Home Assistant starts after
+the update to 2026.11, the Marketplace takes over what HACS had: installed
+content, custom repositories and update entities (with the same entity ids).
+HACS itself is removed. The old "Get HACS" installer add-on is no longer
+needed (it only prints an error).
+
+**By hand.** Home Assistant OS has no SSH by default. Use the **Samba share**
+add-on (Settings → Add-ons → Add-on store), the File editor add-on or Studio
+Code Server.
+
+1. Open the `config` share (`\\homeassistant\config\` on Windows,
+   `smb://homeassistant.local/config/` on macOS and Linux).
+2. Create `custom_components/` if it does not exist.
+3. Copy the **whole** folder `custom_components/smart_place/` from this
+   repository into it, with all its files and sub-folders
+   (`smart_place_client/`, `translations/`, `brand/`). Do not pick single
+   files: the integration needs all of them.
+4. Restart Home Assistant: Settings → System → ⋮ (top right) → **Restart Home
+   Assistant**.
+
+### 4. Add the integration
+
+1. Settings → **Devices & services** → **Add integration**.
+2. Search for **Smart Place** and select it.
+3. Paste the token from step 1 into **Smart Place URL token** and submit.
+
+Home Assistant then connects to the Smart Place server with the token and
+waits for its first reply. It saves the integration only if that worked.
+Otherwise it shows one of these messages:
+
+| Message | Meaning | What to do |
+| --- | --- | --- |
+| *The token was rejected by Smart Place.* | The token is wrong or no longer valid. | Copy it again from the address of the Smart Place web app. Smart Place can replace a token; use the current one. |
+| *Could not reach the Smart Place server.* | A network or DNS problem on the Home Assistant machine, or a wrong token (the server does not answer a wrong token). | Check the token and the internet connection. |
+| *Unexpected error. Check the Home Assistant log for details.* | Anything else. | Settings → System → Logs. The token is removed from the log. |
+
+After that, Home Assistant may ask for the area of the new devices. The areas
+are already filled in from the room names of your heating zones (see
+[Rooms](#rooms)); change them there if you like.
+
+### 5. Check the result
+
+Open **Settings → Devices & services → Smart Place**. A healthy install shows:
+
+- A **Smart Place** device with the diagnostic sensor **Connection**, which
+  reads *Connected*. It stays available while the connection is down, so an
+  automation can watch it (for example, notify you when it turns off). The
+  floor plan image is on this device too.
+- One device per **heating zone**, named after the room: a climate entity, the
+  temperature sensor and a humidity sensor that is disabled by default.
+- One device per **light**, **socket** and **blind**, named as in the Smart
+  Place app. Each blind's device also has the switch
+  ["Lower after weather alarm"](#lower-after-weather-alarm).
+- One device per group of numbered scenes, such as **Ventilation** (a fan).
+- The devices **Groups** (group buttons), **Intercom** (doorbell mute),
+  **Weather**, **Energy**, **Cameras** and **Doors**, each with "Smart Place"
+  in front of its name.
+- **Scenes** and scene switches, which have no device. They are named like the
+  scene alone ("Night"), so that the voice assistant recognises them. Find
+  them in the integration's entity list or on the Scenes view of the
+  dashboard.
+- Four **door** buttons (Front door, Ground floor entrance, Garage entrance,
+  Mailbox), disabled by default. They open real doors; enable only the ones
+  you want.
+- **Smart Place** in the sidebar: the [plan dashboard](#plan-dashboard).
+- A **Configure** button on the integration: the [options](#options).
+
+Entities appear when the Smart Place server first reports their device or
+value, normally all at once when the integration starts. A device you add in
+the Smart Place app later appears after the next reconnect or restart.
+
+### Updating
+
+- **Marketplace:** the Marketplace provides an update entity for the
+  integration, and an update shows under **Settings → Updates**. Install it
+  there, then restart Home Assistant. The Marketplace looks for a new version
+  of a repository added from a link every 48 hours, and only while GitHub is
+  connected.
+- **By hand:** replace `/config/custom_components/smart_place/` with the new
+  version of the whole folder, then restart Home Assistant.
+
+An update keeps the integration's entry: you do not enter the token again,
+existing entities keep their ids, and the [options](#options) stay.
+
+### Removing
+
+1. Settings → Devices & services → Smart Place → ⋮ → **Delete**. This also
+   deletes the [options](#options).
+2. Restart Home Assistant.
+3. Optional: remove the repository in the Marketplace, or delete
+   `/config/custom_components/smart_place/`.
+
+### Troubleshooting
+
+- **The integration cannot be added.** See the messages under
+  [4. Add the integration](#4-add-the-integration).
+- **Everything is unavailable.** The connection to the Smart Place server is
+  down, and the Connection sensor reads *Disconnected*. The integration
+  reconnects by itself, with growing pauses between the attempts, and logs one
+  warning when the connection is lost. Meanwhile every entity is
+  *unavailable*, so that dashboards do not show old values. The exceptions
+  are the Connection sensor, the electricity price and a floor plan image
+  that was already loaded. The integration also checks the connection every
+  60 seconds and reconnects when the server does not answer within 30
+  seconds.
+- **Lights, blinds and heating read *Unknown* for a moment after a
+  reconnect**, until Smart Place has sent their states again.
+- **"Re-authenticate Smart Place" under Repairs.** Smart Place no longer
+  accepts the token. Get the current one (step 1) and enter it there.
+- **An entity is missing.** Some entities are disabled by default, for
+  example the door buttons, the "All lights" button, scenes the Smart Place
+  app does not display and the humidity sensors. Enable them in the
+  integration's entity list. A device added in the Smart Place app appears
+  after the next reconnect or restart.
+- **Logs.** Settings → System → Logs. The token and the installation's
+  remote-access passwords are removed from everything the integration writes.
+  Home Assistant shows warnings and errors by default. The integration writes
+  at level INFO each command it sends to Smart Place (`command issued: ...`),
+  why it lowered a blind by itself (`Lowering ...`) and that it did not send a
+  command for a protected socket (`... is protected: ...`). To see these
+  lines, add this to `configuration.yaml` and restart:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.smart_place: info
+      smart_place_client: info
+  ```
 
 ## What is supported
 
@@ -211,15 +410,8 @@ How it works:
 - While the connection is down the switch is unavailable. Its setting is
   kept.
 
-To see the log lines, set the log level of the integration to `info` (Home
-Assistant shows warnings and errors by default):
-
-```yaml
-logger:
-  logs:
-    custom_components.smart_place: info
-    smart_place_client: info
-```
+Home Assistant shows these log lines only at the log level `info`: see "Logs"
+under [Troubleshooting](#troubleshooting).
 
 ## Rooms
 
@@ -250,12 +442,8 @@ Everything works without areas: control, the plan dashboard and the automatic
 dashboards do not depend on them. Scenes, group buttons and door buttons get
 no area on purpose, so that a command for a whole area cannot trigger them.
 
-**Tip — entity ids.** By default Home Assistant puts the area in front of new
-entity ids, which gives ids such as
-`light.living_room_dining_room_kitchen_kitchen_lights`. If you prefer
-`light.kitchen_lights`, remove "area" from Home Assistant's "Entity ID format"
-setting **before** you install or update to a version that adds entities.
-Existing entity ids are not changed.
+The area also ends up in the entity ids of new entities. To avoid that, see
+[2. Before the first start: entity ids](#2-before-the-first-start-entity-ids).
 
 ## Plan dashboard
 
@@ -366,7 +554,6 @@ integration made of it: devices, entities, states, logs.
 
 ## Reference
 
-- [`DEPLOY.md`](DEPLOY.md) — installing and upgrading.
 - [`DESIGN.md`](DESIGN.md) — protocol notes, architecture, decision log.
 - [`IMPLEMENT.md`](IMPLEMENT.md) — implementation log, including the protocol
   points that still need a test on a real installation.

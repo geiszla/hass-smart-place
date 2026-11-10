@@ -240,7 +240,9 @@ async def _domain_entries(api: HassApi) -> list[dict[str, Any]]:
     entries = await api.get("/api/config/config_entries/entry")
     found = [entry for entry in entries if entry["domain"] == DOMAIN]
     if not found:
-        raise ApiError(f"no {DOMAIN} config entry found — add the integration first (see DEPLOY.md §4)")
+        raise ApiError(
+            f"no {DOMAIN} config entry found — add the integration first (see README.md, section Installation)"
+        )
     return found
 
 

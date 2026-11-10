@@ -1006,7 +1006,8 @@ check: 0 errors; runtime: the 33 earlier checks plus 30 new ones).
 
 - **Heating stays out of broad "turn off" calls.** The climate entity
   keeps `TARGET_TEMPERATURE` as its only feature. Consequence, now in the
-  README and DEPLOY.md: `homeassistant.turn_off` / `turn_on` / `toggle`
+  README (which holds the former `DEPLOY.md` since the third entry of
+  this day): `homeassistant.turn_off` / `turn_on` / `toggle`
   on an area acts on the area's lights and sockets, and Home Assistant
   raises "does not support action climate.turn_off" for the thermostat.
 - **Level groups need exactly one active member** when the integration
@@ -1124,14 +1125,23 @@ purpose, and 44 new ones; hassfest: valid).
 ### Marketplace instead of HACS
 
 Home Assistant 2026.11 has a built-in Marketplace that replaced HACS. The
-install and update instructions (README, DEPLOY.md, the `ha-live` skill
-and the help of `ha-live update`) name it now; `HACS_UPDATE_ENTITY` in
+install and update instructions (README, the `ha-live` skill and the help
+of `ha-live update`) name it now; `HACS_UPDATE_ENTITY` in
 `scripts/ha_live.py` is `MARKETPLACE_UPDATE_ENTITY`, and the `update`
 command has tests. `hacs.json` stays: the Marketplace reads it. Read from
 the 2026.11.1 source (`components/marketplace/update.py`), not tried on
 the box: `update.install` refuses until the calling user has accepted the
 Marketplace warning in the UI, and refuses a version equal to the
 installed one.
+
+### One document for users
+
+`DEPLOY.md` is gone. Its content that still holds is the "Installation"
+section of the README (requirements, token, entity ids, install through
+the Marketplace or by hand, adding the integration, what a healthy install
+shows, updating, removing, troubleshooting). Where both files said the
+same thing, one version was kept. The README starts with a contents menu
+and has installation and use first, development and reference last.
 
 ### How it was checked
 
