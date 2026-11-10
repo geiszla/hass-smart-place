@@ -134,6 +134,12 @@ _STAND_SERIES_NAMES: dict[int, str] = {
     99: "lifetime",
 }
 
+# The server sends a range bucket with the float noise of its own
+# subtraction (``2.35699999999997``). Rounded only where a bucket is shown:
+# the cost is computed from the raw buckets, because rounding them first
+# can move it by 0.0001 CHF.
+_BUCKET_DECIMALS: int = 6
+
 # The server pushes a constant ``0.0`` for sensors the building does
 # not actually have (verified live 2026-06-11: every FEUCHTEIST zone
 # reads 0.0 around the clock). Indoor readings of exactly 0.0 are
@@ -866,9 +872,9 @@ class SmartPlaceElectricityCostTodaySensor(_SmartPlaceElectricityCostSensor):
         buckets = self._buckets()
         tariff, stale = rates_for(self._bucket_day() or dt_util.now())
         return {
-            "high_tariff_kwh": buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF),
-            "low_tariff_kwh": buckets.get(CHART_RANGE_SERIES_LOW_TARIFF),
-            "total_kwh": buckets.get(CHART_RANGE_SERIES_TOTAL),
+            "high_tariff_kwh": _shown_bucket(buckets.get(CHART_RANGE_SERIES_HIGH_TARIFF)),
+            "low_tariff_kwh": _shown_bucket(buckets.get(CHART_RANGE_SERIES_LOW_TARIFF)),
+            "total_kwh": _shown_bucket(buckets.get(CHART_RANGE_SERIES_TOTAL)),
             "high_tariff_chf_kwh": tariff.total_ht,
             "low_tariff_chf_kwh": tariff.total_nt,
             "fixed_chf_month": tariff.fixed_chf_month,
@@ -1032,7 +1038,7 @@ class SmartPlaceElectricityTariffEnergySensor(_SmartPlaceChartScopedSensor):
     @property
     def native_value(self) -> float | None:
         """Return today's share in kWh, or None before the first range poll."""
-        return self._data.state.chart_today_buckets.get(self._chart_id, {}).get(self._series)
+        return _shown_bucket(self._data.state.chart_today_buckets.get(self._chart_id, {}).get(self._series))
 
 
 class SmartPlacePackageDeliveryPinSensor(_SmartPlaceSensorBase):
@@ -1221,6 +1227,10 @@ class SmartPlacePersonInfoSensor(_SmartPlaceSensorBase):
     def native_value(self) -> str | None:
         """Return the latest PERSINFO text, or None when cleared."""
         return self._data.state.person_info
+
+
+def _shown_bucket(value: float | None) -> float | None:
+    return None if value is None else round(value, _BUCKET_DECIMALS)
 
 
 def _safe_float(raw: str | None) -> float | None:

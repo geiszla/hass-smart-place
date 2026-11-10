@@ -10,12 +10,14 @@ from __future__ import annotations
 import pytest
 
 from smart_place_client import (
+    TARIFFS,
     NamedFields,
     NamedValue,
     SmartPlaceState,
     Temperature,
     UnknownFrame,
     chart_target_status,
+    energy_cost_chf,
     parse_frame,
 )
 
@@ -456,6 +458,20 @@ def test_apply_chart_range_reply_publishes_buckets_in_one_step() -> None:
     assert state.chart_today_buckets[49] == {98: 63.357, 97: 41.0819999999999, 96: 22.2750000000001}
     # Re-sending the same reply is a no-op (fan-out gate).
     assert [state.apply(parse_frame(text)) for text in _RANGE_REPLY] == [False] * 5
+
+
+def test_range_buckets_keep_the_server_numbers_because_rounding_them_moves_the_cost() -> None:
+    """The buckets carry the server's float noise on purpose; only what is shown is rounded.
+
+    The cost is rounded to 0.0001 CHF. At the 2026 rates this reply lies
+    on such a step: from the rounded buckets the cost would be 14.3258.
+    """
+    state = SmartPlaceState()
+    for text in _RANGE_REPLY:
+        state.apply(parse_frame(text))
+    buckets = state.chart_today_buckets[49]
+    assert energy_cost_chf(buckets[97], buckets[96], TARIFFS[2026]) == 14.3257
+    assert energy_cost_chf(round(buckets[97], 6), round(buckets[96], 6), TARIFFS[2026]) == 14.3258
 
 
 def test_apply_chart_range_reply_is_stamped_with_the_requested_day() -> None:
