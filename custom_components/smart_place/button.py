@@ -1,4 +1,4 @@
-"""Button platform for Smart Place — door openers.
+"""Button platform for Smart Place — door openers and group buttons.
 
 The four ``OEFFNER<n>`` commands map to physical doors at the
 property: front door, ground-floor entrance, garage, mailbox. They're
@@ -6,21 +6,30 @@ write-only: the Smart Place SPA fires them as text frames over the
 same app WebSocket. Per the ``smart-place-observe-only`` memory, the
 client library never sends them unprompted — pressing the HA button
 is the explicit, user-driven trigger.
+
+The vendor app's sub-menus add group buttons: per lights sub-menu one
+button that sends the sub-menu's group message (what the server does
+with it is untested, so the button is disabled by default), and per
+blinds sub-menu "all up" and "all down" for the blinds of its plan.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
+import contextlib
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.button import ButtonEntity
 
 from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info
-from .entity import SmartPlacePushEntity
+from .entity import SmartPlacePushEntity, async_add_discovered
 from .smart_place_client import CommandDefinition, Commands
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity import Entity
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 PARALLEL_UPDATES = 0
@@ -52,9 +61,48 @@ async def async_setup_entry(
     entry: SmartPlaceConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Always create one button per known door — no discovery needed."""
+    """Create one button per known door and the group buttons of the sub-menus."""
     data = entry.runtime_data
-    async_add_entities(SmartPlaceDoorButton(entry, data, door) for door in _DOORS)
+    state = data.state
+
+    def collect() -> dict[Hashable, Callable[[], Entity]]:
+        found: dict[Hashable, Callable[[], Entity]] = {
+            ("door", door.key): partial(SmartPlaceDoorButton, entry, data, door) for door in _DOORS
+        }
+        if not data.devices_listed:
+            return found
+        for menu in state.light_sub_menus.values():
+            # The message is sent back verbatim, so only a well-formed one gets a button.
+            with contextlib.suppress(ValueError):
+                Commands.GroupMessage.encode(menu.group_message)
+                found["lights_group", menu.id] = partial(
+                    SmartPlaceGroupButton,
+                    entry,
+                    data,
+                    name=f"{menu.name} lights",
+                    unique_id=f"lights_group_{menu.id}",
+                    translation_key="lights_group",
+                    command=Commands.GroupMessage,
+                    argument=menu.group_message,
+                    enabled_default=False,
+                )
+        for menu in state.blind_sub_menus.values():
+            if menu.plan_id is None:
+                continue
+            for direction, command in (("up", Commands.BlindsGroupUp), ("down", Commands.BlindsGroupDown)):
+                found[f"blinds_group_{direction}", menu.id] = partial(
+                    SmartPlaceGroupButton,
+                    entry,
+                    data,
+                    name=f"{menu.name} blinds {direction}",
+                    unique_id=f"blinds_group_{direction}_{menu.id}",
+                    translation_key=f"blinds_group_{direction}",
+                    command=command,
+                    argument=menu.plan_id,
+                )
+        return found
+
+    async_add_discovered(entry, async_add_entities, collect)
 
 
 class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
@@ -90,3 +138,35 @@ class SmartPlaceDoorButton(SmartPlacePushEntity, ButtonEntity):
         sent raises, so the caller does not take it for an opened door.
         """
         await self._async_issue(self._door.command)
+
+
+class SmartPlaceGroupButton(SmartPlacePushEntity, ButtonEntity):
+    """A sub-menu group button: all lights, all blinds up, all blinds down."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        entry: SmartPlaceConfigEntry,
+        data: SmartPlaceData,
+        *,
+        name: str,
+        unique_id: str,
+        translation_key: str,
+        command: CommandDefinition,
+        argument: str | int,
+        enabled_default: bool = True,
+    ) -> None:
+        """Wire the button's name, unique_id and command."""
+        self._data = data
+        self._command = command
+        self._argument = argument
+        self._attr_name = name
+        self._attr_translation_key = translation_key
+        self._attr_unique_id = f"{entry.entry_id}_{unique_id}"
+        self._attr_entity_registry_enabled_default = enabled_default
+        self._attr_device_info = category_device_info(entry, data, "Groups")
+
+    async def async_press(self) -> None:
+        """Send the group command."""
+        await self._async_issue(self._command, self._argument)

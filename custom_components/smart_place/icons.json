@@ -1,5 +1,16 @@
 {
   "entity": {
+    "button": {
+      "blinds_group_down": {
+        "default": "mdi:arrow-down-box"
+      },
+      "blinds_group_up": {
+        "default": "mdi:arrow-up-box"
+      },
+      "lights_group": {
+        "default": "mdi:lightbulb-group"
+      }
+    },
     "sensor": {
       "chart_target_status": {
         "default": "mdi:traffic-light"
