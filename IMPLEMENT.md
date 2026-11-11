@@ -1742,3 +1742,21 @@ card starts black.
   unknown or shortened digest and an unloaded entry get 404. Type check
   against `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
 
+### On the box (installed 2026-11-11, commit ef0cf5d, both entries of this day)
+
+- Pushed to `main`, `ha-live update --version ef0cf5d`, no Marketplace
+  error in the core journal, restart. The entry loaded; no log entry of
+  the integration.
+- The ten switches "Lower after weather alarm" are on no device and kept
+  their entity ids, names and states (one was on). A rain alarm was on:
+  the blind it held that was not locked showed the rain icon, the locked
+  one the closed lock.
+- The Blinds view has the card with ten rows and no switch in its title.
+- The image address answered a request without login with 200,
+  `image/png`, the cache header and 478 479 bytes; another digest got
+  404. In Chrome the first page load fetched the image (109 ms); the next
+  two page loads took it from the cache (0 bytes transferred).
+- Not seen: the pages on a phone and in the Home Assistant app; the end
+  of a weather alarm and a move up with the new version; a tap on a
+  switch of the card (the box is live).
+
