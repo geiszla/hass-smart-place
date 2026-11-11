@@ -100,6 +100,17 @@ real `friendly_name`/attributes with `state <entity_id>`.
     has noticed the new commit, name it:
     `./scripts/ha-live update --version <new commit>` (tried on the box on
     2026-11-10).
+  - **The commit must be the newest one on the default branch (`main`).**
+    For any other commit (one that is only on a feature branch) the
+    Marketplace looks for a branch of that name, logs "Got status code 404
+    ... archive/refs/heads/<commit>.zip" in the core journal, and still
+    records the version: `update` prints it as installed and the restart
+    loads the old code (2026-11-11). So push to `main` first, and after
+    `update` check the journal before the restart:
+    `./scripts/ha-live get '/api/hassio/core/logs?lines=60&no_colors' | grep -i marketplace`.
+    If the wrong version was recorded this way, `update --version <commit>`
+    is refused as already installed; `update --version main` downloads the
+    branch and records its newest commit.
   - **A commit is recorded exactly as it was requested.** A full
     40-character hash was recorded as such, and the update entity then
     offered an "update" to the same commit, because it compares the text

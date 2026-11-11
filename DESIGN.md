@@ -1712,9 +1712,11 @@ for the electricity chart, which leaves 3.4 s per round (measured). The
 server's chart values change only every 15 minutes, so little is lost.
 The value burst is held back in the same way: with nine range reads
 after the bootstrap it arrived 4.8 s after the main-menu reply, between
-two range replies; with one range read, 0.14 s after it. Before adding a
-periodic read, or shortening the interval, measure the reply time in a
-capture.
+two range replies; with one range read, 0.14 s after it. The stall is
+not limited to the connection that asked: a `Ping` sent every 0.5 s on a
+second connection waited up to 3.3 s during the box's round. Before
+adding a periodic read, or shortening the interval, measure the reply
+time in a capture.
 
 ### Chart identification — what each `StandsSingelChartUpdate<id>` represents
 

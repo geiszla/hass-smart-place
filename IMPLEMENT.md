@@ -1566,13 +1566,32 @@ took 5 to 10 seconds to act.
 - Not done: the type check and the runtime checks of the Home Assistant
   side in a throwaway environment. The change there is a property that
   moved (`sensor.py`) and one argument (`__init__.py`).
+- On the box (installed 2026-11-11, connection open at 13:44:09.6): a
+  second read-only connection sent the heartbeat `Ping` every 0.5 s for
+  five and a half minutes. Median reply 46 ms. No stall at the four
+  times the old poll would have run (60, 120, 180 and 240 s after the
+  box's first round). One stall of 3.3 s exactly 300 s after it. So the
+  box polls every 300 s and a round takes 3.3 s; and the server stalls
+  for every connection during a range read, not only for the one that
+  asked.
+
+### Install pitfall
+
+The first `./scripts/ha-live update --version <commit>` printed the new
+version as installed, but the commit was only on the feature branch. The
+Marketplace then looks for a branch of that name, logs a 404 in the core
+journal and still records the version; the restart loaded the old code.
+What worked: push the commit to `main`, then `update --version main`
+(`update --version <commit>` is refused as "already installed"), then
+restart. Check the core journal for a Marketplace error before the
+restart.
 
 ### Not seen
 
 - A command sent to the server during a round: no command may be sent
-  from development. That a command waits behind the reads follows from
-  the three presses above, not from a direct test.
-- The new version on the box.
+  from development. That a command waits follows from the three presses
+  above and from the `Ping` that waited on another connection, not from
+  a command.
 - The electricity chart's range read still costs 3.4 s per round.
   Reading it less often than the STAND values (the server's values
   change every 15 minutes) would cut that further; not done.
