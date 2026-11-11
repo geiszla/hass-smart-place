@@ -409,6 +409,24 @@ class SmartPlaceState:
         return chart_target_status(current, self.chart_targets.get(chart_id))
 
     @property
+    def electricity_chart_id(self) -> int | None:
+        """Return the grid electricity meter's chart id, or None.
+
+        Matches the cleaned ``ChartDefinition`` label exactly: this
+        installation has one grid meter chart labelled ``Electricity``
+        (raw ``Elektro <site>``). The PV chart cleans to ``PV electricity``
+        and water/heating to other labels, so an exact match cannot pick
+        the wrong chart; if a future installation reports several
+        (``Electricity I`` / ``II``), none is returned rather than
+        guessing. The price and cost entities belong to this chart, and
+        it is the only one whose day range is read.
+        """
+        for chart_id, chart in sorted(self.charts.items()):
+            if chart.label == "Electricity":
+                return chart_id
+        return None
+
+    @property
     def package_delivery_pin(self) -> str | None:
         """Return the parcel-box unlock PIN, or ``None`` when no delivery is waiting.
 

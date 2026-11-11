@@ -1505,3 +1505,74 @@ and none set one for iOS.
 - A blueprint file that already exists is not overwritten by an update of
   the integration; on the user's box the five files were saved again
   through the blueprint API.
+
+## 2026-11-11 — Lights and blinds reacted 5 to 10 s late: the chart poll held the commands back
+
+The user reported that a press on a light or a blind in the app sometimes
+took 5 to 10 seconds to act.
+
+### Findings
+
+- The integration's own path is short: the box log (`command issued`)
+  and the recorder show the toggle on the wire 2 ms after the entity
+  wrote its expected state. The longest wait in that path is the 1 s
+  after a scene or group command (`GROUP_SETTLE_TIME`).
+- The server was the slow part, and only at certain seconds of a minute.
+  A second, read-only connection (`sp-cli --live --capture`, 100 s, two
+  poll rounds) showed that the server needs about 13.5 s to answer one
+  chart poll round: under 0.2 s for the nine STAND reads, 3.4 s for the
+  range read of the electricity chart (49), then about 10 s for the
+  range reads of the other eight charts. A `Ping` sent just before a
+  round got its `PongOK` in 40 ms.
+- Three presses in the box log of 2026-11-10 looked delayed (the user
+  pressed again 2 to 6 s later): 17:21:40, 20:24:31 and 21:42:37. All
+  three fall into the 13.5 s after a poll round of their connection (a
+  round starts about 0.4 s after "app WS open" and then every 60 s plus
+  about 6 ms). For 20:24:31 the recorder shows the rest: the light's
+  expected state ran out after 3 s, the server still reported the old
+  value 5.9 s after the command, and all three toggles sent in that
+  window were applied afterwards. A press 16 s later, outside the
+  window, was confirmed within 3 s.
+- Only the electricity chart's range is used (cost, high and low tariff
+  sensors). The server's chart values change every 15 minutes.
+
+### What changed
+
+- `CHART_POLL_INTERVAL` 60 s -> 300 s (also the default of
+  `SmartPlaceClient.live`).
+- The range read goes out only for the charts the owner names:
+  `SmartPlaceClient.live(chart_range_ids=...)`, none by default (the CLI
+  reads no range any more). The integration names
+  `SmartPlaceState.electricity_chart_id`, which is the former
+  `sensor._find_electricity_chart_id`, moved into the client library so
+  the sensors and the poll use one rule.
+- A round now takes 3.4 s (the electricity chart's range read), once
+  every 5 minutes, instead of about 13.5 s every minute. The energy
+  sensors can be up to 5 minutes behind the server instead of 1.
+
+### How it was checked
+
+- `./scripts/lint-check`: pass. `./scripts/test`: pass, with the poll
+  tests changed (a listed chart that is not named gets no range read, a
+  named chart that is not listed gets none) and one new test for
+  `electricity_chart_id`.
+- A second read-only connection with the new request set (nine STAND
+  reads, the range read of chart 49, 45 s, one round after the
+  bootstrap): the round was answered after 3.44 s. In the bootstrap of
+  that connection the STAND reply of the PV chart (904) came after
+  0.15 s and the range reply 3.4 s later, so the 3.4 s belong to the
+  range read. The first capture had suggested the PV chart's STAND read,
+  because both replies arrived together there.
+- Not done: the type check and the runtime checks of the Home Assistant
+  side in a throwaway environment. The change there is a property that
+  moved (`sensor.py`) and one argument (`__init__.py`).
+
+### Not seen
+
+- A command sent to the server during a round: no command may be sent
+  from development. That a command waits behind the reads follows from
+  the three presses above, not from a direct test.
+- The new version on the box.
+- The electricity chart's range read still costs 3.4 s per round.
+  Reading it less often than the STAND values (the server's values
+  change every 15 minutes) would cut that further; not done.

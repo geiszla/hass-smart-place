@@ -96,8 +96,6 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity import Entity
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-    from .smart_place_client import SmartPlaceState
-
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
@@ -269,7 +267,7 @@ def _collect(entry: SmartPlaceConfigEntry, data: SmartPlaceData) -> dict[Hashabl
     # Electricity price + cost entities, attached to the grid meter chart
     # (label "Electricity" — excludes the PV allocation chart, whose
     # server-side history is empty, and any SUMME aggregate).
-    electricity_chart_id = _find_electricity_chart_id(state)
+    electricity_chart_id = state.electricity_chart_id
     if electricity_chart_id is not None:
         found["electricity_price"] = partial(_electricity_price_sensor, entry, data)
         found["electricity_cost_today"] = partial(
@@ -297,23 +295,6 @@ def _electricity_price_sensor(entry: SmartPlaceConfigEntry, data: SmartPlaceData
             "to smart_place_client/tariff.py (published by ewz each September)."
         )
     return SmartPlaceElectricityPriceSensor(entry, data)
-
-
-def _find_electricity_chart_id(state: SmartPlaceState) -> int | None:
-    """Return the grid electricity meter's chart id, or None.
-
-    Matches the cleaned ``ChartDefinition`` label exactly: this
-    installation has one grid meter chart labelled ``Electricity``
-    (raw ``Elektro <site>``). The PV chart cleans to ``PV electricity``
-    and water/heating to other labels, so an exact match cannot pick
-    the wrong chart; if a future installation reports several
-    (``Electricity I`` / ``II``), no price entities are created rather
-    than guessing.
-    """
-    for chart_id, chart in sorted(state.charts.items()):
-        if chart.label == "Electricity":
-            return chart_id
-    return None
 
 
 class _SmartPlaceSensorBase(SmartPlacePushEntity, SensorEntity):

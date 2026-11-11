@@ -483,11 +483,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         data.async_notify_listeners()
         data.async_plan_changed()
 
+    def chart_range_ids() -> tuple[int, ...]:
+        # Only the electricity cost and tariff sensors use a chart's day range.
+        chart_id = data.state.electricity_chart_id
+        return () if chart_id is None else (chart_id,)
+
     client = SmartPlaceClient.live(
         token=token,
         session=session,
         capture=CAPTURE_PATH,
         chart_poll_interval=CHART_POLL_INTERVAL,
+        chart_range_ids=chart_range_ids,
         on_reauth=trigger_reauth,
         on_disconnect=trigger_disconnect_notify,
         on_plan_image=plan_image_changed,

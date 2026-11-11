@@ -19,7 +19,7 @@ DESIGN.md §2, §5, §6 are the design references.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -280,6 +280,7 @@ class _LiveSources:
     own_session: bool
     heartbeat: float
     chart_poll_interval: float
+    chart_range_ids: Callable[[], Iterable[int]]
     ping_interval: float
     ping_timeout: float
 
@@ -358,7 +359,8 @@ class SmartPlaceClient:
         capture: Path | str | None = None,
         unknown_log: Path | str | None = None,
         heartbeat: float = 30.0,
-        chart_poll_interval: float = 60.0,
+        chart_poll_interval: float = 300.0,
+        chart_range_ids: Callable[[], Iterable[int]] = frozenset,
         ping_interval: float = 60.0,
         ping_timeout: float = 30.0,
         handlers: list[FrameHandler] | None = None,
@@ -384,7 +386,14 @@ class SmartPlaceClient:
             chart_poll_interval: how often (seconds) to refresh
                 consumption charts via ``GiveMeChartStandsManuell<id>``.
                 Chart values don't push; this loop keeps them current.
-                Set <=0 to disable polling.
+                Set <=0 to disable polling. The server holds back every
+                command sent while it answers a round (see
+                :meth:`_poll_charts`), so keep it long.
+            chart_range_ids: returns the ids of the charts whose day
+                range (``SingelStandUpdate:<id>:<von>:<bis>``) is read
+                with every round; asked at each round. Default: none.
+                Name only charts whose range is used: the nine range
+                reads of the reference flat took the server about 13 s.
             ping_interval: how often (seconds) to send the
                 application-level ``Ping`` heartbeat. Mirrors the
                 SPA's ``StartWebsocketTestMain`` cadence (60s). Set
@@ -418,6 +427,7 @@ class SmartPlaceClient:
             own_session=session is None,
             heartbeat=heartbeat,
             chart_poll_interval=chart_poll_interval,
+            chart_range_ids=chart_range_ids,
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
         )
@@ -1107,16 +1117,25 @@ class SmartPlaceClient:
         """Periodically re-issue chart reads for known charts.
 
         Chart values don't push; without a poll we'd only see the
-        initial bootstrap reading. Two reads per chart per interval:
-        ``GiveMeChartStandsManuell<id>`` (the STAND series snapshot)
-        and ``SingelStandUpdate:<id>:<today>`` (the server-side HT/NT
-        tariff buckets for the current local day, which drive the
-        electricity cost sensors). The range poll runs once as soon as
+        initial bootstrap reading. Per interval: one
+        ``GiveMeChartStandsManuell<id>`` per chart (the STAND series
+        snapshot), and one ``SingelStandUpdate:<id>:<today>`` per chart
+        of ``chart_range_ids`` (the server-side HT/NT tariff buckets for
+        the current local day, which drive the electricity cost
+        sensors). The range poll runs once as soon as
         the bootstrap is complete — the bootstrap covers the STAND
         snapshot but not the range buckets, and the charts are listed
         per connection, so before that there is nothing to read.
         Cancelled when the connection is torn down or :meth:`aclose`
         flips ``_closing``.
+
+        The server answers these reads one after the other and holds
+        back everything else on the connection meanwhile, also a command
+        for a light (captures of 2026-11-11: under 0.2 s for the nine
+        STAND reads together, about 3.4 s for the range read of the
+        electricity chart, about 10 s more for the range reads of the
+        other eight charts). Hence the long interval and the range read
+        only where it is used.
         """
         assert self._live is not None
         interval = self._live.chart_poll_interval
@@ -1144,16 +1163,17 @@ class SmartPlaceClient:
                 return
 
     async def _poll_chart_ranges(self) -> bool:
-        """Issue today's ``ChartStandRange`` read for every known chart.
+        """Issue today's ``ChartStandRange`` read for the known charts of ``chart_range_ids``.
 
         Returns ``False`` when the connection went away mid-poll so the
         caller stops its loop (mirrors the ``ChartStands`` poll).
         """
+        assert self._live is not None
         von, bis = today_range_epochs()
         # The replies do not say which range they cover; the state fold
         # stamps them with this.
         self.state.chart_range_request = von
-        for cid in sorted(self.state.chart_ids):
+        for cid in sorted(self.state.chart_ids.intersection(self._live.chart_range_ids())):
             if self._closing or self._ws is None or self._ws.closed:
                 return False
             try:

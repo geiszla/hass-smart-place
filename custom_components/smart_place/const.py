@@ -24,8 +24,11 @@ VALUE_BURST_TIMEOUT: Final = 10.0
 
 # Refresh interval for consumption charts (electricity, water). The
 # server doesn't push chart values, so we re-issue
-# ``GiveMeChartStandsManuell<id>`` every interval.
-CHART_POLL_INTERVAL: Final = 60.0
+# ``GiveMeChartStandsManuell<id>`` every interval. Not shorter: the server
+# needs about 3.5 s to answer one round and holds back every command sent
+# meanwhile (a light then reacts that much later), and its chart values
+# change only every 15 minutes.
+CHART_POLL_INTERVAL: Final = 300.0
 
 # Diagnostic frame capture. When set to a path, the live client tees
 # EVERY frame (both directions, token-redacted) to this ndjson file —

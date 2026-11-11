@@ -141,6 +141,16 @@ def test_apply_chart_definition_translates_german_kaltwasser() -> None:
     assert state.charts[335].category == "Wasser"
 
 
+def test_electricity_chart_id_is_the_grid_meter_chart() -> None:
+    """Only the chart labelled ``Electricity`` counts, not the PV chart."""
+    tail = ";Area;Zeit;Verbrauch in Kw/h;x=1=rgba=rgba;===;===;===;;CHF;0.1;;0000000;Elektro;kWh;smartPLACE_Elektro;63;XX00-00-00"
+    state = SmartPlaceState()
+    state.apply(NamedValue(name="ChartDefinition", value="PV Anteil Elektro XX00-00-00" + tail, index=904))
+    assert state.electricity_chart_id is None
+    state.apply(NamedValue(name="ChartDefinition", value="Elektro XX00-00-00" + tail, index=49))
+    assert state.electricity_chart_id == 49
+
+
 def test_apply_status_entry_folds_unit_hints_with_mojibake_repair() -> None:
     """A raw TEMPOUT status row (mojibake ``Â°C`` as sent live) folds to a clean hint."""
     raw = "StatusInhaltListe_1_1_SPtext390>TEMPOUT~SPDB-REM>unit-Â°C~>LinkOff"

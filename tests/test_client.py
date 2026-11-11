@@ -264,12 +264,14 @@ async def test_live_chases_chart_ids_after_status_content_finished(
 async def test_poll_charts_refires_known_chart_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``_poll_charts`` re-sends the STAND snapshot + today's range per chart.
+    """``_poll_charts`` re-sends the STAND snapshot per chart + today's range where asked for.
 
     The range read (``SingelStandUpdate:<id>:<von>:<bis>``) fires once
     as soon as the bootstrap is complete — bootstrap covers the STAND
     snapshot but not the HT/NT buckets — and again after every
-    ``GiveMeChartStandsManuell`` round.
+    ``GiveMeChartStandsManuell`` round. It goes out only for a listed
+    chart that ``chart_range_ids`` names: the server needs seconds for
+    the range reads and holds back every command meanwhile.
     """
 
     sent: list[str] = []
@@ -280,7 +282,8 @@ async def test_poll_charts_refires_known_chart_requests(
         async def send_str(self, text: str) -> None:
             sent.append(text)
 
-    client = SmartPlaceClient.live(token="dummy", chart_poll_interval=1.0)
+    # 337 is listed but not asked for; 904 is asked for but not listed.
+    client = SmartPlaceClient.live(token="dummy", chart_poll_interval=1.0, chart_range_ids=lambda: {49, 904})
     client._ws = _FakeWS()  # type: ignore[assignment]
     client.state.chart_ids = {49, 337}
     client._bootstrap_done.set()
@@ -298,14 +301,12 @@ async def test_poll_charts_refires_known_chart_requests(
     await client._poll_charts()
 
     # Immediate range poll; first tick fires the STAND snapshots then the
-    # ranges again; second tick sets _closing before sending.
+    # range again; second tick sets _closing before sending.
     assert [msg.split(":", 2)[:2] if msg.startswith("SingelStandUpdate") else msg for msg in sent] == [
         ["SingelStandUpdate", "49"],
-        ["SingelStandUpdate", "337"],
         "GiveMeChartStandsManuell49",
         "GiveMeChartStandsManuell337",
         ["SingelStandUpdate", "49"],
-        ["SingelStandUpdate", "337"],
     ]
     # The range bounds are today's local midnights, 23-25h apart (DST).
     von, bis = (int(part) for part in sent[0].split(":")[2:4])
@@ -1037,6 +1038,7 @@ async def test_live_connection_sends_only_read_commands() -> None:
         session=session,  # type: ignore[arg-type]
         ping_interval=0.01,
         chart_poll_interval=0.01,
+        chart_range_ids=lambda: {49},
     )
 
     await client._run_live_once()
@@ -1057,7 +1059,7 @@ async def test_live_connection_sends_only_read_commands() -> None:
     )
     assert set(seen) == set(read_shapes)
     assert seen["Ping"] >= 2
-    assert seen["ChartStandRange"] >= 2 * 9
+    assert seen["ChartStandRange"] >= 2
     # None of the write commands' wire shapes went out.
     write_prefixes = ("leuchte", "DIMleuchte", "JAL", "TEMPSOLL", "SZENEN", "LEUCHTENZENTRAL", "MUTE", "OEFFNER")
     assert not [text for text in app.sent if text.startswith(write_prefixes)]
@@ -1172,14 +1174,20 @@ async def test_charts_are_listed_and_polled_per_connection() -> None:
     first = _FakeWebSocket(_bootstrap_frames(), on_drained=idle)
     second = _FakeWebSocket([chart_49, "GiveMeMainMenuFinished"], on_drained=idle)
     session = _FakeSession([_FakeWebSocket([_ROUTE]), first, _FakeWebSocket([_ROUTE]), second])
-    client = SmartPlaceClient.live(token="dummy", session=session, ping_interval=0, chart_poll_interval=60)  # type: ignore[arg-type]
+    client = SmartPlaceClient.live(
+        token="dummy",
+        session=session,  # type: ignore[arg-type]
+        ping_interval=0,
+        chart_poll_interval=60,
+        chart_range_ids=lambda: {49, 337},
+    )
 
     def range_reads(socket: _FakeWebSocket) -> list[str]:
         return [text.split(":")[1] for text in socket.sent if text.startswith("SingelStandUpdate:")]
 
     await client._run_live_once()
     assert len(client.state.chart_ids) == 9
-    assert sorted(range_reads(first), key=int) == [str(chart_id) for chart_id in sorted(client.state.chart_ids)]
+    assert range_reads(first) == ["49", "337"]
 
     await client._run_live_once()
     assert client.state.chart_ids == {49}

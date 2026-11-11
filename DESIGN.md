@@ -1160,7 +1160,8 @@ aborts while the entry is not loaded (the sockets are not known then).
 
 **Electricity price + cost** (added 2026-07-13): the client polls
 `Commands.ChartStandRange` (`SingelStandUpdate:<id>:<local-midnight>:<next-midnight>`)
-for every chart each `CHART_POLL_INTERVAL`; the server answers with its
+for the electricity chart each `CHART_POLL_INTERVAL` (until 2026-11-11
+for every chart; see "Polling"); the server answers with its
 own high/low-tariff consumption split — the same bucketing the EWZ
 invoices bill (validated against all five 2025 invoices and the EWZ
 portal's 15-min profiles; both reproduce to ~1 %). The EWZ rate table
@@ -1678,13 +1679,42 @@ Consumption-chart values don't push: the server only emits
 `CHART<id>STAND<n>:<v>` in response to an explicit
 `GiveMeChartStandsManuell<id>` fetch. `SmartPlaceClient._poll_charts`
 re-issues a fetch for every id in `SessionState.chart_ids` every
-`CHART_POLL_INTERVAL` (default 60 s). The poll task is started by
+`CHART_POLL_INTERVAL` (300 s), followed by the day's range read
+(`SingelStandUpdate:<id>:<von>:<bis>`) for the charts the owner names
+with `chart_range_ids`. The integration names the electricity chart
+only (`SmartPlaceState.electricity_chart_id`): no other chart's range is
+used. The poll task is started by
 `_run_live_once` after the bootstrap reads and cancelled when the
 connection ends, so it dies cleanly on reconnect. `chart_ids` is per
 connection (2026-11-10): every bootstrap lists the charts again, so a
 chart deleted on the server is no longer polled after a reconnect. The
 task's first read of the day's range buckets waits for the complete
 bootstrap of its connection — before that no chart is known.
+
+**Chart reads hold back commands (2026-11-11).** The server answers the
+reads of one connection one after the other, and while it does, nothing
+else on that connection is handled: a command for a light or a blind
+sent meanwhile takes effect only when the reads are answered. Measured
+on a second, read-only connection, in rounds of nine
+`GiveMeChartStandsManuell<id>` and nine range reads sent together, and
+in rounds with the range read of the electricity chart only:
+
+- the nine STAND reads: answered within 0.2 s together. The reply for
+  the last chart is often delivered only together with the first range
+  reply;
+- the range read of the electricity chart (49): 3.4 to 3.5 s;
+- the range reads of the other eight charts: about 10 s more, the
+  replies arriving two at a time in steps of about 2.65 s.
+
+One round every 60 s therefore kept the server busy for about 13.5 s of
+every minute. The decision: a round every 300 s, and the range read only
+for the electricity chart, which leaves 3.4 s per round (measured). The
+server's chart values change only every 15 minutes, so little is lost.
+The value burst is held back in the same way: with nine range reads
+after the bootstrap it arrived 4.8 s after the main-menu reply, between
+two range replies; with one range read, 0.14 s after it. Before adding a
+periodic read, or shortening the interval, measure the reply time in a
+capture.
 
 ### Chart identification — what each `StandsSingelChartUpdate<id>` represents
 
