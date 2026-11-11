@@ -22,11 +22,9 @@ from smart_place_client import (
 )
 
 # The reference flat's plan image is 1000 x 710 pixels.
-_IMAGE = PlanBackground(entity_id="image.smart_place_floor_plan", width=1000, height=710)
+_IMAGE = PlanBackground(url="/api/smart_place/plan/abc.png", width=1000, height=710)
 # The same with the box around its drawing; the rest of the image is transparent.
-_DRAWN_IMAGE = PlanBackground(
-    entity_id="image.smart_place_floor_plan", width=1000, height=710, content=(212, 15, 741, 699)
-)
+_DRAWN_IMAGE = PlanBackground(url="/api/smart_place/plan/abc.png", width=1000, height=710, content=(212, 15, 741, 699))
 
 
 def _png_header(width: int, height: int) -> bytes:
@@ -167,7 +165,8 @@ def test_lights_view_has_one_toggle_icon_per_light_and_socket(flat_state: SmartP
     # Below the plan: the two buttons for all lights, side by side.
     assert below == [_press_tile("button.all_lights_off"), _press_tile("button.all_lights_on")]
     assert card["type"] == "picture-elements"
-    assert card["image_entity"] == "image.smart_place_floor_plan"
+    assert card["image"] == "/api/smart_place/plan/abc.png"
+    assert "image_entity" not in card
     assert card["grid_options"] == {"columns": "full"}
     assert len(card["elements"]) == 15
     assert {element["type"] for element in card["elements"]} == {"state-icon"}
@@ -591,7 +590,7 @@ def test_several_plans_repeat_the_views_with_the_plan_label() -> None:
     }
     config = build_dashboard(
         plans=plans,
-        images={1: _IMAGE, 2: PlanBackground(entity_id="image.upper", width=500, height=500)},
+        images={1: _IMAGE, 2: PlanBackground(url="/api/smart_place/plan/upper.png", width=500, height=500)},
         lights=lights,
         blinds={},
         zones={},
@@ -606,7 +605,7 @@ def test_several_plans_repeat_the_views_with_the_plan_label() -> None:
     # The device of an unknown plan is listed once, in the first plan's view.
     assert _cards(first)[1]["entities"] == ["light.l3"]
     (picture,) = _cards(second)
-    assert picture["image_entity"] == "image.upper"
+    assert picture["image"] == "/api/smart_place/plan/upper.png"
     assert picture["aspect_ratio"] == "500:500"
     assert [element["entity"] for element in picture["elements"]] == ["light.l2"]
 
@@ -743,7 +742,7 @@ def test_window_is_cut_along_the_axis_that_saves_more() -> None:
     config = build_dashboard(
         plans=plans,
         # Drawing rows 300 to 700 of 1000, the full width.
-        images={1: PlanBackground(entity_id="image.plan", width=1000, height=1000, content=(0, 300, 1000, 700))},
+        images={1: PlanBackground(url="/plan.png", width=1000, height=1000, content=(0, 300, 1000, 700))},
         lights=lights,
         blinds={},
         zones={},
@@ -765,7 +764,7 @@ def test_window_never_exceeds_the_image() -> None:
     lights = {1: LightConfig(id=1, name="Hall", kind="schalter", top=289, left=330, plan_id=1)}
     config = build_dashboard(
         plans=plans,
-        images={1: PlanBackground(entity_id="image.plan", width=1000, height=710, content=(0, 0, 1000, 710))},
+        images={1: PlanBackground(url="/plan.png", width=1000, height=710, content=(0, 0, 1000, 710))},
         lights=lights,
         blinds={},
         zones={},

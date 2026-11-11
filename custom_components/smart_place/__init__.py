@@ -45,7 +45,7 @@ from .const import (
     SETUP_OBSERVATION_WINDOW,
     VALUE_BURST_TIMEOUT,
 )
-from .plan_view import async_build_plan_config, image_content_box
+from .plan_view import SmartPlacePlanImageView, async_build_plan_config, image_content_box
 from .smart_place_client import (
     BLIND_KIND_AWNING,
     BLIND_KIND_FABRIC,
@@ -413,7 +413,8 @@ def _async_follow_renames(hass: HomeAssistant, entry: SmartPlaceConfigEntry, dat
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the integration's actions."""
+    """Register the integration's actions and the address of the plan images."""
+    hass.http.register_view(SmartPlacePlanImageView)
     service.async_register_platform_entity_service(
         hass,
         DOMAIN,

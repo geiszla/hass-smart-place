@@ -1700,3 +1700,45 @@ the shipped blueprints.
 | A move with a wall switch | Unknown whether the server reports positions for it; if not, the switch stays on. |
 | What vent reports | Unknown; if the position goes up, the switch turns off. |
 | The position after an alarm | Not compared with the one before it, whatever it is. |
+
+## 2026-11-11 (third entry) — The plan image is kept by the browser
+
+The user: the plan image loads every time a plan view is opened, and the
+card starts black.
+
+### Cause
+
+- Core 2026.11.1, `components/image`: the image view answers with
+  `Content-Length` only, no `Cache-Control`, `ETag` or `Last-Modified`;
+  the entity's access token is replaced every five minutes
+  (`TOKEN_CHANGE_INTERVAL`).
+- Frontend 20261028.5, `data/image.ts` and `hui-image.ts`: the card asks
+  for `/api/image_proxy/<entity>?token=<token>&state=<state>` and shows
+  the image only after it has loaded.
+- Measured in Chrome on the box: 478 779 bytes per load, 19 ms on a
+  desktop in the same network. Switching between the plan views of an
+  open page asked for nothing new; a new page, and every token change,
+  did.
+
+### What changed
+
+- `plan_view.SmartPlacePlanImageView`: the image at
+  `/api/smart_place/plan/<SHA-256>.png`, without login, with
+  `Cache-Control: private, max-age=31536000, immutable`; registered in
+  `async_setup`; `http` is a dependency in the manifest now.
+- `PlanBackground.entity_id` became `url`; the cards have `image` in
+  place of `image_entity`. The image entity is unchanged and no longer
+  needed for the dashboard.
+- The same holds for all plan views (Lights, Blinds, Climate, per plan):
+  they share one `PlanBackground`. The Intercom view's camera pictures
+  are live and stay as they are.
+
+### How it was checked
+
+- `./scripts/lint-check` and `./scripts/test`: pass.
+- Runtime checks on a real Home Assistant core: 174 pass, two of them
+  new: the address answers without login with the image, the content
+  type and the cache header, and stays the same across a reconnect; an
+  unknown or shortened digest and an unloaded entry get 404. Type check
+  against `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
+

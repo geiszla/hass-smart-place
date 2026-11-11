@@ -3,7 +3,8 @@
 The client fetches each plan's PNG after every main-menu reply and again
 when the server reports a rotation. One entity per plan serves the cached
 bytes; its timestamp only moves when the bytes change. The plan dashboard
-uses the entity as the background of its picture cards.
+does not use the entity: its cards load the image from
+``plan_view.SmartPlacePlanImageView``, which a browser can keep.
 """
 
 from __future__ import annotations

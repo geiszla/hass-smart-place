@@ -626,6 +626,15 @@ Devices without a usable position on the plan are listed below the plan.
 Disabled entities are left out. With several floor plans the views repeat per
 plan.
 
+A browser or the Home Assistant app loads the plan image once and keeps it:
+the plan is there at once when you open a plan view again. The dashboard takes
+the image from an address of the integration that is made from the image's
+content (`/api/smart_place/plan/<SHA-256 of the image>.png`), so the address
+only changes when Smart Place has another image. This address needs no login,
+because a browser sends none with an image request; it cannot be guessed
+without the image itself. The entity "Floor plan" shows the same image; the
+dashboard does not use it.
+
 The dashboard's address is `/smart-place`, and a view has its own address,
 for example `/smart-place/intercom`. If that address is already taken — a
 dashboard of your own called "Smart Place" gets the same one — the

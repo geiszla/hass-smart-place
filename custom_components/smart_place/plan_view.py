@@ -3,16 +3,19 @@
 The layout itself is pure and lives in ``smart_place_client.plan``. This
 module supplies what only Home Assistant knows: which entity belongs to
 which vendor device (resolved by unique id, disabled entities left out),
-the image entities, the temperature unit, and the door buttons and
-cameras of the Intercom view. It also finds the part of a plan image that
-is not empty, with Pillow, which Home Assistant ships.
+the temperature unit, and the door buttons and cameras of the Intercom
+view. It also finds the part of a plan image that is not empty, with
+Pillow, which Home Assistant ships, and serves the plan images to the
+dashboard's cards (``SmartPlacePlanImageView``).
 """
 
 from __future__ import annotations
 
 from io import BytesIO
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
+from aiohttp import hdrs, web
+from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.const import Platform
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
@@ -34,6 +37,41 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from . import SmartPlaceConfigEntry
+
+_PLAN_IMAGE_URL: Final = "/api/smart_place/plan/{digest}.png"
+# The address names the image's content, so a browser never has to ask again.
+_KEEP_FOR_GOOD: Final = "private, max-age=31536000, immutable"
+
+
+class SmartPlacePlanImageView(HomeAssistantView):
+    """Serve a fetched plan image at an address that names its content (its SHA-256).
+
+    The dashboard's cards use this address, not the image entity. Home
+    Assistant serves an image entity without a cache header and at an
+    address whose token changes every five minutes: a browser then fetched
+    the plan (about 480 kB) every time a plan page was opened, and again
+    every five minutes while it was open, and the card stayed empty until
+    it had arrived.
+
+    No login: an ``<img>`` request cannot carry Home Assistant's token.
+    The address works as the key instead, as the image entity's token
+    does: it cannot be guessed without the image.
+    """
+
+    url = _PLAN_IMAGE_URL
+    name = "api:smart_place:plan"
+    requires_auth = False
+
+    async def get(self, request: web.Request, digest: str) -> web.Response:
+        """Return the image with this digest; 404 when no loaded entry holds it (any more)."""
+        entries: list[SmartPlaceConfigEntry] = request.app[KEY_HASS].config_entries.async_loaded_entries(DOMAIN)
+        for entry in entries:
+            for image in entry.runtime_data.client.plan_images.values():
+                if image.digest == digest:
+                    return web.Response(
+                        body=image.content, content_type="image/png", headers={hdrs.CACHE_CONTROL: _KEEP_FOR_GOOD}
+                    )
+        raise web.HTTPNotFound
 
 
 def image_content_box(content: bytes) -> tuple[int, int, int, int] | None:
@@ -136,10 +174,12 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
 
     images = {
         plan_id: PlanBackground(
-            entity_id=found, width=image.width, height=image.height, content=content(plan_id, image.digest)
+            url=_PLAN_IMAGE_URL.format(digest=image.digest),
+            width=image.width,
+            height=image.height,
+            content=content(plan_id, image.digest),
         )
         for plan_id, image in data.client.plan_images.items()
-        if (found := entity_id(Platform.IMAGE, f"floorplan_{plan_id}"))
     }
     return build_dashboard(
         plans=state.plans,

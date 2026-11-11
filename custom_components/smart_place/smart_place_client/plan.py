@@ -156,14 +156,14 @@ def png_size(data: bytes) -> tuple[int, int] | None:
 
 @dataclass(frozen=True, slots=True)
 class PlanBackground:
-    """The image entity that shows a plan, and the image's pixel size.
+    """The address a plan's image is served at, and the image's pixel size.
 
     ``content`` is the box ``(left, top, right, bottom)`` around what the
     image depicts, when the rest of it is empty (transparent); ``None``
     when that is not known.
     """
 
-    entity_id: str
+    url: str
     width: int
     height: int
     content: tuple[int, int, int, int] | None = None
@@ -579,7 +579,7 @@ def _view(
         cards.append(
             {
                 "type": "picture-elements",
-                "image_entity": image.entity_id,
+                "image": image.url,
                 # The card shows the middle of the image in a box of this shape.
                 "aspect_ratio": f"{window.width:g}:{window.height:g}",
                 "elements": elements,

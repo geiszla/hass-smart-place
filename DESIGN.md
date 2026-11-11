@@ -1536,6 +1536,38 @@ ids into `picture-elements` views: Lights, Blinds, Climate, plus a Scenes
 view with built-in cards. Devices that cannot be placed are listed below
 the plan.
 
+**Where the cards get the image** (2026-11-11; before that the card's
+`image_entity`). The user saw an empty dark card every time a plan view
+was opened. Cause, read in the core and frontend source and measured on
+the box: the image is 478 kB; Home Assistant serves an image entity
+without a cache header, at `/api/image_proxy/<entity>?token=...`, and the
+token changes every five minutes; the card shows nothing until the image
+has arrived. So a browser fetched the image at every opening, and again
+every five minutes while a plan view was open. On a desktop in the same
+network that took 19 ms; on a phone it is visible.
+
+`plan_view.SmartPlacePlanImageView` serves the image at
+`/api/smart_place/plan/<SHA-256 of the content>.png` with
+`Cache-Control: private, max-age=31536000, immutable`, and the cards name
+that address as `image`. The address only changes with the content, so a
+browser asks once per image.
+
+- `requires_auth = False`: an `<img>` request cannot carry Home
+  Assistant's token (the image entity's address has its token for the
+  same reason). The digest is the key: it cannot be guessed without the
+  image. An unknown digest gets 404, not 401, so that a page asking for
+  an old image is not counted as a wrong login.
+- The view is registered once per run, in `async_setup`, and looks the
+  digest up in the loaded entries at every request: routes cannot be
+  removed, and nothing is served while the entry is not loaded.
+- The plan no longer depends on the image entity (a disabled "Floor plan"
+  entity used to take the plan off the dashboard).
+- Not chosen: the image as a `data:` address in the dashboard
+  configuration (no request at all, but about 1.9 MB of configuration for
+  the three plan views at every opening of the dashboard).
+- The cameras of the Intercom view are loaded anew each time on purpose:
+  they are live pictures.
+
 **Layout of a plan view** (2026-11-10, third round; before that a `panel`
 view with the whole image, markers as single elements at offsets in image
 pixels). Seen in a browser, the first layout had three faults: on a
