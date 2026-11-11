@@ -556,6 +556,11 @@ class SmartPlaceState:
         return False
 
     @property
+    def weather_alarm_on(self) -> bool:
+        """Return whether the rain alarm, the hail alarm or a wind alarm is on."""
+        return bool(self.rain_alarm or self.hail_alarm or any(self.wind_alarms.values()))
+
+    @property
     def control_values_received(self) -> bool:
         """Return whether every listed light, blind and heating zone has its control value.
 

@@ -12,7 +12,8 @@ effective state — see ``SmartPlaceToggleEntity``.
 
 - Every blind gets the configuration switch "Lower after weather alarm".
   It switches nothing on the vendor side: it is a setting of this
-  integration, kept in the config entry options.
+  integration, kept in the config entry options. The Blinds page of the
+  dashboard has one card with these switches; they are on no device.
 """
 
 from __future__ import annotations
@@ -29,14 +30,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 
-from . import (
-    SmartPlaceConfigEntry,
-    SmartPlaceData,
-    blind_device_info,
-    category_device_info,
-    light_device_info,
-    main_device_info,
-)
+from . import SmartPlaceConfigEntry, SmartPlaceData, category_device_info, light_device_info, main_device_info
 from .const import CONF_LOWER_AFTER_ALARM, CONF_LOWER_DELAY_MINUTES
 from .entity import (
     SmartPlacePushEntity,
@@ -48,7 +42,9 @@ from .entity import (
 from .smart_place_client import (
     DEVICE_LIGHT,
     LIGHT_KIND_SOCKET,
+    BlindAlarm,
     BlindConfig,
+    BlindRaised,
     BlindValue,
     CommandDefinition,
     Commands,
@@ -57,7 +53,9 @@ from .smart_place_client import (
     SceneConfig,
     blind_can_be_lowered,
     command_moves_blind,
+    command_raises_blind,
     light_is_on,
+    weather_alarm_icon,
 )
 
 if TYPE_CHECKING:
@@ -258,35 +256,57 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
     waiting time and sends the command the way every entity does
     (``_async_issue``: dry run, audit log, protected devices).
 
+    Moving the blind up switches this off: Home Assistant's own up command
+    at once, any other move up when the blind reports it
+    (``smart_place_client.alarm.BlindRaised``).
+
     The switch state is kept in the config entry options: restored entity
     state is written too rarely for a setting.
+
+    It is on no device (user decision, 2026-11-11): it is switched on the
+    dashboard's Blinds page, and on the blind's device page it was a
+    second place for the same thing. Its name therefore carries the
+    blind's name.
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Lower after weather alarm"
     _attr_translation_key = "lower_after_alarm"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, entry: SmartPlaceConfigEntry, data: SmartPlaceData, blind: BlindConfig) -> None:
-        """Wire the blind's id, unique_id and device."""
+        """Wire the blind's id and unique_id."""
         self._data = data
         self._blind_id = blind.id
         self._attr_unique_id = f"{entry.entry_id}_lower_after_alarm_{blind.id}"
-        self._attr_device_info = blind_device_info(entry, data, blind)
         self._lowering = LowerAfterAlarm()
+        self._raised = BlindRaised()
+        # Seeded here: the icon is part of the state that is recorded as written when the entity is added.
+        self._alarm = BlindAlarm()
+        self._alarm.update(self._value())
         self._wait_timer: CALLBACK_TYPE | None = None
 
     def _value(self) -> BlindValue | None:
         return self._data.state.blind_values.get(self._blind_id)
 
     def _blind_name(self) -> str:
-        """Return the blind's current vendor name, for the log."""
+        """Return the blind's current vendor name."""
         return self._data.state.blinds[self._blind_id].name
+
+    @property
+    def name(self) -> str:
+        """Return the blind's name and the function: there is no device to take a name from."""
+        return f"{self._blind_name()} Lower after weather alarm"
 
     @property
     def is_on(self) -> bool:
         """Return whether the blind is lowered after its weather alarm."""
         return self._blind_id in self._data.entry.options.get(CONF_LOWER_AFTER_ALARM, ())
+
+    @property
+    def icon(self) -> str | None:
+        """Return the alarm's icon while off and a weather alarm holds the blind, else nothing (the lock of ``icons.json``)."""
+        alarm = self._alarm.alarm
+        return None if alarm is None or self.is_on else weather_alarm_icon(alarm)
 
     @callback
     def _handle_frame_update(self) -> None:
@@ -296,8 +316,19 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     @callback
     def _async_follow_blind(self) -> None:
+        value = self._value()
+        self._alarm.update(value)
+        if self._raised.update(value, weather_alarm=self._data.state.weather_alarm_on) and self.is_on:
+            _LOGGER.info(
+                "%s (blind %d) was moved up: 'Lower after weather alarm' is turned off",
+                self._blind_name(),
+                self._blind_id,
+            )
+            # Storing follows the blind again, with the function off.
+            self._async_store(on=False)
+            return
         delay = self._data.entry.options.get(CONF_LOWER_DELAY_MINUTES, 0) * 60
-        if self._lowering.update(self._value(), enabled=self.is_on, delay=delay):
+        if self._lowering.update(value, enabled=self.is_on, delay=delay):
             self._async_cancel_wait_timer()
             if delay:
                 # No frame arrives when the wait is over.
@@ -335,10 +366,17 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     @callback
     def _async_command_issued(self, command: CommandDefinition, args: tuple[object, ...]) -> None:
-        """End a running wait when Home Assistant sends a command for this blind."""
+        """End a running wait when Home Assistant sends a command for this blind; its up command switches this off."""
         if command_moves_blind(command, args, self._blind_id):
             self._lowering.cancel()
             self._async_cancel_wait_timer()
+        if self.is_on and command_raises_blind(command, args, self._blind_id):
+            _LOGGER.info(
+                "%s (blind %d) is moved up: 'Lower after weather alarm' is turned off",
+                self._blind_name(),
+                self._blind_id,
+            )
+            self._async_store(on=False)
 
     @callback
     def _async_store(self, *, on: bool) -> None:

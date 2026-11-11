@@ -140,8 +140,9 @@ Open **Settings → Devices & services → Smart Place**. A healthy install show
 - One device per **heating zone**, named after the room: a climate entity, the
   temperature sensor and a humidity sensor that is disabled by default.
 - One device per **light**, **socket** and **blind**, named as in the Smart
-  Place app. Each blind's device also has the switch
-  ["Lower after weather alarm"](#lower-after-weather-alarm).
+  Place app. A blind's switch
+  ["Lower after weather alarm"](#lower-after-weather-alarm) is on no device:
+  it is on the Blinds view of the [plan dashboard](#plan-dashboard).
 - The devices **Scene**, **Ventilation**, **Weather**, **Energy**, **Camera**
   and **Door**. What is on which device: see
   [Devices and cards](#devices-and-cards).
@@ -238,7 +239,7 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Light (dimmer) | `light` with brightness | Built from the vendor web app's code; not tested on a real dimmer |
 | Socket | `switch` (outlet) | A switch, so a call for all lights (`light.turn_off`) does not cut socket power. The integration's own "All lights off" button does switch sockets. Can be protected against switching: see [Protected sockets](#protected-sockets) |
 | Blind (slatted, fabric, awning) | `cover` | Open, close, reported position. Slatted blinds: "tilt open" moves to the vent position. No command while a weather alarm blocks the blind: see [Blinds and weather alarms](#blinds-and-weather-alarms) |
-| Per blind: "Lower after weather alarm" | `switch` (configuration) | A setting of the integration, off by default: see [Lower after weather alarm](#lower-after-weather-alarm) |
+| Per blind: "Lower after weather alarm" | `switch` (configuration, on no device) | A setting of the integration, off by default, switched on the plan dashboard: see [Lower after weather alarm](#lower-after-weather-alarm) |
 | Heating zone | `climate` | Heat / Off, target 19–26 °C in whole degrees, measured temperature, heating or idle |
 | Scene that only triggers | `scene` | Usable from the voice assistant |
 | Scene with on/off state | `switch` | |
@@ -304,7 +305,7 @@ integration's devices are named for that:
 | --- | --- |
 | **Smart Place** | Connection, floor plan image, doorbell mute, "All lights off", "All lights on", "All heating off", "Heating back on", the blinds group buttons, intercom caller, parcel PIN, info board |
 | One per heating zone, named after the room | Thermostat, temperature, humidity |
-| One per light, socket and blind, named as in the Smart Place app | The light, switch or cover; for a blind also "Lower after weather alarm" |
+| One per light, socket and blind, named as in the Smart Place app | The light, switch or cover |
 | **Scene** | Every scene and every scene switch |
 | **Ventilation** (one per group of numbered scenes, named after the group) | The fan |
 | **Weather** | Outdoor temperature, wind speed, weather alarms |
@@ -453,8 +454,25 @@ do nothing.
 ### Lower after weather alarm
 
 An alarm leaves the blind up. Every blind has a switch **Lower after weather
-alarm** on its device, under *Configuration*, off by default. While it is on,
-the integration lowers the blind when it sees the blind's alarm end.
+alarm**, off by default. While it is on, the integration lowers the blind when
+it sees the blind's alarm end.
+
+The switches are on one card on the Blinds view of the
+[plan dashboard](#plan-dashboard), below the buttons for all blinds: one row
+per blind, with the blind's name and its switch.
+
+| Icon of a row | Meaning |
+| --- | --- |
+| Open lock | Off |
+| Closed lock, coloured | On: the blind is lowered when its alarm ends. It stays a closed lock while an alarm holds the blind |
+| Rain, wind or hail icon (a warning sign for any other alarm) | Off, and an alarm holds this blind now |
+
+A switch is on no device, so the blind's device page does not list it. Under
+*Settings → Devices & services → Entities* it is called "<name of the blind>
+Lower after weather alarm". The name follows a rename of the blind in Smart
+Place, not a name you gave the blind's device in Home Assistant. An install
+from before this change had the switch on the blind's device: it leaves the
+device at the first start of the new version, and its entity id stays.
 
 > **This switch is the one place where the integration sends a command to
 > your home without a user action at that moment.** Everything else is sent
@@ -480,9 +498,23 @@ How it works:
   down. It is sent once and never repeated.
 - Turning the switch **on** lowers the blind at once if it is neither fully
   down nor blocked. If it is blocked, it is lowered when the alarm ends.
-  Turning the switch **off** ends a running wait and sends nothing.
-- The switch is a configuration entity, so a call for an area or a device
-  does not include it. A call for all switches (`switch.turn_on` with
+  Turning the switch **off** ends a running wait and sends nothing; it does
+  not raise the blind.
+- **Moving the blind up turns the switch off**: whoever pulls a blind up does
+  not want it lowered again.
+  - The blind's own up command from Home Assistant (plan, card, automation,
+    voice) turns it off at once.
+  - Any other move up (the Smart Place app, a group button, a scene) turns it
+    off when the blind reports a position higher up than the one before.
+    This does not count while a rain, hail or wind alarm is on: the alarm
+    itself drives blinds up. It also does not count when the move was not
+    seen (Home Assistant was stopped or reconnecting), or when the blind was
+    already fully up and reports no change.
+  - Vent does not turn it off by itself, only if the blind then reports a
+    higher position.
+  - One line in the log at level INFO says so each time.
+- The switch is on no device and in no area, so a call for an area or a
+  device does not include it. A call for all switches (`switch.turn_on` with
   `entity_id: all`) does: it would turn the function on for every blind and
   lower every blind that is not down.
 - While the connection is down the switch is unavailable. Its setting is
@@ -565,7 +597,9 @@ because the markers would overlap otherwise:
   up, half filled: partly down, filled: fully down; a tap opens the details
   with the percentage), and buttons for down, vent (slatted blinds) and up.
   A [blocked blind](#blinds-and-weather-alarms) shows its alarm instead, with
-  grey buttons. Below the plan: "All blinds up" and "All blinds down".
+  grey buttons. Below the plan: "All blinds up" and "All blinds down", then
+  a card with a switch per blind for
+  ["Lower after weather alarm"](#lower-after-weather-alarm).
 - **Climate** — measured and target temperature per zone, and − / + buttons.
   While a zone calls for heat, a flame stands before its target and both are
   in the heating colour. Below the plan: "All heating off", "Heating back on"

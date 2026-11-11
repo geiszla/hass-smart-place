@@ -60,6 +60,22 @@ def test_apply_wind_alarm_indexed() -> None:
     assert state.wind_alarms == {1: False, 2: True}
 
 
+def test_weather_alarm_on_is_any_of_rain_hail_and_wind() -> None:
+    state = SmartPlaceState()
+    assert state.weather_alarm_on is False
+    state.apply(NamedValue(name="Rain", value="00"))
+    state.apply(NamedValue(name="WindAlarm", value="00", index=1))
+    assert state.weather_alarm_on is False
+    state.apply(NamedValue(name="WindAlarm", value="01", index=2))
+    assert state.weather_alarm_on is True
+    state.apply(NamedValue(name="WindAlarm", value="00", index=2))
+    state.apply(NamedValue(name="Rain", value="01"))
+    assert state.weather_alarm_on is True
+    state.apply(NamedValue(name="Rain", value="00"))
+    state.apply(NamedValue(name="Hail", value="01"))
+    assert state.weather_alarm_on is True
+
+
 def test_apply_package_box_is_ignored() -> None:
     """PackageBox frames parse but are intentionally dropped by ``apply``.
 

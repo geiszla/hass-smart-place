@@ -7,10 +7,12 @@ import pytest
 from smart_place_client import (
     KNOWN_COMMANDS,
     BlindAlarm,
+    BlindRaised,
     Commands,
     LowerAfterAlarm,
     blind_can_be_lowered,
     command_moves_blind,
+    command_raises_blind,
 )
 from smart_place_client.devices import BlindValue, parse_blind_value
 
@@ -299,3 +301,42 @@ def test_commands_for_a_blind_are_its_own_and_the_blinds_group_buttons() -> None
         assert not command_moves_blind(command, (7,), 8)
     # Light 8 is not blind 8.
     assert not command_moves_blind(Commands.LightToggle, (8,), 8)
+
+
+def test_only_the_up_command_of_the_blind_raises_it() -> None:
+    assert [defn.name for defn in KNOWN_COMMANDS if command_raises_blind(defn, defn.example_args, 8)] == ["BlindUp"]
+    assert not command_raises_blind(Commands.BlindUp, (7,), 8)
+
+
+def _raised(rule: BlindRaised, *raws: str | None, weather_alarm: bool = False) -> list[bool]:
+    return [rule.update(None if raw is None else _value(raw), weather_alarm=weather_alarm) for raw in raws]
+
+
+def test_a_position_higher_up_than_the_one_before_is_a_move_up() -> None:
+    """Vendor positions: 0 is fully up. Somebody raises the blind in the vendor app."""
+    assert _raised(BlindRaised(), "100-00", "97-00", "94-00") == [False, True, True]
+
+
+def test_moving_down_and_repeated_values_are_no_move_up() -> None:
+    assert _raised(BlindRaised(), "0-00", "3-00", "3-00", "100-00", "100-00") == [False] * 5
+
+
+def test_the_first_position_of_a_connection_is_no_move_up() -> None:
+    """The server replays every value after a connect: only what was seen live counts."""
+    rule = BlindRaised()
+    assert _raised(rule, "100-00", None, "0-00") == [False, False, False]
+    assert _raised(rule, "0-00") == [False]
+
+
+def test_the_position_after_a_weather_alarm_is_no_move_up() -> None:
+    """The alarm drives the blind up: 100 before it and 0 after it is not somebody's wish."""
+    assert _raised(BlindRaised(), "100-00", "regenalarm-00", "0-00") == [False, False, False]
+
+
+def test_a_move_up_while_any_weather_alarm_is_on_does_not_count() -> None:
+    """The alarm flag may come before the blind's own alarm word, with positions in between."""
+    rule = BlindRaised()
+    assert _raised(rule, "100-00") == [False]
+    assert _raised(rule, "97-00", "50-00", weather_alarm=True) == [False, False]
+    # The alarm is over: only a move from the last position counts.
+    assert _raised(rule, "50-00", "47-00") == [False, True]

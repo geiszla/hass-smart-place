@@ -4,7 +4,14 @@ Has no homeassistant dependency; safe to import from a notebook or CLI.
 The HA integration in custom_components/smart_place/ is a thin wrapper.
 """
 
-from .alarm import BlindAlarm, LowerAfterAlarm, blind_can_be_lowered, command_moves_blind
+from .alarm import (
+    BlindAlarm,
+    BlindRaised,
+    LowerAfterAlarm,
+    blind_can_be_lowered,
+    command_moves_blind,
+    command_raises_blind,
+)
 from .client import (
     CapturedFrame,
     DisconnectCallback,
@@ -57,6 +64,7 @@ from .plan import (
     climate_centre,
     light_centre,
     png_size,
+    weather_alarm_icon,
 )
 from .protection import command_is_protected
 from .protocol import (
@@ -128,6 +136,7 @@ __all__ = [
     "BlindAlarm",
     "BlindConfig",
     "BlindMotion",
+    "BlindRaised",
     "BlindValue",
     "CapturedFrame",
     "ChartReading",
@@ -181,6 +190,7 @@ __all__ = [
     "climate_centre",
     "command_is_protected",
     "command_moves_blind",
+    "command_raises_blind",
     "cover_position",
     "encode_frame",
     "energy_cost_chf",
@@ -206,4 +216,5 @@ __all__ = [
     "suggest_zone",
     "target_temperature",
     "today_range_epochs",
+    "weather_alarm_icon",
 ]

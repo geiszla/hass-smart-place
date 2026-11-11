@@ -90,6 +90,11 @@ def async_build_plan_config(hass: HomeAssistant, entry: SmartPlaceConfigEntry) -
         blinds={
             blind_id: found for blind_id in state.blinds if (found := entity_id(Platform.COVER, f"blind_{blind_id}"))
         },
+        blind_locks={
+            blind_id: found
+            for blind_id in state.blinds
+            if (found := entity_id(Platform.SWITCH, f"lower_after_alarm_{blind_id}"))
+        },
         climates={
             zone_id: found for zone_id in state.climate if (found := entity_id(Platform.CLIMATE, f"climate_{zone_id}"))
         },

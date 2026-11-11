@@ -18,6 +18,7 @@ from smart_place_client import (
     climate_centre,
     light_centre,
     png_size,
+    weather_alarm_icon,
 )
 
 # The reference flat's plan image is 1000 x 710 pixels.
@@ -45,6 +46,7 @@ def _flat_entities(state: SmartPlaceState) -> DashboardEntities:
             for light in state.lights.values()
         },
         blinds={blind.id: f"cover.blind_{blind.id}" for blind in state.blinds.values()},
+        blind_locks={blind.id: f"switch.lock_{blind.id}" for blind in state.blinds.values()},
         climates={zone.id: f"climate.zone_{zone.id}" for zone in state.climate.values()},
         scenes=["scene.night", "switch.blinds", "scene.evening"],
         mutes=["switch.doorbell_mute"],
@@ -93,6 +95,17 @@ def _press_tile(entity_id: str) -> dict[str, Any]:
         "tap_action": press,
         "icon_tap_action": press,
         "grid_options": {"columns": 6},
+    }
+
+
+def _locks_card(*rows: tuple[str, str]) -> dict[str, Any]:
+    return {
+        "type": "entities",
+        "title": "Lower after weather alarm",
+        "show_header_toggle": False,
+        "color": "state",
+        "entities": [{"entity": entity_id, "name": name} for entity_id, name in rows],
+        "grid_options": {"columns": "full"},
     }
 
 
@@ -460,7 +473,7 @@ def test_scenes_view_uses_built_in_cards(flat_state: SmartPlaceState) -> None:
 
 def test_buttons_for_all_and_the_ventilation_are_below_their_plan(flat_state: SmartPlaceState) -> None:
     views = _views(_flat_dashboard(flat_state))
-    assert _cards(views["blinds"])[1:] == [_press_tile("button.all_blinds_up"), _press_tile("button.all_blinds_down")]
+    assert _cards(views["blinds"])[1:3] == [_press_tile("button.all_blinds_up"), _press_tile("button.all_blinds_down")]
     assert _cards(views["climate"])[1:] == [
         _press_tile("button.all_heating_off"),
         _press_tile("button.heating_back_on"),
@@ -652,6 +665,75 @@ def test_plan_shows_the_drawing_and_the_markers_only(flat_state: SmartPlaceState
         for element in conditional["elements"]
     }
     assert "clamp(min(60px, 14.56vw), 98%, calc(100% - min(60px, 14.56vw)))" in lefts
+
+
+def test_blinds_view_has_one_card_with_a_lock_switch_per_blind_below_the_buttons(flat_state: SmartPlaceState) -> None:
+    """A row is named after the blind; what the switch does is the card's title."""
+    cards = _cards(_views(_flat_dashboard(flat_state))["blinds"])
+    assert cards[3:] == [
+        _locks_card(
+            *((f"switch.lock_{blind_id}", blind.name) for blind_id, blind in sorted(flat_state.blinds.items()))
+        ),
+    ]
+    assert cards[3]["entities"][0] == {"entity": "switch.lock_1", "name": "Bath blinds"}
+
+
+def test_the_locks_card_has_no_switch_for_all_rows(flat_state: SmartPlaceState) -> None:
+    """A switch in the title would turn every row on, and turning one on lowers its blind."""
+    card = _cards(_views(_flat_dashboard(flat_state))["blinds"])[3]
+    assert card["show_header_toggle"] is False
+
+
+def test_a_blind_without_the_switch_has_no_row(flat_state: SmartPlaceState) -> None:
+    entities = _flat_entities(flat_state)
+    second = sorted(flat_state.blinds)[1]
+    one = DashboardEntities(blinds=entities.blinds, blind_locks={second: "switch.lock"})
+    assert _cards(_views(_flat_dashboard(flat_state, entities=one))["blinds"])[1:] == [
+        _locks_card(("switch.lock", flat_state.blinds[second].name)),
+    ]
+    none = DashboardEntities(blinds=entities.blinds)
+    assert len(_cards(_views(_flat_dashboard(flat_state, entities=none))["blinds"])) == 1
+
+
+def test_lock_switches_are_on_the_blinds_view_of_their_plan() -> None:
+    """A blind of an unknown plan is on the first plan's view, as its cover is."""
+    plans = {
+        1: PlanConfig(id=1, label="Ground floor", top=70, left=10, functions=()),
+        2: PlanConfig(id=2, label="First floor", top=70, left=10, functions=()),
+    }
+    blinds = {
+        1: BlindConfig(id=1, name="Hall", kind="jalousie", top=289, left=330, plan_id=1, runtime_s=60),
+        2: BlindConfig(id=2, name="Landing", kind="jalousie", top=289, left=330, plan_id=2, runtime_s=60),
+        3: BlindConfig(id=3, name="Attic", kind="jalousie", top=289, left=330, plan_id=7, runtime_s=60),
+    }
+    config = build_dashboard(
+        plans=plans,
+        images={},
+        lights={},
+        blinds=blinds,
+        zones={},
+        entities=DashboardEntities(
+            blinds={1: "cover.hall", 2: "cover.landing", 3: "cover.attic"},
+            blind_locks={1: "switch.hall", 2: "switch.landing", 3: "switch.attic"},
+        ),
+        temperature_unit="°C",
+    )
+    views = _views(config)
+    assert _cards(views["blinds-1"]) == [
+        _locks_card(("switch.hall", "Hall"), ("switch.attic", "Attic")),
+        {"type": "entities", "entities": ["cover.hall", "cover.attic"], "grid_options": {"columns": "full"}},
+    ]
+    assert _cards(views["blinds-2"]) == [
+        _locks_card(("switch.landing", "Landing")),
+        {"type": "entities", "entities": ["cover.landing"], "grid_options": {"columns": "full"}},
+    ]
+
+
+def test_weather_alarm_icon_is_the_one_of_the_plan_marker() -> None:
+    assert weather_alarm_icon("rain") == "mdi:weather-pouring"
+    assert weather_alarm_icon("wind") == "mdi:weather-windy"
+    assert weather_alarm_icon("hail") == "mdi:weather-hail"
+    assert weather_alarm_icon("sturmalarm") == "mdi:alert"
 
 
 def test_window_is_cut_along_the_axis_that_saves_more() -> None:

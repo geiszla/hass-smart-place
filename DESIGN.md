@@ -1264,7 +1264,7 @@ their registry entries, in the `binary_sensor` domain only).
 | kind `steckdose` | `SmartPlaceSocket` (`switch`, `OUTLET`) | A switch so that a call for all lights (`light.turn_off`) does not cut socket power. Hidden while protected. |
 | `INHALTSZENEN<N>` type `OnOff` + `SZENEN<N>` | `SmartPlaceSceneSwitch` | Not for members of a level group. On the "Scene" device. |
 | `MUTE<N>` | `SmartPlaceMuteSwitch` | On = doorbell muted. On the main device. |
-| `INHALTJalousien<N>` (option `lower_after_alarm`) | `SmartPlaceLowerAfterAlarmSwitch` | A setting per blind, not a vendor state; see "switch: Lower after weather alarm". |
+| `INHALTJalousien<N>` (option `lower_after_alarm`) | `SmartPlaceLowerAfterAlarmSwitch` | A setting per blind, not a vendor state, on no device; see "switch: Lower after weather alarm". |
 
 **Protected sockets** (user decision, 2026-11-10: set in the options; a
 blocked command is skipped silently). One socket powers a home server
@@ -1330,13 +1330,62 @@ decision is made against. No other command waits.
 
 ### switch: Lower after weather alarm
 
-`SmartPlaceLowerAfterAlarmSwitch`, one per blind on the blind's device,
-entity category `CONFIG`, off by default (user decisions, 2026-11-10: one
-switch per blind; lower always; no waiting time by default, but settable;
-turning the switch on lowers at once if the blind is up). Its state is the
-option `lower_after_alarm`, not restored entity state (that store is
-written too rarely for a setting). It is unavailable while the connection
-is down, like the other entities.
+`SmartPlaceLowerAfterAlarmSwitch`, one per blind, entity category
+`CONFIG`, off by default (user decisions, 2026-11-10: one switch per
+blind; lower always; no waiting time by default, but settable; turning
+the switch on lowers at once if the blind is up). Its state is the option
+`lower_after_alarm`, not restored entity state (that store is written too
+rarely for a setting). It is unavailable while the connection is down,
+like the other entities.
+
+**Where it is** (user decisions, 2026-11-11). Under *Configuration* on
+the blind's device the switch was hard to find, so the Blinds view of the
+dashboard has one card with these switches (see "image and the plan
+dashboard"). With that card the device page was a second place for the
+same thing: the switch is **on no device**. Home Assistant lists a hidden
+entity on its device page too (with "(hidden)"), so hiding was no way.
+Consequences:
+
+- Its name carries the blind's name ("<blind> Lower after weather alarm",
+  the full name it had before), read from the vendor's current name on
+  every write. A name the user gave the blind's device does not reach it.
+- The entity registry entry of an older install loses its device link
+  when the entity is added again; unique id and entity id stay.
+- `async_remove_config_entry_device` removes the switch with a blind's
+  stale device, since Home Assistant no longer does.
+
+**Icon.** `icons.json` gives an open lock for off and a closed lock for
+on. While the switch is off and a weather alarm holds the blind, the
+entity's `icon` is that alarm's icon (`plan.weather_alarm_icon`, the same
+as on the plan marker): the user wanted the alarm at the lock's place and
+only for a blind that is not locked. The alarm is kept through a
+reconnect (`BlindAlarm`, seeded when the entity is created, as in the
+cover).
+
+**Moving the blind up switches it off** (user decision, 2026-11-11:
+whoever pulls a blind up does not want it lowered again).
+
+- Home Assistant's own up command for the blind
+  (`alarm.command_raises_blind`, heard through `command_listeners`)
+  switches it off at once, before the command is sent.
+- Any other move up (vendor app, a group button, a scene) is taken from
+  the positions: `alarm.BlindRaised` answers for a position higher up
+  than the one before it. Only two positions seen one after the other in
+  one connection are compared; an alarm word or a missing value between
+  them starts anew, so neither the alarm's own drive up nor the replay
+  after a connect counts.
+- Nothing counts while any weather alarm is on
+  (`SmartPlaceState.weather_alarm_on`: rain, hail or a wind zone). It is
+  not known whether the server reports positions while an alarm drives a
+  blind up, before the alarm word replaces them; on 2026-11-11 the rain
+  flag arrived 2.4 s before a blind's alarm word. Without this the
+  function could switch itself off at the start of every alarm. The
+  price: a blind the alarm does not hold, pulled up in the vendor app
+  during an alarm, stays locked.
+- Not noticed: a move while Home Assistant was stopped or reconnecting,
+  and an up command in the vendor app for a blind that is already fully
+  up. Vent switches nothing off by itself.
+- One INFO line each time.
 
 **This is the one place where the integration sends a command without a
 user action at that moment.** The rule is the pure
@@ -1373,8 +1422,9 @@ if it moves the blind, the position change does. The tracker lives in the
 entity: an alarm that ends in the two seconds between the first bootstrap
 and the creation of the entities is not seen.
 
-Area and device calls do not reach the switch (Home Assistant leaves
-entities with a category out of them); `entity_id: all` does.
+Area and device calls do not reach the switch (it is on no device and in
+no area, and Home Assistant leaves entities with a category out of them);
+`entity_id: all` does.
 
 ### cover
 
@@ -1554,6 +1604,20 @@ image and their sizes did not.
   and on the Climate view the ventilation fans (moved from the Scenes
   view; the view also exists for a fan alone). The Scenes view no longer
   lists these buttons in a "Groups" card (user decision, 2026-11-10).
+- Below the buttons, every Blinds view has one `entities` card "Lower
+  after weather alarm" with a row per blind of that view: the switch's
+  icon, the blind's vendor name, the switch (user decisions, 2026-11-11).
+  `show_header_toggle` is off: the switch in the title would turn every
+  row on, and turning one on lowers its blind. What was tried first:
+  - A lock in each blind's marker: the row gets 26 px wider, and at 360
+    to 412 px two markers of the reference flat then overlap by about
+    25 px (they are 13 px apart). It fits only with 20 px icons.
+  - A tile per blind: at half width a phone cuts "Living room balcony
+    door blinds" and "Living room blinds" to the same text; the user
+    then preferred switches on one card to tiles.
+  - Lock and alarm as two icons in one row: the built-in row has one
+    icon place and the control. It would need a custom row element; the
+    user chose the built-in card.
 - The Scenes view is one `entities` card (user decision, 2026-11-10;
   before: "Scenes" and "Switches" as two cards): scene entities and the
   switches of on/off scenes in the order of `SmartPlaceState.scene_configs`,

@@ -14,6 +14,10 @@ strict where :class:`BlindAlarm` is lenient: it only counts an alarm end
 that was seen in the current connection, and it forgets everything when
 the connection drops.
 
+:class:`BlindRaised` notices that somebody moves a blind up. The caller
+then switches "lower after weather alarm" off for it: whoever pulls a
+blind up does not want it lowered again.
+
 Pure logic with an injectable clock, no I/O.
 """
 
@@ -75,6 +79,45 @@ def command_moves_blind(command: CommandDefinition, args: Sequence[object], blin
     if command.device == DEVICE_BLIND:
         return args[0] == blind_id
     return command in _BLINDS_GROUP_COMMANDS
+
+
+def command_raises_blind(command: CommandDefinition, args: Sequence[object], blind_id: int) -> bool:
+    """Return whether ``command`` with ``args`` is the up command of blind ``blind_id``."""
+    return command == Commands.BlindUp and args[0] == blind_id
+
+
+@dataclass(slots=True)
+class BlindRaised:
+    """Notice from a blind's positions that somebody moves it up.
+
+    Feed every value of the blind through :meth:`update`. It answers
+    ``True`` for a position that is higher up than the position before
+    it. That covers what the caller did not send itself: the vendor app,
+    a group button, a scene.
+
+    - Only two positions seen one after the other in the current
+      connection are compared. A weather alarm or a missing value in
+      between starts anew: the alarm drives the blind up, and that is
+      not somebody's wish.
+    - While any weather alarm is on, nothing counts. It is not known
+      whether the server reports positions while an alarm drives a blind
+      up, before the alarm word replaces them; the alarm flag was seen
+      2.4 s before that word (2026-11-11).
+    """
+
+    _position: int | None = None
+
+    def update(self, value: BlindValue | None, *, weather_alarm: bool) -> bool:
+        """Feed the blind's current value and whether any weather alarm is on."""
+        previous = self._position
+        self._position = None if value is None else value.position
+        return (
+            not weather_alarm
+            and previous is not None
+            and self._position is not None
+            # Vendor percent: 0 is fully up.
+            and self._position < previous
+        )
 
 
 @dataclass(slots=True)

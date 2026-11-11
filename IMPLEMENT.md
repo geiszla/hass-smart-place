@@ -1595,3 +1595,108 @@ restart.
 - The electricity chart's range read still costs 3.4 s per round.
   Reading it less often than the STAND values (the server's values
   change every 15 minutes) would cut that further; not done.
+
+## 2026-11-11 (second entry) — "Lower after weather alarm" on the dashboard, off when the blind is moved up
+
+Asked for by the user: the switch was hard to find under *Configuration*
+on the blind's device. No command was sent to the vendor server and
+nothing was installed.
+
+### What changed
+
+- **One card on the Blinds view** (`smart_place_client/plan.py`,
+  `_locks_card`; `DashboardEntities.blind_locks`): an `entities` card
+  "Lower after weather alarm" below the buttons for all blinds, a row per
+  blind of that view with the blind's vendor name and the switch. With
+  several plans each Blinds view lists its own blinds.
+- **The switch is on no device** (`switch.py`): no `device_info`, the
+  name is "<blind> Lower after weather alarm" from the vendor's current
+  name. `async_remove_config_entry_device` removes it with a stale blind
+  device.
+- **Icon**: `icons.json` has an open and a closed lock (before: an
+  arrow); while the switch is off and an alarm holds the blind, the
+  entity's `icon` is the alarm's (`plan.weather_alarm_icon`).
+- **Moving the blind up switches it off**: `alarm.command_raises_blind`
+  for Home Assistant's own up command, `alarm.BlindRaised` for a position
+  higher up than the one before, not while
+  `SmartPlaceState.weather_alarm_on`. Rule and limits: DESIGN.md §11.
+
+### How the design came about
+
+The user asked for a lock icon next to each blind on the plan, then
+decided step by step, each time on a preview:
+
+1. A lock in the blind's marker does not fit on a phone: computed from
+   the reference flat for 320 to 1300 px, one more 24 px icon makes
+   "Bedroom balcony blinds" and "Bedroom blinds" overlap by about 25 px
+   at 360 to 412 px.
+2. Tiles below the buttons: at half width a phone cut the names of two
+   blinds of one room to the same text; at full width they were readable.
+   The weather icon stood in the lock's place during an alarm.
+3. The user then wanted switches on one card and the alarm as a separate
+   icon. The built-in row has one icon place and the control, so both
+   icons in one row need a custom row element (JavaScript shipped with
+   the integration). The user chose the built-in card: lock at the left,
+   switch at the right, the alarm's icon at the lock's place only while
+   the blind is not locked.
+4. The user asked to take the switch off the device page. Read in the
+   frontend source (20261028.5): a hidden entity is still listed there,
+   with "(hidden)", so the switch had to leave the device.
+
+### Findings
+
+- `SmartPlacePushEntity.async_added_to_hass` records the state it takes
+  for written before a subclass's own `async_added_to_hass` code runs.
+  What the first state depends on must therefore be set in `__init__`:
+  the switch's alarm (its icon) was seeded too late at first, and the
+  icon then did not go back to the lock when the alarm ended.
+- The reference bootstrap has the rain alarm on, so in the runtime checks
+  a move up counts only after `REGEN:00`.
+- An `entities` card whose rows are all switches shows a switch for all
+  of them in its title unless `show_header_toggle` is false.
+- A row's second line (`secondary_info`) shows the entity's state when
+  the named attribute is missing, so it cannot be used for a text that is
+  only there during an alarm without two rows per blind.
+
+### How it was checked
+
+- `./scripts/lint-check`: pass. `./scripts/test`: pass, with new tests
+  for `BlindRaised`, `command_raises_blind`, `weather_alarm_on`,
+  `weather_alarm_icon` and the card.
+- Type check of a copy against `homeassistant==2026.11.1`: 0 errors.
+  hassfest: valid.
+- Runtime checks on a real Home Assistant core with scripted sockets: 172
+  pass, ten of them new: the up command switches off, down and vent do
+  not; a move up from elsewhere switches off once and sends nothing; not
+  while the rain alarm is on; the alarm's own drive up and its end leave
+  the switch on and the blind is lowered; a move up during the waiting
+  time lowers nothing; a replay after a reconnect is no move up; the
+  icon; the card on a fresh install; a switch registered on the blind's
+  device is taken off it and keeps its entity id; a stale blind device
+  takes its switch with it. Four older checks were adapted (the Blinds
+  view's tiles, the switch's device).
+- In Chrome against the box, configuration in the page's memory only,
+  nothing clicked, the page reloaded afterwards: the card at 360 and
+  412 px and on the desktop, with the box's real states (one blind locked
+  and held by a rain alarm, one not locked and held, the rest free).
+
+### The dashboard on a new install
+
+Checked on the box: the dashboard "Smart Place" is the one the
+integration registers (mode `yaml`; what it serves equals the reply of
+`smart_place.get_plan_config`), with the views Lights, Blinds, Climate,
+Scenes and Intercom. The runtime checks build the same views on a fresh
+install. Made by hand on the box and not part of the integration: the
+dashboards "Home" (`/home-custom`), "Energy costs" and "Map", the order
+of the sidebar and the default dashboard, and the automations made from
+the shipped blueprints.
+
+### Needs a live test
+
+| Point | Assumption in the code |
+| --- | --- |
+| Positions while an alarm drives a blind up | Either none, or only after the alarm flag (rain, hail, wind) is on. If positions came before the flag, the switch would turn itself off at the start of an alarm. |
+| A move up in the vendor app | Reported as positions that count down, like the move down in the 2026-11-09 capture. |
+| A move with a wall switch | Unknown whether the server reports positions for it; if not, the switch stays on. |
+| What vent reports | Unknown; if the position goes up, the switch turns off. |
+| The position after an alarm | Not compared with the one before it, whatever it is. |

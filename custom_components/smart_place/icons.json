@@ -62,7 +62,10 @@
         }
       },
       "lower_after_alarm": {
-        "default": "mdi:arrow-collapse-down"
+        "default": "mdi:lock-open-variant-outline",
+        "state": {
+          "on": "mdi:lock"
+        }
       },
       "scene_switch": {
         "default": "mdi:palette-outline"

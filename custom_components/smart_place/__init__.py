@@ -716,6 +716,17 @@ async def async_remove_config_entry_device(
     """Allow deleting a device the server no longer lists.
 
     Devices are never removed automatically. A device this run created
-    entities for is still provided and cannot be deleted.
+    entities for is still provided and cannot be deleted. With a blind's
+    device goes its switch "Lower after weather alarm", which is on no
+    device.
     """
-    return not device_entry.identifiers & entry.runtime_data.device_identifiers
+    if device_entry.identifiers & entry.runtime_data.device_identifiers:
+        return False
+    registry = er.async_get(hass)
+    blind_prefix = f"{entry.entry_id}_blind_"
+    for _, identifier in device_entry.identifiers:
+        if identifier.startswith(blind_prefix):
+            unique_id = f"{entry.entry_id}_lower_after_alarm_{identifier.removeprefix(blind_prefix)}"
+            if entity_id := registry.async_get_entity_id(Platform.SWITCH, DOMAIN, unique_id):
+                registry.async_remove(entity_id)
+    return True

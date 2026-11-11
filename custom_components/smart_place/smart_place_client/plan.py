@@ -141,6 +141,11 @@ def climate_centre(left: int, top: int) -> Point:
     return (left + 88.0, top - 13.5)
 
 
+def weather_alarm_icon(alarm: str) -> str:
+    """Return the icon for a blind's weather alarm: ``rain`` / ``wind`` / ``hail``, or the vendor's own word."""
+    return _ALARM_ICONS.get(alarm, _OTHER_ALARM_ICON)[0]
+
+
 def png_size(data: bytes) -> tuple[int, int] | None:
     """Return ``(width, height)`` from a PNG header, ``None`` if ``data`` is no PNG."""
     if len(data) < _PNG_HEADER_LENGTH or data[:8] != _PNG_SIGNATURE or data[12:16] != b"IHDR":
@@ -179,16 +184,18 @@ class DashboardEntities:
     """Entity ids the dashboard may use; anything missing is left out.
 
     The three mappings are keyed by vendor id (a socket's switch entity
-    sits in ``lights`` next to the light entities). ``scenes`` are the
-    scene entities and the switches of on/off scenes, in the order to show
-    them; ``mutes`` the doorbell mutes. The three ``..._buttons`` are the
-    buttons that act on all lights, all blinds and all heating zones.
-    ``doors`` are the door buttons, in the order to show them; ``cameras``
-    the intercom cameras.
+    sits in ``lights`` next to the light entities). ``blind_locks`` are
+    the switches "lower after weather alarm", by the vendor id of their
+    blind. ``scenes`` are the scene entities and the switches of on/off
+    scenes, in the order to show them; ``mutes`` the doorbell mutes. The
+    three ``..._buttons`` are the buttons that act on all lights, all
+    blinds and all heating zones. ``doors`` are the door buttons, in the
+    order to show them; ``cameras`` the intercom cameras.
     """
 
     lights: Mapping[int, str] = field(default_factory=dict)
     blinds: Mapping[int, str] = field(default_factory=dict)
+    blind_locks: Mapping[int, str] = field(default_factory=dict)
     climates: Mapping[int, str] = field(default_factory=dict)
     scenes: Sequence[str] = ()
     mutes: Sequence[str] = ()
@@ -634,6 +641,47 @@ def _scenes_view(entities: DashboardEntities) -> dict[str, Any] | None:
     return {"title": "Scenes", "path": "scenes", "icon": "mdi:palette", "cards": [card]}
 
 
+def _on_view(device: _Device, plan_id: int | None, *, take_strays: bool, plans: Mapping[int, PlanConfig]) -> bool:
+    """Return whether a plan's view shows a device: it is on that plan, or its plan is unknown and the view takes those."""
+    return device.plan_id == plan_id or (take_strays and device.plan_id not in plans)
+
+
+def _locks_card(
+    blinds: Mapping[int, BlindConfig],
+    locks: Mapping[int, str],
+    plan_id: int | None,
+    *,
+    take_strays: bool,
+    plans: Mapping[int, PlanConfig],
+) -> list[dict[str, Any]]:
+    """Build the card that switches "lower after weather alarm": a row per blind of a plan's view that has the switch.
+
+    A row is named after the blind: the switch's own name also says what
+    it does, which the card's title says already. Its icon is the
+    switch's own: a lock, or the weather alarm that holds a blind that is
+    not locked.
+    """
+    rows = [
+        {"entity": locks[blind_id], "name": blind.name}
+        for blind_id, blind in sorted(blinds.items())
+        if blind_id in locks and _on_view(blind, plan_id, take_strays=take_strays, plans=plans)
+    ]
+    if not rows:
+        return []
+    return [
+        {
+            "type": "entities",
+            "title": "Lower after weather alarm",
+            # The switch in the title would turn every row on, and that lowers every blind.
+            "show_header_toggle": False,
+            # The closed lock of a row that is on takes the theme's colour for "on".
+            "color": "state",
+            "entities": rows,
+            "grid_options": {"columns": "full"},
+        }
+    ]
+
+
 def _markers(
     devices: Mapping[int, _Device],
     entity_ids: Mapping[int, str],
@@ -657,9 +705,9 @@ def _markers(
         entity_id = entity_ids.get(device_id)
         if entity_id is None:
             continue
-        on_plan = device.plan_id == plan_id
-        if not on_plan and not (take_strays and device.plan_id not in plans):
+        if not _on_view(device, plan_id, take_strays=take_strays, plans=plans):
             continue
+        on_plan = device.plan_id == plan_id
         centre = centre_of(device.left, device.top) if device.left is not None and device.top is not None else None
         if on_plan and image is not None and window is not None and centre is not None and _inside(centre, image):
             elements.extend(make(entity_id, device, centre, window))
@@ -709,7 +757,9 @@ def build_dashboard(
     with the plan label in the title; with one plan the label is not shown.
     Below the plan of the first plan's views are the buttons for all
     lights, all blinds and all heating zones, and on the Climate view the
-    ventilation. The Scenes view and the Intercom view follow the plan views.
+    ventilation. Below them, every Blinds view has one card with a switch
+    per blind for "lower after weather alarm". The Scenes view and the
+    Intercom view follow the plan views.
     Without any entity the dashboard has one view that says so. A light or
     socket whose vendor id is in ``protected_lights`` shows a lock and has
     no tap action; a long press opens its details.
@@ -749,7 +799,10 @@ def build_dashboard(
                 "Blinds",
                 "blinds",
                 "mdi:blinds",
-                [_press_tile(button) for button in entities.blind_buttons] if strays else [],
+                [
+                    *(_press_tile(button) for button in entities.blind_buttons if strays),
+                    *_locks_card(blinds, entities.blind_locks, plan_id, take_strays=strays, plans=plans),
+                ],
                 _markers(
                     blinds,
                     entities.blinds,
