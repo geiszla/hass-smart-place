@@ -58,7 +58,8 @@ _CORNER: Final = _ROW / 2
 _BADGE: Final = 40.0
 
 # Blind marker, one row: an icon for the position, then Down / Vent / Up as
-# in the vendor app. The position icon is set off by a wider gap.
+# in the vendor app. The position icon is set off by a wider gap. While the
+# blind moves, Stop stands in place of the button for that direction.
 _BLIND_START: Final = 6.0
 _BLIND_STATE: Final = _BLIND_START + _ICON + 6.0
 _BLIND_BUTTON_PITCH: Final = _ICON + 2.0
@@ -79,6 +80,8 @@ _HVAC_ACTIONS: Final[dict[str, tuple[str, str, str]]] = {
 }
 
 _UNAVAILABLE_STATES: Final = ["unknown", "unavailable"]
+_MOVING_STATES: Final = ["opening", "closing"]
+_STOP_ICON: Final = "mdi:stop"
 
 # A blind's position as a gauge: the outline of a window with a shutter
 # box, and drawn on its opening how far the blind is down. The stock icons
@@ -331,16 +334,20 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _
     """Build a blind's marker: its position as an icon, or the alarm that blocks it, then the direction buttons.
 
     The icon's element is as wide as the whole marker and carries its
-    backdrop; the buttons lie on its right part. The buttons exist twice,
-    switched by the cover's ``blocked`` attribute: with their action, and
-    greyed without one while a weather alarm blocks the blind (the
-    frontend compares attributes as text).
+    backdrop; the buttons lie on its right part. The buttons exist four
+    times, switched by the cover's state and its ``blocked`` attribute:
+    at rest; while the blind moves down or up, with Stop in place of the
+    button for that direction (a second press on the same place stops
+    the blind, as in the vendor app); and greyed without an action while
+    a weather alarm blocks the blind (the frontend compares attributes as
+    text).
     """
     more_info = {"action": "more-info"}
-    buttons = [("mdi:arrow-down", "Down", "cover.close_cover")]
+    # Icon, tooltip, action, and the cover state in which Stop replaces the button.
+    buttons: list[tuple[str, str, str, str | None]] = [("mdi:arrow-down", "Down", "cover.close_cover", "closing")]
     if blind.kind == BLIND_KIND_SLATTED:
-        buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt"))
-    buttons.append(("mdi:arrow-up", "Up", "cover.open_cover"))
+        buttons.append(("mdi:blinds-horizontal", "Vent", "cover.open_cover_tilt", None))
+    buttons.append(("mdi:arrow-up", "Up", "cover.open_cover", "opening"))
     width = _BLIND_STATE + len(buttons) * _BLIND_BUTTON_PITCH - (_BLIND_BUTTON_PITCH - _ICON) + _BLIND_END
     anchor = _anchor(centre, window, width / 2, _ROW / 2)
     side = (_ROW - _ICON) / 2
@@ -388,6 +395,19 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _
             ],
         }
 
+    def button_row(moving: str | None, conditions: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build the buttons for a blind at rest (``None``) or in the cover state ``moving``."""
+        return {
+            "type": "conditional",
+            "conditions": conditions,
+            "elements": [
+                _button(_STOP_ICON, "Stop", _perform("cover.stop_cover", entity_id), button_style)
+                if moving is not None and moving == stop_while
+                else _button(icon, title, _perform(action, entity_id), button_style)
+                for (icon, title, action, stop_while), button_style in zip(buttons, button_styles, strict=True)
+            ],
+        }
+
     return [
         # The position attribute is missing during a weather alarm and while unavailable.
         *(
@@ -412,17 +432,17 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _
             [attribute("blocked", state="true"), attribute("weather_alarm", state_not=list(_ALARM_ICONS))],
             color=_ALARM_COLOUR,
         ),
-        {
-            "type": "conditional",
-            "conditions": [
+        button_row(
+            None,
+            [
                 attribute("blocked", state_not="true"),
-                {"condition": "state", "entity": entity_id, "state_not": _UNAVAILABLE_STATES},
+                {"condition": "state", "entity": entity_id, "state_not": [*_UNAVAILABLE_STATES, *_MOVING_STATES]},
             ],
-            "elements": [
-                _button(icon, title, _perform(action, entity_id), button_style)
-                for (icon, title, action), button_style in zip(buttons, button_styles, strict=True)
-            ],
-        },
+        ),
+        *(
+            button_row(moving, [{"condition": "state", "entity": entity_id, "state": moving}])
+            for moving in _MOVING_STATES
+        ),
         {
             "type": "conditional",
             "conditions": [attribute("blocked", state="true")],
@@ -433,7 +453,7 @@ def _blind_elements(entity_id: str, blind: BlindConfig, centre: Point, window: _
                     {"action": "none"},
                     {**button_style, "opacity": _BLOCKED_OPACITY},
                 )
-                for (icon, title, _), button_style in zip(buttons, button_styles, strict=True)
+                for (icon, title, _, _), button_style in zip(buttons, button_styles, strict=True)
             ],
         },
     ]

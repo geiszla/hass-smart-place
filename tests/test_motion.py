@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from smart_place_client import BLIND_MOTION_TIMEOUT, BlindMotion, cover_position, parse_frame
+from smart_place_client import BLIND_MOTION_TIMEOUT, KNOWN_COMMANDS, BlindMotion, Commands, cover_position, parse_frame
+from smart_place_client.commands import CommandDefinition
 from smart_place_client.devices import parse_blind_value
+from smart_place_client.motion import BLIND_COMMAND_SETTLE
 from smart_place_client.protocol import NamedValue
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -136,3 +138,171 @@ def test_timeout_is_longer_than_the_longest_recorded_gap() -> None:
 def _distinct(positions: list[tuple[float, int]]) -> list[tuple[float, int]]:
     """Drop the frames that repeat the position of the frame before."""
     return [entry for index, entry in enumerate(positions) if index == 0 or entry[1] != positions[index - 1][1]]
+
+
+_BLIND = 8
+
+
+def _at(position: int | None) -> tuple[BlindMotion, _Clock]:
+    """A blind at rest at ``position`` (Home Assistant's scale: 100 is fully up)."""
+    clock = _Clock()
+    motion = BlindMotion(clock=clock)
+    motion.update(position)
+    return motion, clock
+
+
+def _send(
+    motion: BlindMotion, command: CommandDefinition, position: int | None, args: tuple[object, ...] = (_BLIND,)
+) -> bool:
+    """Note ``command`` for the blind, sent while it reports ``position``."""
+    return motion.command_sent(command, args, _BLIND, position)
+
+
+def _closing_from(position: int) -> tuple[BlindMotion, _Clock]:
+    """A blind that reported ``position`` and then a position further down, longer ago than the settle time."""
+    motion, clock = _at(position)
+    motion.update(position - 3)
+    assert motion.direction == "closing"
+    clock.now += BLIND_COMMAND_SETTLE
+    return motion, clock
+
+
+def test_a_command_from_rest_gives_the_direction_before_the_first_position() -> None:
+    motion, clock = _at(100)
+    assert _send(motion, Commands.BlindDown, 100) is True
+    assert motion.direction == "closing"
+    # The server repeats the old position until the blind reports the next one.
+    assert motion.update(100) is False
+    assert motion.direction == "closing"
+    clock.now += 0.9
+    assert motion.update(97) is True
+    assert motion.direction == "closing"
+    motion, _ = _at(40)
+    _send(motion, Commands.BlindUp, 40)
+    assert motion.direction == "opening"
+
+
+def test_a_command_that_moves_nothing_counts_only_for_the_timeout() -> None:
+    motion, clock = _at(40)
+    _send(motion, Commands.BlindDown, 40)
+    clock.now += BLIND_MOTION_TIMEOUT - 0.1
+    assert motion.direction == "closing"
+    clock.now += 0.1
+    assert motion.direction is None
+
+
+@pytest.mark.parametrize(("command", "position"), [(Commands.BlindDown, 0), (Commands.BlindUp, 100)])
+def test_a_command_towards_the_end_the_blind_is_at_starts_nothing(command: CommandDefinition, position: int) -> None:
+    motion, _ = _at(position)
+    assert _send(motion, command, position) is True
+    assert motion.direction is None
+
+
+def test_a_command_without_a_position_starts_nothing() -> None:
+    """A weather alarm holds the blind, or its value was not received yet."""
+    motion, _ = _at(None)
+    _send(motion, Commands.BlindDown, None)
+    assert motion.direction is None
+
+
+def test_the_command_for_the_direction_a_blind_moves_in_stops_it() -> None:
+    motion, clock = _closing_from(60)
+    assert _send(motion, Commands.BlindDown, 57) is True
+    assert motion.direction is None
+    # A position that was on its way when the command was sent does not start the blind again.
+    clock.now += 0.2
+    assert motion.update(54) is False
+    assert motion.direction is None
+    # At rest now: the same command starts it again.
+    _send(motion, Commands.BlindDown, 54)
+    assert motion.direction == "closing"
+
+
+def test_a_stop_also_ends_a_direction_that_only_a_command_gave() -> None:
+    motion, _ = _at(40)
+    _send(motion, Commands.BlindUp, 40)
+    _send(motion, Commands.BlindUp, 40)
+    assert motion.direction is None
+
+
+def test_a_blind_that_goes_on_after_a_stop_is_moving_again() -> None:
+    """The stop did not reach the blind, or somebody started it again."""
+    motion, clock = _closing_from(60)
+    _send(motion, Commands.BlindDown, 57)
+    clock.now += BLIND_COMMAND_SETTLE
+    assert motion.update(51) is True
+    assert motion.direction == "closing"
+
+
+def test_the_opposite_command_turns_a_moving_blind_round() -> None:
+    motion, clock = _closing_from(60)
+    _send(motion, Commands.BlindUp, 57)
+    assert motion.direction == "opening"
+    # A position further down that was on its way does not turn it back.
+    clock.now += 0.2
+    assert motion.update(54) is False
+    assert motion.direction == "opening"
+    assert motion.update(57) is True
+    assert motion.direction == "opening"
+
+
+def test_the_end_a_blind_was_sent_to_ends_the_movement_also_right_after_the_command() -> None:
+    motion, clock = _at(3)
+    _send(motion, Commands.BlindDown, 3)
+    clock.now += 0.2
+    motion.update(0)
+    assert motion.direction is None
+
+
+def test_a_group_button_starts_its_direction_and_does_not_stop_a_blind() -> None:
+    """The plan in the argument is not looked at: which blinds a group button moves is decided in the vendor system."""
+    motion, _ = _at(50)
+    assert _send(motion, Commands.BlindsGroupDown, 50, (1,)) is True
+    assert motion.direction == "closing"
+    _send(motion, Commands.BlindsGroupDown, 50, (1,))
+    assert motion.direction == "closing"
+    _send(motion, Commands.BlindsGroupUp, 50, (1,))
+    assert motion.direction == "opening"
+
+
+@pytest.mark.parametrize(
+    ("command", "args"), [(Commands.BlindVent, (_BLIND,)), (Commands.BlindsGroupMessage, ("JALZENTRAL2",))]
+)
+def test_after_vent_or_a_group_message_the_positions_say_where_the_blind_goes(
+    command: CommandDefinition, args: tuple[object, ...]
+) -> None:
+    motion, clock = _closing_from(60)
+    assert _send(motion, command, 57, args) is True
+    assert motion.direction is None
+    clock.now += BLIND_COMMAND_SETTLE
+    motion.update(54)
+    assert motion.direction == "closing"
+
+
+def test_commands_for_other_devices_change_nothing() -> None:
+    motion, _ = _closing_from(60)
+    concerned = {defn.name for defn in KNOWN_COMMANDS if _send(motion, defn, 57, defn.example_args)}
+    assert concerned == {"BlindUp", "BlindDown", "BlindVent", "BlindsGroupUp", "BlindsGroupDown", "BlindsGroupMessage"}
+    motion, _ = _closing_from(60)
+    for command in (Commands.BlindUp, Commands.BlindDown, Commands.BlindVent):
+        assert _send(motion, command, 57, (7,)) is False
+    # Light 8 is not blind 8.
+    assert _send(motion, Commands.LightToggle, 57) is False
+    assert motion.direction == "closing"
+
+
+def test_a_command_counts_from_the_position_that_comes_with_it() -> None:
+    """Sent at the end of a weather alarm, before the tracker was fed the first position after it."""
+    motion, _ = _at(None)
+    assert _send(motion, Commands.BlindDown, 100) is True
+    assert motion.direction == "closing"
+    # The frame's value arrives afterwards and changes nothing.
+    assert motion.update(100) is False
+    assert motion.direction == "closing"
+
+
+def test_a_position_that_comes_with_a_command_for_another_blind_is_not_taken() -> None:
+    """The caller's own feed must see the change, or it would not look again at the timeout."""
+    motion, _ = _at(60)
+    assert _send(motion, Commands.BlindDown, 57, (7,)) is False
+    assert motion.update(57) is True

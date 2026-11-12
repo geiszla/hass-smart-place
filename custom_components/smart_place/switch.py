@@ -44,6 +44,7 @@ from .smart_place_client import (
     LIGHT_KIND_SOCKET,
     BlindAlarm,
     BlindConfig,
+    BlindMotion,
     BlindRaised,
     BlindValue,
     CommandDefinition,
@@ -52,8 +53,8 @@ from .smart_place_client import (
     LowerAfterAlarm,
     SceneConfig,
     blind_can_be_lowered,
-    command_moves_blind,
     command_raises_blind,
+    cover_position,
     light_is_on,
     weather_alarm_icon,
 )
@@ -260,6 +261,11 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
     at once, any other move up when the blind reports it
     (``smart_place_client.alarm.BlindRaised``).
 
+    Turning it on lowers a blind that is not down. No down command is
+    sent, at the end of an alarm or when it is turned on, for a blind
+    that is already on its way down: the vendor system takes a second
+    down command as "stop" (``smart_place_client.motion.BlindMotion``).
+
     The switch state is kept in the config entry options: restored entity
     state is written too rarely for a setting.
 
@@ -280,6 +286,7 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_lower_after_alarm_{blind.id}"
         self._lowering = LowerAfterAlarm()
         self._raised = BlindRaised()
+        self._motion = BlindMotion()
         # Seeded here: the icon is part of the state that is recorded as written when the entity is added.
         self._alarm = BlindAlarm()
         self._alarm.update(self._value())
@@ -287,6 +294,11 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     def _value(self) -> BlindValue | None:
         return self._data.state.blind_values.get(self._blind_id)
+
+    def _position(self) -> int | None:
+        """Return the blind's position on Home Assistant's scale (100 is fully up), ``None`` without one."""
+        value = self._value()
+        return None if value is None or value.position is None else cover_position(value.position)
 
     def _blind_name(self) -> str:
         """Return the blind's current vendor name."""
@@ -318,6 +330,7 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
     def _async_follow_blind(self) -> None:
         value = self._value()
         self._alarm.update(value)
+        self._motion.update(self._position())
         if self._raised.update(value, weather_alarm=self._data.state.weather_alarm_on) and self.is_on:
             _LOGGER.info(
                 "%s (blind %d) was moved up: 'Lower after weather alarm' is turned off",
@@ -354,8 +367,20 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
         if self._lowering.due(self._value(), enabled=self.is_on, healthy=self._data.is_healthy):
             self._data.entry.async_create_task(self.hass, self._async_lower_after_alarm())
 
+    def _moving_down(self) -> bool:
+        """Return True, with one line in the log, for a blind on its way down: a second down command would stop it."""
+        if self._motion.direction != "closing":
+            return False
+        _LOGGER.info(
+            "%s (blind %d) is already moving down: no down command is sent", self._blind_name(), self._blind_id
+        )
+        return True
+
     async def _async_lower_after_alarm(self) -> None:
         """Send the down command. Nobody called for it, so a failure is logged, not raised."""
+        # An automation of the user may have closed the blind at the same alarm end.
+        if self._moving_down():
+            return
         _LOGGER.info("Lowering %s (blind %d): its weather alarm ended", self._blind_name(), self._blind_id)
         try:
             await self._async_issue(Commands.BlindDown, self._blind_id)
@@ -366,8 +391,8 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
 
     @callback
     def _async_command_issued(self, command: CommandDefinition, args: tuple[object, ...]) -> None:
-        """End a running wait when Home Assistant sends a command for this blind; its up command switches this off."""
-        if command_moves_blind(command, args, self._blind_id):
+        """Follow a command Home Assistant sends for this blind: it ends a running wait, and its up command switches this off."""
+        if self._motion.command_sent(command, args, self._blind_id, self._position()):
             self._lowering.cancel()
             self._async_cancel_wait_timer()
         if self.is_on and command_raises_blind(command, args, self._blind_id):
@@ -393,12 +418,14 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Switch the function on; a blind that is not down is lowered at once.
 
-        A blind that is blocked now is lowered when its alarm ends.
+        A blind that is blocked now is lowered when its alarm ends. A
+        blind that is already moving down gets no command: a second down
+        command would stop it.
         """
         if self.is_on:
             return
         self._async_store(on=True)
-        if blind_can_be_lowered(self._value()):
+        if blind_can_be_lowered(self._value()) and not self._moving_down():
             _LOGGER.info(
                 "Lowering %s (blind %d): 'Lower after weather alarm' was turned on and the blind is not down",
                 self._blind_name(),

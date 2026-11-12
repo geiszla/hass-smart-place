@@ -16,6 +16,7 @@ without running Home Assistant.
   - [Scenes and the voice assistant](#scenes-and-the-voice-assistant)
 - [Options](#options)
 - [Protected sockets](#protected-sockets)
+- [Stopping a blind](#stopping-a-blind)
 - [Blinds and weather alarms](#blinds-and-weather-alarms)
   - [Lower after weather alarm](#lower-after-weather-alarm)
 - [Rooms](#rooms)
@@ -238,7 +239,7 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Light (switch, LED) | `light`, on/off | One device per light |
 | Light (dimmer) | `light` with brightness | Built from the vendor web app's code; not tested on a real dimmer |
 | Socket | `switch` (outlet) | A switch, so a call for all lights (`light.turn_off`) does not cut socket power. The integration's own "All lights off" button does switch sockets. Can be protected against switching: see [Protected sockets](#protected-sockets) |
-| Blind (slatted, fabric, awning) | `cover` | Open, close, reported position. Slatted blinds: "tilt open" moves to the vent position. No command while a weather alarm blocks the blind: see [Blinds and weather alarms](#blinds-and-weather-alarms) |
+| Blind (slatted, fabric, awning) | `cover` | Open, close, stop, reported position. Slatted blinds: "tilt open" moves to the vent position. No command while a weather alarm blocks the blind: see [Blinds and weather alarms](#blinds-and-weather-alarms) |
 | Per blind: "Lower after weather alarm" | `switch` (configuration, on no device) | A setting of the integration, off by default, switched on the plan dashboard: see [Lower after weather alarm](#lower-after-weather-alarm) |
 | Heating zone | `climate` | Heat / Off, target 19–26 °C in whole degrees, measured temperature, heating or idle |
 | Scene that only triggers | `scene` | Usable from the voice assistant |
@@ -264,8 +265,11 @@ Good to know:
   error instead of risking a switch in the wrong direction. Within one second
   after the integration sent a scene or a group button, such a command waits
   for the rest of that second: the scene is about to change the states.
-- **Blinds have no stop and no "go to position" command.** The position shown
-  is the Smart Place server's own estimate.
+- **Blinds have no "go to position" command, and no stop command of their
+  own.** The position shown is the Smart Place server's own estimate. Smart
+  Place stops a blind that gets the command for the direction it already
+  moves in: Down while it moves down, Up while it moves up. The integration
+  works with that; see [Stopping a blind](#stopping-a-blind).
 - **Heating:** Smart Place setpoint 18 is shown as mode *Off*. Switching back
   to *Heat* restores the previous target. Heating is switched off only on the
   thermostat itself (mode *Off*, or the `smart_place.adjust_setpoint` action):
@@ -408,6 +412,49 @@ The protection is an option of the integration. It survives restarts, reloads
 and updates, but not removing the integration and adding it again: protect the
 socket again afterwards.
 
+## Stopping a blind
+
+Smart Place has no stop command. It stops a blind that gets the command for
+the direction it already moves in. The integration follows what each blind
+does and uses that:
+
+- **Stop** sends the command for the direction the blind moves in: the stop
+  button of a card, the action `cover.stop_cover`, and `cover.toggle` for a
+  moving blind. For a blind at rest Stop sends nothing, because the command
+  would start it.
+- **Open and close send nothing while the blind already moves that way.** A
+  second call from an automation, a script, a scene or a voice command
+  therefore does not stop the blind. The log says so at level INFO
+  (`<entity> is already closing: BlindDown not sent`).
+- **On the plan dashboard** Stop stands in place of the Down or Up button
+  while the blind moves that way. A second press on the same place stops the
+  blind, as in the Smart Place app.
+- The opposite command is always sent (Up while the blind moves down).
+
+How the integration knows that a blind moves:
+
+- from its positions: Smart Place reports about one per second while a blind
+  moves. This also covers a wall button, the Smart Place app and a scene;
+- from the commands Home Assistant sends: the blind's own up and down and the
+  blinds group buttons count at once, about a second before the first
+  position arrives.
+
+Smart Place does not say when a blind stops. A blind counts as moving until 6
+seconds after its last position, or until it reports the end it moves to.
+What follows from that:
+
+- A blind that was stopped on a wall button or in the Smart Place app, or
+  that arrived at its vent position, still reads "closing" or "opening" for
+  up to 6 seconds. During that time a command for the same direction is not
+  sent, and **Stop would start the blind again**. Wait until the blind no
+  longer reads as moving.
+- A blind that was started on a wall button, in the Smart Place app or by a
+  scene less than about a second ago is not known to move yet. A close sent
+  then stops it.
+- Not tried on the real system, so assumed: the opposite command turns a
+  moving blind round, and a blinds group button does not stop a blind that
+  already moves that way.
+
 ## Blinds and weather alarms
 
 Smart Place has rain, wind and hail alarms. While an alarm holds a blind,
@@ -495,9 +542,15 @@ How it works:
   or the connection is lost.
 - When it is time, the command is sent only if the switch is on, the
   connection is up, the blind is not blocked and it is not already fully
-  down. It is sent once and never repeated.
+  down. It is sent once and never repeated. It is also left out when the
+  blind is already moving down, for example because an automation of yours
+  closed it at the same alarm end: a second down command would stop it
+  (see [Stopping a blind](#stopping-a-blind)).
 - Turning the switch **on** lowers the blind at once if it is neither fully
   down nor blocked. If it is blocked, it is lowered when the alarm ends.
+  Nothing is sent for a blind that is already moving down: a second down
+  command would stop it (see [Stopping a blind](#stopping-a-blind), also for
+  how long a blind counts as moving).
   Turning the switch **off** ends a running wait and sends nothing; it does
   not raise the blind.
 - **Moving the blind up turns the switch off**: whoever pulls a blind up does
@@ -596,6 +649,8 @@ because the markers would overlap otherwise:
 - **Blinds** — per blind a small window that shows its position (empty: fully
   up, half filled: partly down, filled: fully down; a tap opens the details
   with the percentage), and buttons for down, vent (slatted blinds) and up.
+  While the blind moves down or up, a stop button stands in place of the
+  button for that direction ([Stopping a blind](#stopping-a-blind)).
   A [blocked blind](#blinds-and-weather-alarms) shows its alarm instead, with
   grey buttons. Below the plan: "All blinds up" and "All blinds down", then
   a card with a switch per blind for

@@ -354,7 +354,8 @@ class Commands:
         description=(
             "Move blind <id> fully up (wire: ``JALUP<id>``, single shot). The "
             "server reports the movement as ``JALICO<id>`` positions. There is no "
-            "stop and no go-to-position command."
+            "stop and no go-to-position command; sent to a blind that already moves "
+            "up, it stops the blind."
         ),
         encode=_encode_blind_up,
         example="JALUP8",
@@ -363,7 +364,10 @@ class Commands:
     )
     BlindDown = CommandDefinition(
         name="BlindDown",
-        description="Move blind <id> fully down (wire: ``JALDOW<id>``, single shot).",
+        description=(
+            "Move blind <id> fully down (wire: ``JALDOW<id>``, single shot). Sent to "
+            "a blind that already moves down, it stops the blind."
+        ),
         encode=_encode_blind_down,
         example="JALDOW8",
         example_args=(8,),

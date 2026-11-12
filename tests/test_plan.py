@@ -216,6 +216,7 @@ def test_blinds_view_has_a_position_gauge_and_direction_buttons(flat_state: Smar
         "Down",
         "Vent",
         "Up",
+        "Stop",
     }
     assert icons["Down"]["tap_action"] == {
         "action": "perform-action",
@@ -241,13 +242,65 @@ def test_blinds_view_has_a_position_gauge_and_direction_buttons(flat_state: Smar
     fabric_buttons = {
         e["title"]: e["style"]["transform"]
         for e in _elements_of(view, f"cover.blind_{fabric.id}")
-        if e["type"] == "icon" and e["tap_action"]["action"] == "perform-action"
+        if e["type"] == "icon" and e["tap_action"]["action"] == "perform-action" and e["title"] != "Stop"
     }
     # Without Vent the marker is 90 px wide.
     assert fabric_buttons == {
         "Down": "translate(calc(-50% + min(3px, 0.73vw)), -50%)",
         "Up": "translate(calc(-50% + min(29px, 7.04vw)), -50%)",
     }
+
+
+def test_a_moving_blind_has_stop_in_place_of_the_button_for_its_direction(flat_state: SmartPlaceState) -> None:
+    """A second press on the same place stops the blind; the other buttons stay."""
+    view = _views(_flat_dashboard(flat_state))["blinds"]
+    slatted = next(blind for blind in flat_state.blinds.values() if blind.name == "Office balcony door blinds")
+    fabric = next(blind for blind in flat_state.blinds.values() if blind.name == "Bedroom blinds")
+
+    def rows(entity_id: str) -> dict[str, list[dict[str, Any]]]:
+        """The button rows of a blind by the cover state they are shown in; "rest" for the row shown otherwise."""
+        found = {}
+        for element in _cards(view)[0]["elements"]:
+            conditions = element.get("conditions", [])
+            if not any(item.get("title") in ("Down", "Up") for item in element.get("elements", [])):
+                continue
+            if conditions == [{"condition": "state", "entity": entity_id, "state": conditions[0].get("state")}]:
+                found[conditions[0]["state"]] = element["elements"]
+            elif conditions[0].get("entity") == entity_id:
+                found["rest"] = element["elements"]
+        return found
+
+    entity_id = f"cover.blind_{slatted.id}"
+    by_state = rows(entity_id)
+    assert set(by_state) == {"rest", "closing", "opening"}
+    assert [button["title"] for button in by_state["rest"]] == ["Down", "Vent", "Up"]
+    assert [button["title"] for button in by_state["closing"]] == ["Stop", "Vent", "Up"]
+    assert [button["title"] for button in by_state["opening"]] == ["Down", "Vent", "Stop"]
+    down, vent, up = by_state["rest"]
+    stop = {
+        "type": "icon",
+        "icon": "mdi:stop",
+        "title": "Stop",
+        "tap_action": {
+            "action": "perform-action",
+            "perform_action": "cover.stop_cover",
+            "target": {"entity_id": entity_id},
+        },
+        "hold_action": {"action": "none"},
+    }
+    # Stop has the place and the size of the button it replaces; nothing else changes.
+    assert by_state["closing"] == [{**stop, "style": down["style"]}, vent, up]
+    assert by_state["opening"] == [down, vent, {**stop, "style": up["style"]}]
+    # The row at rest is not shown while the blind moves, so the two never lie on each other.
+    assert _conditions_of(view, entity_id, "Down")[1] == {
+        "condition": "state",
+        "entity": entity_id,
+        "state_not": ["unknown", "unavailable", "opening", "closing"],
+    }
+
+    fabric_rows = rows(f"cover.blind_{fabric.id}")
+    assert [button["title"] for button in fabric_rows["closing"]] == ["Stop", "Up"]
+    assert [button["title"] for button in fabric_rows["opening"]] == ["Down", "Stop"]
 
 
 def test_blind_position_is_a_gauge_with_three_levels(flat_state: SmartPlaceState) -> None:
@@ -293,9 +346,10 @@ def test_blocked_blind_shows_its_alarm_and_greyed_buttons(flat_state: SmartPlace
     position = icons["Fully up"]
 
     # The buttons with an action show unless blocked or unavailable, the greyed ones while blocked.
+    # (A moving blind has its own rows.)
     assert _conditions_of(view, entity_id, "Down") == [
         attribute("blocked", state_not="true"),
-        {"condition": "state", "entity": entity_id, "state_not": ["unknown", "unavailable"]},
+        {"condition": "state", "entity": entity_id, "state_not": ["unknown", "unavailable", "opening", "closing"]},
     ]
     assert _conditions_of(view, entity_id, "Down (blocked by a weather alarm)") == [attribute("blocked", state="true")]
     for title in ("Down", "Vent", "Up"):
@@ -785,7 +839,7 @@ def test_icon_buttons_do_nothing_on_a_long_press(flat_state: SmartPlaceState) ->
         if inner["type"] == "icon" and "entity" not in inner
     ]
     blocked = " (blocked by a weather alarm)"
-    assert {icon["title"].removesuffix(blocked) for icon in icons} == {"Down", "Vent", "Up", "Lower", "Raise"}
+    assert {icon["title"].removesuffix(blocked) for icon in icons} == {"Down", "Vent", "Up", "Stop", "Lower", "Raise"}
     assert all(icon["hold_action"] == {"action": "none"} for icon in icons)
     # A light's icon has an entity: a long press opens its details.
     light = _cards(views["lights"])[0]["elements"][0]

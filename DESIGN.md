@@ -911,7 +911,13 @@ and ``tests/fixtures/scene-echo.ndjson``.
   exposed.
 - Commands ``JALUP<id>``, ``JALDOW<id>`` for every blind; ``JALLUE<id>``
   ("vent") only for ``jalousie`` [JS]. No value, single shot. The vendor
-  app has no stop and no go-to-position command.
+  app has no stop and no go-to-position command. The command for the
+  direction a blind already moves in stops it: down while it moves down,
+  up while it moves up (seen by the user on the real system, 2026-11-12;
+  not in a capture). What the opposite command, vent and the group
+  commands do to a moving blind is not known [U]; the cover assumes that
+  the opposite command turns the blind round and that a group command
+  does not stop it.
 
 **Heating**
 
@@ -1407,17 +1413,28 @@ the waiting time and sends `Commands.BlindDown` through `_async_issue`
    `_async_issue`), or the blind reports another position than at the
    end of the alarm.
 4. When the wait is over (`due`): only if the switch is on, the
-   connection is healthy and the blind is not blocked again,
-   `JALDOW<id>` is sent once, whatever position is reported: right
-   after an alarm the server may still report the position from before
-   it. No retry; a send that fails is logged at WARNING. One INFO line
+   connection is healthy, the blind is not blocked again and it is not
+   already moving down (see below), `JALDOW<id>` is sent once, whatever
+   position is reported: right after an alarm the server may still
+   report the position from before it. No retry; a send that fails is logged at WARNING. One INFO line
    names the blind and the reason.
 5. An alarm end that was not seen live lowers nothing.
 
 Turning the switch on (a change from off to on) lowers the blind at once
 if its position is known and not fully down; a blocked blind is lowered by
-rule 2 when its alarm ends. Turning it off cancels a wait and sends
-nothing. A scene sent by Home Assistant does not cancel a wait by itself;
+rule 2 when its alarm ends. **Nothing is sent for a blind that is already
+moving down** (2026-11-12): the vendor system takes a second down command
+as "stop". The switch has its own `motion.BlindMotion` for this, fed with
+the blind's positions and with every command Home Assistant sends (see
+"cover" below for the rule and its limits). The lowering after an alarm
+(rule 4) asks it too. There the blind is up and at rest, so it matters
+in one case: an automation of the user that closes the blind at the same
+alarm end (the README has the trigger for it). On a real Home Assistant
+core both commands went out before this. A stop of a blind that moves up
+is the blind's up command on the wire, so it switches this off like any
+up command.
+
+Turning it off cancels a wait and sends nothing. A scene sent by Home Assistant does not cancel a wait by itself;
 if it moves the blind, the position change does. The tracker lives in the
 entity: an alarm that ends in the two seconds between the first bootstrap
 and the creation of the entities is not seen.
@@ -1430,8 +1447,8 @@ no area, and Home Assistant leaves entities with a category out of them);
 
 One `SmartPlaceCover` per `INHALTJalousien<N>`. Device class: `jalousie`
 → `BLIND`, `jalousiestoff` → `SHADE`, `markise` → `AWNING`. Features are
-set explicitly: `OPEN | CLOSE`, plus `OPEN_TILT` on slatted blinds (vent).
-No stop, no set-position. `current_cover_position = 100 − <a>`;
+set explicitly: `OPEN | CLOSE | STOP`, plus `OPEN_TILT` on slatted blinds
+(vent). No set-position. `current_cover_position = 100 − <a>`;
 `is_closed` when 0.
 `assumed_state` is set: the position is the server's own estimate, and
 Home Assistant then keeps both direction buttons enabled.
@@ -1468,10 +1485,67 @@ event), and it logs a warning once when an entity does this more than 100
 times per hour. The write gate and the kept alarm limit it to the real
 start and end of an alarm: a rebroadcast and a reconnect write nothing.
 
-`is_opening` / `is_closing` come from `smart_place_client.motion`: the
-sign of the change between two distinct positions, ended at 0 or 100, by
-a missing position, and by a timer 6 s after the last change (the gap
-between two position frames of a moving blind reaches 4 s).
+**What the blind does, stop, and no second command** (user decision,
+2026-11-12). The vendor system has no stop command; it stops a blind
+that gets the command for the direction it already moves in. Passed on
+as they came, a second `close_cover` from an automation, a script, a
+scene or a voice command stopped a blind half way. So the cover follows
+what the blind does and decides from that:
+
+- `open_cover` / `close_cover` send nothing while the blind already moves
+  that way (one INFO line). The opposite command is sent.
+- `stop_cover` sends the command for the direction the blind moves in,
+  and nothing for a blind at rest: the command would start it.
+  `cover.toggle` on a moving blind is a stop (Home Assistant's rule for a
+  cover with the stop feature).
+- On the plan, Stop stands in place of the Down or Up button while the
+  blind moves that way, so a second press on the same place still stops.
+
+`is_opening` / `is_closing`, and with them these decisions, come from the
+pure `motion.BlindMotion` (injectable clock, `tests/test_motion.py`):
+
+- From positions: the sign of the change between two distinct positions.
+  It ends at the end the blind moves to, by a missing position, and
+  `BLIND_MOTION_TIMEOUT` (6 s) after the last change (the gap between two
+  position frames of a moving blind reaches 4 s). A timer writes the
+  state then, because no frame arrives.
+- From the commands Home Assistant sends, heard through
+  `SmartPlaceData.command_listeners` before they go out
+  (`command_sent`), so the direction is known in the second before the
+  first position:
+  - the blind's own up or down for the direction it moves in: at rest
+    (this is the stop);
+  - any other up or down, also a blinds group button of any plan: that
+    direction, for 6 s, then the positions keep it going. Nothing starts
+    at the end the command moves to, or without a position;
+  - vent and a sub-menu's own group message: at rest until the positions
+    say otherwise.
+
+  A command comes with the blind's latest position. The lowering at the
+  end of an alarm is sent while the entities are told about the frame;
+  a tracker that was not fed that frame yet still has no position and
+  would start nothing.
+- For `BLIND_COMMAND_SETTLE` (1 s) after a command, a position that
+  disagrees with it changes nothing: it may have been on its way before
+  the command took effect. Without this a position that arrives just
+  after a stop made the blind "closing" again, and a second stop would
+  have started it.
+
+The cover and the switch "Lower after weather alarm" each have their own
+`BlindMotion` and feed it the same positions and commands. One shared
+tracker would depend on the cover entity, which the user can disable.
+
+Limits, all because the server says nothing when a blind stops:
+
+- A blind stopped from outside Home Assistant (wall button, vendor app),
+  or arrived at its vent position, counts as moving for up to 6 s more.
+  In that time a command for the same direction is left out, and a stop
+  sends that command and starts the blind again.
+- A blind started from outside Home Assistant less than about a second
+  ago is not known to move: a close sent then stops it.
+- Assumed, not tried: the opposite command turns a moving blind round
+  (if it stops the blind instead, the direction is wrong for up to 6 s),
+  and a group command does not stop a blind that already moves that way.
 
 "Up is just up": Home Assistant's scene restore calls `open_cover` and
 then `open_cover_tilt` for a cover stored as open. Sent to the vendor
@@ -1614,7 +1688,12 @@ image and their sizes did not.
   and, for a heating zone, room for the second row (`padding-bottom`).
   A light's backdrop is a disc drawn as a gradient inside the badge.
 - Blind: one row, 32 px high: a position gauge, then Down / Vent / Up;
-  90 px wide without Vent, 116 px with. Heating zone: two rows,
+  90 px wide without Vent, 116 px with. While the cover's state is
+  `closing` or `opening`, Stop (`mdi:stop`, `cover.stop_cover`) stands in
+  place of Down or Up, same place and size: the button rows are separate
+  conditional elements per state (at rest, closing, opening, blocked).
+  A fourth button did not fit: a lock in the marker was too wide on a
+  phone. Heating zone: two rows,
   112 x 48 px: measured temperature above the target (or the mode), − and
   + at the sides. An unavailable device shows its state alone on a
   backdrop; its buttons are hidden.

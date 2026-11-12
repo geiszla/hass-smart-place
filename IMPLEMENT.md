@@ -1760,3 +1760,166 @@ card starts black.
   of a weather alarm and a move up with the new version; a tap on a
   switch of the card (the box is live).
 
+
+## 2026-11-12 — Blinds: a second command no longer stops a blind, and a real stop
+
+The user: pressing the same blind button again stops the blind (down
+after down, up after up). For a second press that is wanted. But turning
+"Lower after weather alarm" on while the blind was going down stopped it
+too. After a look at where else this can happen, the user decided: open
+and close send nothing while the blind already moves that way, and the
+blind gets a real stop. No command was sent to the vendor server and
+nothing was installed on the box for this entry.
+
+### Cause
+
+- The vendor system takes the command for the direction a blind already
+  moves in as "stop". This answers the point "A repeated up/down while a
+  blind moves" of the table "Protocol points that need a live test"
+  above (seen by the user on the real system, not in a capture).
+- `SmartPlaceLowerAfterAlarmSwitch.async_turn_on` sent `JALDOW<id>` for
+  every blind with a known position that is not fully down, also for one
+  on its way down.
+- `SmartPlaceCover` passed every open and close on. A second
+  `close_cover` from an automation, a script, a scene or a voice command
+  stopped a blind half way, and so did a script that turned the switch
+  on and then closed the same blind.
+
+### What changed
+
+- `motion.BlindMotion` also takes the commands Home Assistant sends
+  (`command_sent`), not only the positions. The blind's own up or down
+  for the direction it moves in: at rest (the stop). Any other up or
+  down, and a blinds group button: that direction for 6 s, kept going by
+  the positions; this covers the time until the first position (0.9 s
+  after the command in the scene-echo fixture). Vent and a sub-menu's
+  group message: at rest until the positions say otherwise. For
+  `BLIND_COMMAND_SETTLE` (1 s) after a command a position that disagrees
+  with it changes nothing. The end stops now end a movement only when a
+  position arrives there: before, a repeated end position also did, and
+  that would have ended a direction a command had just given. A command
+  comes with the blind's latest position: the lowering at the end of an
+  alarm is sent while the entities are told about the frame, and a
+  tracker that had not been fed that frame yet still had no position and
+  started nothing.
+- `cover.py`: the feature `STOP`. `open_cover` / `close_cover` send
+  nothing while the blind already moves that way (one INFO line);
+  `stop_cover` sends the command for the direction the blind moves in
+  and nothing for a blind at rest. The cover listens to
+  `command_listeners`, writes the new direction at once and starts the
+  timeout timer. `is_opening` / `is_closing` therefore change at the
+  command, not a second later.
+- `switch.py`: "Lower after weather alarm" has its own `BlindMotion` and
+  sends no down command while the blind moves down (one INFO line): not
+  when it is turned on (the switch is still stored as on), and not at
+  the end of an alarm. The second case was found with a runtime check:
+  an automation with the README's trigger for the end of an alarm and
+  the action `cover.close_cover`, next to the switch, put two `JALDOW`
+  on the wire.
+- `entity.py`, the write gate of every entity: a call from inside a
+  write of the same entity waits for that write and then writes again.
+  Found with the same runtime check: the automation reacts to the
+  cover's new state inside Home Assistant's state write and closes the
+  blind; the cover wrote "closing" from its command listener, and Home
+  Assistant then finished the first write with the state it had computed
+  before ("open"). The commands were right, the shown state was wrong
+  until the next changed frame. The same could happen to a light or
+  switch that an automation switches back from its own state change.
+- `plan.py`: while the cover's state is `closing` or `opening`, Stop
+  (`mdi:stop`, `cover.stop_cover`) stands in place of the Down or Up
+  button. The button rows are separate conditional elements per state:
+  at rest, closing, opening, blocked. A second press on the same place
+  stops the blind as before, and the marker keeps its size.
+- README.md ("Stopping a blind"), DESIGN.md (cover, switch, protocol
+  notes, plan marker) and the command descriptions say all this.
+
+### Decisions made here
+
+- **Stop in place of the direction button, not a fourth button.** The
+  marker has no room for one on a phone (a lock in the marker was tried
+  and dropped on 2026-11-11).
+- **One tracker per entity, not one per blind.** The cover and the switch
+  feed the same positions and commands to their own `BlindMotion`. A
+  shared one would depend on the cover entity, which the user can
+  disable.
+- **A stop for a blind at rest sends nothing.** The only way to stop is a
+  direction command, and that starts a blind at rest.
+- **The opposite command is taken to turn a moving blind round**, and a
+  **blinds group button is taken not to stop** a blind that already moves
+  that way. Neither was tried. If the opposite command stops the blind
+  instead, the direction is wrong for up to 6 s.
+
+### What was checked and not changed
+
+- **`cover.toggle`.** With the stop feature Home Assistant stops a moving
+  cover and otherwise opens or closes (`cover/entity.py`,
+  `_get_toggle_function`, core 2026.11.1): it goes through the methods
+  above.
+- **The lowering after an alarm, apart from the case above.** Without a
+  waiting time the command goes out on the first position after the
+  alarm, when the blind is up. With a waiting time any new position and
+  any command from Home Assistant ends the wait. Left over: a press on a
+  wall button or in the vendor app in the last second of a wait, before
+  the blind reports a position.
+- **The blinds group buttons.** They send the vendor's group command.
+  Not known: whether it stops a blind that already moves that way, and
+  whether a second press stops all blinds.
+- **Vendor scenes.** One command; what it does to a moving blind is
+  decided in the vendor system. A scene counts as a move only when the
+  blind reports its first position.
+- **Vent.** Not known whether a second vent command, or vent for a moving
+  blind, stops it. The rule that drops the tilt-open after an open
+  within 2 s is unchanged; it now also holds when the open itself was
+  left out.
+- **On the box** (read only: one `search/related` query for the config
+  entry, one `automation/config` query): no script uses the entities,
+  and the only automation outside the blueprints activates the vendor
+  scene "Evening".
+
+### Limits
+
+All because the server says nothing when a blind stops:
+
+- A blind stopped on a wall button or in the vendor app, or arrived at
+  its vent position, counts as moving for up to 6 s more. In that time a
+  command for the same direction is left out, the plan shows Stop, and a
+  stop sends the direction command and starts the blind again.
+- A blind started from outside Home Assistant less than about a second
+  ago is not known to move: a close sent then stops it, and turning the
+  switch on stops it.
+- While the server answers a chart read (3.4 s, once in five minutes) it
+  holds commands back. A position that arrives more than 1 s after a
+  stop was sent makes the blind "moving" again for 6 s.
+
+### How it was checked
+
+- `./scripts/lint-check`: pass. `./scripts/test`: 612 pass, 17 of them
+  new (`tests/test_motion.py`, `tests/test_plan.py`).
+- Type check of the Home Assistant modules against
+  `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  196 pass. 22 are new: a second close or open sends nothing, from a
+  command of Home Assistant and from positions seen from elsewhere; stop
+  sends the direction command once, a second stop and a stop at rest
+  send nothing; a position on its way after a stop does not make the
+  blind "closing" again; the opposite command is sent; the state returns
+  to rest after the timeout; `cover.toggle`; a group button gives the
+  direction; a scene restore to "closed" does not stop a closing blind;
+  the switch turned on before or after a close, after a stop, for a
+  blind that moves down or up; an automation and the switch lower a
+  blind once at the alarm end and the cover reads "closing" (5 runs).
+  Six earlier checks were adapted to the stop feature and the new
+  button rows.
+- Not looked at in a browser: the marker keeps its place and size, only
+  the icon and the action of one button change with the state, and a
+  moving blind cannot be shown without moving one. The rows were checked
+  as configuration.
+
+### Needs a live test
+
+| Point | Assumption in the code |
+| --- | --- |
+| The opposite command for a moving blind | It turns the blind round. |
+| A group command for blinds that already move that way | It does not stop them. |
+| Whether the server sends one more position when a blind is stopped | Handled either way: for 1 s after the stop a position does not count as a movement. |
+| Stop on the plan and on a card, with a real blind | The Stop button appears at once after a press in Home Assistant and about a second after a start from elsewhere. |

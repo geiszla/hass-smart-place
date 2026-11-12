@@ -131,6 +131,8 @@ class SmartPlacePushEntity(Entity):
     _data: SmartPlaceData
     _sp_last_written: CalculatedState | None = None
     _sp_expectation_timer: CALLBACK_TYPE | None = None
+    _sp_writing = False
+    _sp_write_again = False
 
     @property
     def available(self) -> bool:
@@ -152,12 +154,29 @@ class SmartPlacePushEntity(Entity):
         successful write: if ``async_write_ha_state`` raises (caught +
         logged by the fan-out in ``__init__.py``), the next notification
         retries instead of skipping the value forever.
+
+        A call from inside a write of this entity waits for that write:
+        an automation that reacts to the entity's new state can send a
+        command for it at once, and Home Assistant finishes the first
+        write afterwards with the state it had computed before. Seen
+        with a blind closed by an automation at the end of its weather
+        alarm: it read "open" while it was closing.
         """
+        if self._sp_writing:
+            self._sp_write_again = True
+            return
         calculated = self._async_calculate_state()
         if calculated == self._sp_last_written:
             return
-        self.async_write_ha_state()
+        self._sp_writing = True
+        try:
+            self.async_write_ha_state()
+        finally:
+            self._sp_writing = False
         self._sp_last_written = calculated
+        if self._sp_write_again:
+            self._sp_write_again = False
+            self._handle_frame_update()
 
     def _command_refused(self, command: CommandDefinition, args: tuple[object, ...]) -> bool:
         """Return True, with one line in the log, for a command for a protected device."""
