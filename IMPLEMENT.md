@@ -1915,6 +1915,23 @@ All because the server says nothing when a blind stops:
   moving blind cannot be shown without moving one. The rows were checked
   as configuration.
 
+### On the box (installed 2026-11-12, commit a9b9dc0)
+
+- Pushed to `main`, `ha-live update --version a9b9dc0`, no Marketplace
+  error in the core journal, restart. The entry loaded; no log entry of
+  the integration; the update entity reports a9b9dc0 as installed and
+  latest.
+- The eight blinds that no alarm holds have the stop feature
+  (`supported_features` 27 for slatted blinds, 11 for the others); the
+  two that a weather alarm held at that time have 0, as before.
+- The plan configuration has 20 `cover.stop_cover` actions: a row for
+  "closing" and one for "opening" per blind.
+- The ten switches "Lower after weather alarm" are there, two on and
+  eight off. No entity of the integration is unavailable.
+- Not seen: a blind that moves. No command was sent, so the Stop button
+  on the plan and on a card, a stop, and a second close that is left out
+  were not seen on the real system.
+
 ### Needs a live test
 
 | Point | Assumption in the code |
