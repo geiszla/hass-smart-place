@@ -191,86 +191,11 @@ def test_a_command_that_moves_nothing_counts_only_for_the_timeout() -> None:
     assert motion.direction is None
 
 
-_RUN_TIME = 39
-
-
-def _reported_at(position: int) -> tuple[BlindMotion, _Clock]:
-    """A blind with a run time that the server reports at rest at ``position``."""
-    clock = _Clock()
-    motion = BlindMotion(clock=clock, run_time=_RUN_TIME)
-    motion.update(position)
-    return motion, clock
-
-
-@pytest.mark.parametrize(
-    ("command", "position", "direction"), [(Commands.BlindDown, 0, "closing"), (Commands.BlindUp, 100, "opening")]
-)
-def test_a_command_towards_the_end_the_blind_is_reported_at_counts_for_the_run_time(
-    command: CommandDefinition, position: int, direction: str
-) -> None:
-    """The reported position can be wrong: the blind then moves and no position follows."""
-    motion, clock = _reported_at(position)
+@pytest.mark.parametrize(("command", "position"), [(Commands.BlindDown, 0), (Commands.BlindUp, 100)])
+def test_a_command_towards_the_end_the_blind_is_at_starts_nothing(command: CommandDefinition, position: int) -> None:
+    motion, _ = _at(position)
     assert _send(motion, command, position) is True
-    assert motion.direction == direction
-    assert motion.remaining == _RUN_TIME
-    # The server goes on repeating the position.
-    assert motion.update(position) is False
-    clock.now += _RUN_TIME - 0.1
-    assert motion.direction == direction
-    clock.now += 0.1
     assert motion.direction is None
-    assert motion.remaining is None
-
-
-def test_without_a_run_time_such_a_command_counts_for_the_timeout() -> None:
-    motion, _ = _at(0)
-    _send(motion, Commands.BlindDown, 0)
-    assert motion.direction == "closing"
-    assert motion.remaining == BLIND_MOTION_TIMEOUT
-
-
-def test_a_second_command_in_the_run_time_is_the_stop() -> None:
-    """Seen on 2026-11-13: the second down command came 9 s after the first and stopped the blind."""
-    motion, clock = _reported_at(0)
-    _send(motion, Commands.BlindDown, 0)
-    clock.now += 9
-    assert motion.direction == "closing"
-    _send(motion, Commands.BlindDown, 0)
-    assert motion.direction is None
-
-
-def test_the_opposite_command_in_the_run_time_turns_the_blind_round() -> None:
-    motion, clock = _reported_at(0)
-    _send(motion, Commands.BlindDown, 0)
-    clock.now += 13
-    _send(motion, Commands.BlindUp, 0)
-    assert motion.direction == "opening"
-    assert motion.remaining == BLIND_MOTION_TIMEOUT
-
-
-def test_a_position_in_the_run_time_says_where_the_blind_goes() -> None:
-    motion, clock = _reported_at(0)
-    _send(motion, Commands.BlindDown, 0)
-    clock.now += BLIND_COMMAND_SETTLE
-    assert motion.update(3) is True
-    assert motion.direction == "opening"
-    assert motion.remaining == BLIND_MOTION_TIMEOUT
-
-
-@pytest.mark.parametrize(("command", "position"), [(Commands.BlindsGroupDown, 0), (Commands.BlindsGroupUp, 100)])
-def test_a_group_button_starts_nothing_at_the_end_it_moves_to(command: CommandDefinition, position: int) -> None:
-    motion, _ = _reported_at(position)
-    assert _send(motion, command, position, (1,)) is True
-    assert motion.direction is None
-
-
-def test_remaining_counts_down_to_the_end_of_the_timeout() -> None:
-    motion, clock = _at(40)
-    assert motion.remaining is None
-    motion.update(45)
-    assert motion.remaining == BLIND_MOTION_TIMEOUT
-    clock.now += 2
-    assert motion.remaining == BLIND_MOTION_TIMEOUT - 2
 
 
 def test_a_command_without_a_position_starts_nothing() -> None:

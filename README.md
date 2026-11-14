@@ -461,16 +461,16 @@ What follows from that:
 
 **The position is Smart Place's own estimate, and it can be wrong.** A blind
 was reported as fully down while it was up; its down command then moved it,
-and Smart Place reported no position for that run. So after an up or down
-command towards the end where the blind is already reported, the blind counts
-as moving for its run time (about 30 to 60 seconds, as Smart Place lists it;
-6 seconds if it lists none):
+and Smart Place reported no position for that run. An up or down command
+towards the end where the blind is already reported is therefore always
+sent, but Home Assistant cannot follow what it does:
 
-- it reads "closing" or "opening", and Stop is offered;
-- a second command for the same direction is not sent, so it does not stop
-  the blind;
-- a blind that really is at that end also reads "closing" or "opening" for
-  that time, although nothing moves.
+- the blind keeps reading "closed" (or "open"), and no Stop is offered;
+- a second command for the same direction is sent too, and stops the blind
+  if it is on its way. **Press once and wait.**
+
+This is a first answer; what Home Assistant should do here is decided when
+more such cases are in the log.
 
 ## Blinds and weather alarms
 

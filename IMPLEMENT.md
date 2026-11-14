@@ -2136,3 +2136,43 @@ Assistant; the Bedroom blinds were up when the user found them.
 - Not seen: a press of "All blinds up/down" and a command for a blind
   that is reported at that end. No command was sent from here.
 - The user asked for a look at the logs after a week (2026-11-21).
+
+## 2026-11-14 — A command towards a reported end: sent, and nothing else (the run-time rule is taken back)
+
+The user, after the install of 020c6b7: for a blind that Home Assistant
+takes to be down, Down is to send the command, but no stop button is
+shown and no timer runs; the same for up. The final behaviour is decided
+when the logs are read in a week.
+
+That is the tracker's rule from before 020c6b7 ("nothing starts at the
+end the command moves to"), so that part is taken back:
+
+- `motion.py`, `cover.py`, `switch.py` and `tests/test_motion.py` are as
+  in 6be8dba again: no `BlindMotion.run_time`, no `remaining`, the
+  cover's timer runs for the fixed timeout. One sentence in the tracker's
+  docstring says that the reported end can be wrong.
+- Kept: "All blinds up/down" through each blind's own entity, and the
+  log line for every blind call. For a command at a reported end it
+  reads `close asked by ...; position 0 (0 is down), at rest`: these
+  lines are what the check of 2026-11-21 counts.
+
+What follows, as before 020c6b7: the cover keeps reading "closed" (or
+"open") while such a blind moves, and a second command for the same
+direction is sent and stops it.
+
+"All blinds up" right after "All blinds down" still sends the up
+commands (the covers read "closing"); the blinds then read "open" at
+rest, because they are still reported up.
+
+### How it was checked
+
+- `./scripts/lint-check`: clean. `./scripts/test`: 612 pass.
+- Type check of the Home Assistant modules against
+  `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  213 pass. The seven checks for the run-time rule are replaced by five:
+  a close for a blind reported down is sent and the cover stays
+  "closed" with both trackers at rest; a second close is sent too; stop
+  sends nothing; the state never reads "closing", so the plan shows no
+  Stop; the same for an open at the upper end.
+

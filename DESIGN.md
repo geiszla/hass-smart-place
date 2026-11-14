@@ -1538,14 +1538,7 @@ pure `motion.BlindMotion` (injectable clock, `tests/test_motion.py`):
     (this is the stop);
   - any other up or down, also a blinds group button of any plan: that
     direction, for 6 s, then the positions keep it going. Nothing starts
-    without a position;
-  - at the end the command moves to, the blind's own up or down: that
-    direction for the blind's run time (`BlindConfig.runtime_s`, 29 to
-    60 s here; 6 s if the server lists none). The reported position can
-    be wrong, and then the blind moves without a position following
-    (2026-11-13; user decision, 2026-11-14). `BlindMotion.remaining` says
-    how long a direction lasts without a new position; the cover's timer
-    uses it. A group button starts nothing there;
+    at the end the command moves to, or without a position;
   - vent and a sub-menu's own group message: at rest until the positions
     say otherwise.
 
@@ -1571,12 +1564,15 @@ Limits, all because the server says nothing when a blind stops:
   sends that command and starts the blind again.
 - A blind started from outside Home Assistant less than about a second
   ago is not known to move: a close sent then stops it.
-- A blind that really is at the end it is reported at counts as moving
-  for its run time after a command towards that end. In that time a
-  command for the same direction is left out, and a stop sends that
-  command.
-- A blind whose reported position is wrong and that is moved from
-  outside Home Assistant: no position follows, so nothing is known.
+- A blind whose reported position is wrong (see "Blinds" in the control
+  protocol): a command towards the end it is reported at is sent and
+  moves it, but counts as starting nothing. The cover keeps its state and
+  offers no stop, and a second call for that direction is sent and stops
+  the blind (2026-11-13). Counting such a command as a movement for the
+  blind's run time was installed for some hours on 2026-11-14 and taken
+  back the same day (user decision): the command is sent and nothing
+  else changes, until the logs of the following week say how often the
+  reported end is wrong.
 - For 6 s after a blinds group command every blind counts as moving that
   way, also one the vendor system leaves out of it. The integration no
   longer sends the plan-wide group commands, so this only concerns the
