@@ -1940,3 +1940,83 @@ All because the server says nothing when a blind stops:
 | A group command for blinds that already move that way | It does not stop them. |
 | Whether the server sends one more position when a blind is stopped | Handled either way: for 1 s after the stop a position does not count as a movement. |
 | Stop on the plan and on a card, with a real blind | The Stop button appears at once after a press in Home Assistant and about a second after a start from elsewhere. |
+
+## 2026-11-14 — Two reports about blinds: what the box shows, and a log line for every blind call
+
+The user reported two things. Both were looked at on the box (core
+journal, history, logbook). No command was sent to the vendor server.
+
+### Report 1: "All blinds up/down" leave out the two outer balcony blinds
+
+- The buttons send one message, `JALUPZENTRAL1` or `JALDOWZENTRAL1`, as
+  the vendor app does. Which blinds follow is set inside the vendor
+  system. The user sees the same in the vendor app.
+- Seen on the box, 2026-11-14 10:18:47: after "All blinds up" the server
+  reported positions for the Bath, Bathroom window and Bedroom blinds
+  (1, 10, 3), which were down. For the Office balcony blinds (7), also
+  down, it reported none: the cover read "opening" for the 6 s the
+  tracker assumes after a group button and then "closed" again. The
+  Bedroom balcony blinds (2) were up at every press the history holds, so
+  for them there is only the user's observation.
+- Both blinds were lowered on 2026-11-13 19:49:55 by something Home
+  Assistant did not send (four lights off and eight blinds down within
+  two seconds, probably a vendor scene). So they can be moved by a group
+  action, only not by this one.
+- Nothing in the config frames tells the two apart: same plan, kind
+  `jalousiestoff` like the blinds 3, 4 and 10.
+- A side effect in Home Assistant: for 6 s after a group button every
+  cover counts as moving that way, also these two. An up command for one
+  of them in that time is not sent.
+
+Nothing was changed. Proposed to the user: the two buttons move every
+blind through its own cover entity, as "All lights off/on" do.
+
+### Report 2: a blind that read "closed" was up, and did not simply go down
+
+What the box holds for the Bedroom blinds (3) on 2026-11-13:
+
+| Time | What |
+| --- | --- |
+| 19:49:54 | Not sent by Home Assistant: four lights off, then eight blinds start down, the Bedroom blinds last (19:49:56). The server reports them fully down at 19:50:26. |
+| until 23:16 | No position for this blind. The user finds it up. |
+| 23:16:20 | `JALDOW3`. The blind starts down (user). The cover stays "closed": no position arrives, and a command towards the end the blind is reported at counts as starting nothing. |
+| 23:16:29 | `JALDOW3` again. The blind stops (user). |
+| 23:16:32 | `JALDOW3` again. |
+| 23:16:36 | `JALUP3`, a `cover.open_cover` call of a user. The server reports a full run up until 23:17:09. |
+| 23:17:11 | `JALDOW3`, a `cover.close_cover` call of the same user. Fully down at 23:17:42; from then on the reports and the blind agree. |
+
+- Home Assistant showed what the server reported. Why the server's
+  position was wrong cannot be seen from here: either the blind did not
+  follow at 19:49:56, or it was moved up later without the server
+  noticing. The server does report what wall switches do (lights and
+  blinds changed that evening and the next morning without a command of
+  Home Assistant).
+- The three down commands are three close calls: nothing else sends
+  `JALDOW` for a blind whose switch "Lower after weather alarm" is off,
+  and no automation ran. Who made them is not recorded: Home Assistant
+  keeps the caller only with a state change, and the state did not
+  change.
+- The second and third command went out because the tracker took the
+  blind to be at rest. The vendor system took the second as "stop".
+
+### What changed
+
+`cover.py`: every open, close, stop and vent call writes one INFO line
+with who asked (the user's name, or the context id of a call without a
+user), the position and what the tracker takes the blind to do:
+`cover.bedroom_blinds: close asked by user <name>; position 0 (0 is
+down), at rest`.
+
+Not changed, proposed to the user: a command towards the end a blind is
+reported at counts as a movement for the blind's run time, so the cover
+shows it, offers stop and sends no second command.
+
+### How it was checked
+
+- `./scripts/lint-check`: clean. `./scripts/test`: 612 pass.
+- Type check of the Home Assistant modules against
+  `homeassistant==2026.11.1`: 0 errors.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  the 26 checks for covers, stop and a moving blind pass, and 2 new ones
+  for the log line (a call with and without a user, a second close that
+  is not sent, a stop at rest).

@@ -238,6 +238,23 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
         """Opt in to in-place entity_id changes: the timer is not keyed on the entity_id."""
         super().async_entity_id_changed(old_entity_id)
 
+    async def _async_log_call(self, asked: str) -> None:
+        """Log who asks for what, and what the blind is taken to do.
+
+        A call that changes no state leaves no other trace: a blind that
+        read closed was up and got three down commands (2026-11-13).
+        """
+        context = self._context
+        user = await self.hass.auth.async_get_user(context.user_id) if context and context.user_id else None
+        _LOGGER.info(
+            "%s: %s asked by %s; position %s (0 is down), %s",
+            self.entity_id,
+            asked,
+            f"user {user.name}" if user else f"no user (context {context.id if context else None})",
+            self.current_cover_position,
+            self._motion.direction or "at rest",
+        )
+
     async def _async_move(self, direction: str) -> None:
         """Send the command for ``direction``, unless the blind already moves that way: it would stop."""
         command = _DIRECTION_COMMANDS[direction]
@@ -248,11 +265,13 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Move the blind up."""
+        await self._async_log_call("open")
         await self._async_move("opening")
         self._opened_at = time.monotonic()
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Move the blind down."""
+        await self._async_log_call("close")
         await self._async_move("closing")
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
@@ -260,6 +279,7 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
 
         A blind at rest gets no command: it would start to move.
         """
+        await self._async_log_call("stop")
         direction = self._motion.direction
         if direction is None:
             _LOGGER.info("%s is not moving: nothing is sent to stop it", self.entity_id)
@@ -268,6 +288,7 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
 
     async def async_open_cover_tilt(self, **kwargs: Any) -> None:
         """Move a slatted blind to its vent position."""
+        await self._async_log_call("vent")
         if self._opened_at is not None and time.monotonic() - self._opened_at < _OPEN_THEN_TILT_WINDOW:
             return
         await self._async_issue(Commands.BlindVent, self._blind_id)

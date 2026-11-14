@@ -918,6 +918,13 @@ and ``tests/fixtures/scene-echo.ndjson``.
   commands do to a moving blind is not known [U]; the cover assumes that
   the opposite command turns the blind round and that a group command
   does not stop it.
+- The position is the server's own estimate and can be wrong: on
+  2026-11-13 the server reported a blind as fully down (lowered with
+  others, probably by a vendor scene), and the user found it up three
+  hours later; no position was reported in between. A down command for a blind that is reported as
+  fully down is passed on (the blind moved), no position follows, and a
+  second down command 9 s later stopped the blind (seen by the user and
+  in the command log of the box; not in a capture).
 
 **Heating**
 
@@ -961,6 +968,15 @@ and ``tests/fixtures/scene-echo.ndjson``.
   such a message is [U]. The integration does not go by the name (it can
   be changed): the plan-wide sub-menu is the one whose group message is
   ``JALZENTRAL<plan>``.
+  Which blinds follow these two commands is set inside the vendor
+  system. Here blinds 2 and 7 (the fabric blinds at the outer edge of the
+  two balconies) do not, in the vendor app either (user, 2026-11-14). On
+  the box, 2026-11-14: after ``JALUPZENTRAL1`` the server reported
+  positions for the blinds 1, 3 and 10, which were down, and none for
+  blind 7, which was down too. Both were lowered on 2026-11-13 together
+  with four lights and six other blinds by something Home Assistant did
+  not send, probably a vendor scene. No config frame tells the two apart
+  from the other blinds.
 - The value frames ``LEUCHTENZENTRAL<n>`` and ``JALZENTRAL<n>`` are
   placeholders and stay ignored.
 - ``MUTE<n>:00|01``, ``01`` = doorbell muted; command ``MUTE<n>`` =
@@ -1543,6 +1559,14 @@ Limits, all because the server says nothing when a blind stops:
   sends that command and starts the blind again.
 - A blind started from outside Home Assistant less than about a second
   ago is not known to move: a close sent then stops it.
+- A blind whose reported position is wrong (see "Blinds" in the control
+  protocol): a command towards the end it is reported at is sent and
+  moves it, but counts as starting nothing. The cover keeps its state and
+  offers no stop, and a second call for that direction is sent and stops
+  the blind (2026-11-13).
+- For 6 s after a blinds group button every blind counts as moving that
+  way, also one the vendor system leaves out of the group command: its
+  own command for that direction is not sent in that time.
 - Assumed, not tried: the opposite command turns a moving blind round
   (if it stops the blind instead, the direction is wrong for up to 6 s),
   and a group command does not stop a blind that already moves that way.

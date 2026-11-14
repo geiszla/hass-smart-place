@@ -426,6 +426,11 @@ does and uses that:
   second call from an automation, a script, a scene or a voice command
   therefore does not stop the blind. The log says so at level INFO
   (`<entity> is already closing: BlindDown not sent`).
+- **Every open, close, stop and vent call is logged** at level INFO, with
+  who asked, the position the server reports and what the integration takes
+  the blind to do (`<entity>: close asked by user <name>; position 0 (0 is
+  down), at rest`). A call that no user made carries its context id
+  instead; the logbook shows the automation or script with that id.
 - **On the plan dashboard** Stop stands in place of the Down or Up button
   while the blind moves that way. A second press on the same place stops the
   blind, as in the Smart Place app.
