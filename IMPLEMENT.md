@@ -2118,3 +2118,21 @@ Assistant; the Bedroom blinds were up when the user found them.
 | Up to ten blind commands in a row from "All blinds up/down" | The server takes them all; a vendor scene moved eight blinds within 1.3 s. |
 | The two outer balcony blinds with "All blinds up/down" | They follow their own command, as they do from their own buttons. |
 
+
+### On the box (installed 2026-11-14, commit 020c6b7)
+
+- Pushed to `main`, `ha-live update --version 020c6b7`, no Marketplace
+  error in the core journal, restart. The entry loaded; the Connection
+  sensor is on; no entity of the integration is unavailable; no log
+  entry of the integration; the update entity reports 020c6b7 as
+  installed and latest.
+- The two buttons kept their entity ids and their state
+  (`button.smart_place_all_blinds_up` / `_down`), and the plan
+  configuration still refers to them.
+- The log line of the entry before this one was seen on the box before
+  this install: the user opened two blinds at 11:09:50, and each call
+  wrote `<entity>: open asked by user <name>; position 0 (0 is down), at
+  rest` followed by `command issued: BlindUp`.
+- Not seen: a press of "All blinds up/down" and a command for a blind
+  that is reported at that end. No command was sent from here.
+- The user asked for a look at the logs after a week (2026-11-21).
