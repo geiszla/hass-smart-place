@@ -16,9 +16,16 @@ asks :attr:`BlindMotion.direction` first can therefore
   way, also in the second before its first position arrives;
 - stop a moving blind, by sending the command for its direction.
 
+The reported position is the server's own estimate and can be wrong: a
+blind reported as fully down was up, and its down command moved it
+without any position following (2026-11-13). A blind's own command
+towards the end it is reported at therefore counts as a movement for the
+blind's run time.
+
 Positions are Home Assistant cover positions (0 = closed, 100 = open).
 Pure logic with an injectable clock; the Home Assistant entity schedules a
-callback at the timeout to write its state, because no frame arrives then.
+callback for the moment a direction's time is over to write its state,
+because no frame arrives then.
 """
 
 from __future__ import annotations
@@ -67,8 +74,11 @@ class BlindMotion:
       that direction for ``timeout`` seconds; positions then keep it
       going. The opposite command is taken to turn the blind round, and a
       group button is taken not to stop a blind (neither was tried).
-      Nothing starts at the end the command moves to, or without a
-      position.
+      Nothing starts without a position.
+    - At the end the command moves to, the blind's own command starts
+      that direction for ``run_time`` seconds (``timeout`` if the server
+      lists no run time): no position follows that could keep it going. A
+      group button starts nothing there.
     - Vent and a sub-menu's own group message: at rest until positions
       say otherwise.
     - For ``settle`` seconds after a command, a position that disagrees
@@ -77,6 +87,8 @@ class BlindMotion:
 
     timeout: float = BLIND_MOTION_TIMEOUT
     settle: float = BLIND_COMMAND_SETTLE
+    # Seconds a full run of the blind takes, ``None`` if the server lists none.
+    run_time: float | None = None
     clock: Callable[[], float] = time.monotonic
     _position: int | None = None
     _direction: Direction | None = None
@@ -87,8 +99,8 @@ class BlindMotion:
         """Feed the latest position (``None`` when the server reports none).
 
         Returns ``True`` when this position (re)started the timeout, i.e.
-        the caller should look at :attr:`direction` again ``timeout``
-        seconds from now.
+        the caller should look at :attr:`direction` again
+        :attr:`remaining` seconds from now.
         """
         previous, self._position = self._position, position
         if position is None:
@@ -118,23 +130,25 @@ class BlindMotion:
 
         Returns ``True`` when the command is for blind ``blind_id`` (its
         own up, down or vent, or a blinds group button): the caller should
-        look at :attr:`direction` again now and ``timeout`` seconds from
-        now.
+        look at :attr:`direction` again now and, if the blind moves,
+        :attr:`remaining` seconds from now.
         """
         if not command_moves_blind(command, args, blind_id):
             return False
         self.update(position)
         now = self.clock()
         towards = _COMMAND_DIRECTIONS.get(command)
-        if (
-            towards is None
-            or self._position in (None, _END[towards])
-            or (command.device == DEVICE_BLIND and self.direction == towards)
-        ):
+        own = command.device == DEVICE_BLIND
+        if towards is None or self._position is None or (own and self.direction == towards):
             self._direction = None
-        else:
+        elif self._position != _END[towards]:
             self._direction = towards
             self._deadline = now + self.timeout
+        elif own:
+            self._direction = towards
+            self._deadline = now + (self.run_time or self.timeout)
+        else:
+            self._direction = None
         self._settled_at = now + self.settle
         return True
 
@@ -144,3 +158,8 @@ class BlindMotion:
         if self._direction is not None and self.clock() >= self._deadline:
             self._direction = None
         return self._direction
+
+    @property
+    def remaining(self) -> float | None:
+        """Return the seconds until the direction ends unless a position keeps it going, ``None`` at rest."""
+        return None if self.direction is None else self._deadline - self.clock()

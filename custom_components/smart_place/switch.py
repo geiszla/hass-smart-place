@@ -286,7 +286,7 @@ class SmartPlaceLowerAfterAlarmSwitch(SmartPlacePushEntity, SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_lower_after_alarm_{blind.id}"
         self._lowering = LowerAfterAlarm()
         self._raised = BlindRaised()
-        self._motion = BlindMotion()
+        self._motion = BlindMotion(run_time=blind.runtime_s)
         # Seeded here: the icon is part of the state that is recorded as written when the entity is added.
         self._alarm = BlindAlarm()
         self._alarm.update(self._value())

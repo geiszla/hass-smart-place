@@ -247,7 +247,7 @@ again whenever the server lists a new one. Nothing is configured per home.
 | Numbered on/off scenes (e.g. ventilation level 1/2/3) | `fan` | Three or more scenes with the same name and the numbers 1..N become one fan with N speeds, if exactly one of them is on when the integration first sees them. Otherwise they become switches |
 | All lights | `button` | "All lights off" and "All lights on" switch every light and socket that is not in that state yet, one after the other. A [protected socket](#protected-sockets) is never switched. Smart Place's own "All" button of the lights page is not used: what it does is not known |
 | All heating | `button` | "All heating off" switches off every heating zone that heats. "Heating back on" switches exactly those zones on again, each at the target it had. A zone that was already off stays off, and without a preceding "All heating off" the button does nothing. The zones to switch back on are kept across restarts |
-| Group buttons of the blinds page | `button` | "All blinds up", "All blinds down"; the button of a blinds group other than "All" is disabled by default |
+| All blinds | `button` | "All blinds up" and "All blinds down" move every blind through its own entity, one after the other. A blind gets no command if it is already reported at that end (unless it was just sent the other way), if a weather alarm holds it, or if it already moves that way. Smart Place's own "All" buttons of the blinds page are not used: they leave out some blinds, and which ones is set inside Smart Place. The button of a blinds group other than "All" sends that group's Smart Place command and is disabled by default |
 | Doorbell mute | `switch` | |
 | Door openers | `button` | They open real doors; not offered to the voice assistant by default |
 | Floor plan | `image` and a dashboard | See [Plan dashboard](#plan-dashboard) |
@@ -440,9 +440,9 @@ How the integration knows that a blind moves:
 
 - from its positions: Smart Place reports about one per second while a blind
   moves. This also covers a wall button, the Smart Place app and a scene;
-- from the commands Home Assistant sends: the blind's own up and down and the
-  blinds group buttons count at once, about a second before the first
-  position arrives.
+- from the commands Home Assistant sends: the blind's own up and down count
+  at once, about a second before the first position arrives. "All blinds up"
+  and "All blinds down" send these commands too.
 
 Smart Place does not say when a blind stops. A blind counts as moving until 6
 seconds after its last position, or until it reports the end it moves to.
@@ -457,8 +457,20 @@ What follows from that:
   scene less than about a second ago is not known to move yet. A close sent
   then stops it.
 - Not tried on the real system, so assumed: the opposite command turns a
-  moving blind round, and a blinds group button does not stop a blind that
-  already moves that way.
+  moving blind round.
+
+**The position is Smart Place's own estimate, and it can be wrong.** A blind
+was reported as fully down while it was up; its down command then moved it,
+and Smart Place reported no position for that run. So after an up or down
+command towards the end where the blind is already reported, the blind counts
+as moving for its run time (about 30 to 60 seconds, as Smart Place lists it;
+6 seconds if it lists none):
+
+- it reads "closing" or "opening", and Stop is offered;
+- a second command for the same direction is not sent, so it does not stop
+  the blind;
+- a blind that really is at that end also reads "closing" or "opening" for
+  that time, although nothing moves.
 
 ## Blinds and weather alarms
 
@@ -543,8 +555,10 @@ How it works:
   (minutes)** in the [options](#options); it applies to all blinds. The wait
   ends without lowering if the alarm comes back, the blind reports another
   position (somebody moved it), Home Assistant sends a command for the blind
-  (its up, down or vent, or a blinds group button), the switch is turned off,
-  or the connection is lost.
+  (its up, down or vent), the switch is turned off, or the connection is
+  lost. "All blinds up" and "All blinds down" send a command only to a blind
+  that is not reported at that end: the wait for a blind that is reported as
+  fully up goes on after "All blinds up".
 - When it is time, the command is sent only if the switch is on, the
   connection is up, the blind is not blocked and it is not already fully
   down. It is sent once and never repeated. It is also left out when the
@@ -560,9 +574,9 @@ How it works:
   not raise the blind.
 - **Moving the blind up turns the switch off**: whoever pulls a blind up does
   not want it lowered again.
-  - The blind's own up command from Home Assistant (plan, card, automation,
-    voice) turns it off at once.
-  - Any other move up (the Smart Place app, a group button, a scene) turns it
+  - The blind's own up command from Home Assistant (plan, card, "All blinds
+    up", automation, voice) turns it off at once.
+  - Any other move up (the Smart Place app, a wall button, a scene) turns it
     off when the blind reports a position higher up than the one before.
     This does not count while a rain, hail or wind alarm is on: the alarm
     itself drives blinds up. It also does not count when the move was not

@@ -2030,3 +2030,91 @@ shows it, offers stop and sends no second command.
   reports 6be8dba as installed and latest.
 - Not seen: the new log line. No command was sent; it appears with the
   next call for a blind.
+
+## 2026-11-14 — "All blinds" through each blind's own entity, and a blind reported at the wrong end
+
+The user's answers to the entry above: both proposals are to be done; the
+three down commands of 2026-11-13 were three presses of Down in Home
+Assistant; the Bedroom blinds were up when the user found them.
+
+### What changed
+
+- `button.py`: `SmartPlaceAllBlindsButton` replaces `SmartPlaceGroupButton`
+  for the plan-wide blinds sub-menu. A press calls `cover.open_cover` or
+  `cover.close_cover` for every blind of the plan through its cover
+  entity, one after the other, with the context of the press. No call
+  for a blind without a position (cover disabled or unavailable, or a
+  weather alarm holds the blind) and for a blind at rest at that end.
+  The vendor's `JALUPZENTRAL<plan>` / `JALDOWZENTRAL<plan>` are no longer
+  sent; `Commands.BlindsGroupUp` / `BlindsGroupDown` stay declared.
+  Unique ids, entity ids, names and the plan tiles are unchanged.
+  `SmartPlaceGroupButton` remains for any other blinds sub-menu.
+- `motion.py`: a blind's own up or down command towards the end it is
+  reported at starts that direction for `BlindMotion.run_time` (the
+  blind's `runtime_s`; the 6 s timeout if the server lists none). Before,
+  it started nothing. `BlindMotion.remaining` says how long a direction
+  lasts without a new position. A group command still starts nothing at
+  that end.
+- `cover.py`, `switch.py`: both trackers get the blind's run time. The
+  cover's timer runs for `remaining`, so the state is written when an
+  assumed run is over, and no timer is set after a stop.
+
+### Decisions made here
+
+- "All blinds" leave out a blind that is reported at that end, as "All
+  lights" leave out a light that is already in that state (described to
+  the user before the change). Otherwise every such blind would read
+  "opening" or "closing" for its run time after each press. The price: a
+  blind whose reported position is wrong is not moved by the button;
+  its own button moves it.
+- A blind at that end whose cover reads as moving the other way gets the
+  command. Found by a check: "All blinds up" pressed right after "All
+  blinds down", before the first position, did nothing.
+- A group command at the end it moves to keeps starting nothing: only
+  the button of another blinds sub-menu still sends one, and which
+  blinds it moves is not known.
+
+### What follows from it
+
+- A wait of "Lower after weather alarm" used to end at every press of an
+  "all blinds" button. Now it ends only if the button sends the blind a
+  command. A blind that is reported as fully up, and whose alarm just
+  ended, is still lowered after the wait when "All blinds up" is pressed
+  in between. Not asked of the user; said in the report.
+- "All blinds up" turns "Lower after weather alarm" off at once for
+  every blind it moves (its own up command), no longer only when the
+  blind reports a higher position.
+- A blind that really is at the end reads "closing" or "opening" for its
+  run time after a command towards that end. A close followed at once by
+  an open for a blind that is up reads "opening" for that long if no
+  position arrives.
+
+### How it was checked
+
+- `./scripts/lint-check`: clean. `./scripts/test`: 619 pass, 7 of them
+  new in `tests/test_motion.py` (the run time, the 6 s without one, a
+  second command as the stop, the opposite command, a position during
+  the run, a group button at the end, `remaining`).
+- Type check of the Home Assistant modules against
+  `homeassistant==2026.11.1`: 0 errors. hassfest: valid.
+- Runtime checks on a real Home Assistant core with scripted sockets:
+  215 pass. 17 are new: "all down" sends every free blind its own
+  command and none to the two a rain alarm holds; "all up" sends nothing
+  to blinds reported up and moves the others; a blind reported down is
+  left out of "all down"; a blind already moving that way; a disabled
+  cover; the context of the press; the switch of a blind moved up is
+  turned off; "all up" right after "all down"; a wait that goes on, and
+  one that "all down" ends; a close for a blind reported down reads
+  "closing", a second and third close send nothing, stop sends the down
+  command once, open turns it round, the state returns to "closed" when
+  the run time is over, the same for open at the upper end, and the
+  switch sends no second down command. Nine earlier checks were adapted
+  (they pressed a group button or expected nothing to start at the end).
+
+### Needs a live test
+
+| Point | Assumption in the code |
+| --- | --- |
+| Up to ten blind commands in a row from "All blinds up/down" | The server takes them all; a vendor scene moved eight blinds within 1.3 s. |
+| The two outer balcony blinds with "All blinds up/down" | They follow their own command, as they do from their own buttons. |
+

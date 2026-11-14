@@ -976,7 +976,9 @@ and ``tests/fixtures/scene-echo.ndjson``.
   blind 7, which was down too. Both were lowered on 2026-11-13 together
   with four lights and six other blinds by something Home Assistant did
   not send, probably a vendor scene. No config frame tells the two apart
-  from the other blinds.
+  from the other blinds. The integration no longer sends these two
+  commands (user decision, 2026-11-14; see "button" in §11): its "all
+  blinds" buttons move each blind through its own entity.
 - The value frames ``LEUCHTENZENTRAL<n>`` and ``JALZENTRAL<n>`` are
   placeholders and stay ignored.
 - ``MUTE<n>:00|01``, ``01`` = doorbell muted; command ``MUTE<n>`` =
@@ -1390,7 +1392,7 @@ whoever pulls a blind up does not want it lowered again).
 - Home Assistant's own up command for the blind
   (`alarm.command_raises_blind`, heard through `command_listeners`)
   switches it off at once, before the command is sent.
-- Any other move up (vendor app, a group button, a scene) is taken from
+- Any other move up (vendor app, wall button, a scene) is taken from
   the positions: `alarm.BlindRaised` answers for a position higher up
   than the one before it. Only two positions seen one after the other in
   one connection are compared; an alarm word or a missing value between
@@ -1427,7 +1429,10 @@ the waiting time and sends `Commands.BlindDown` through `_async_issue`
    (`alarm.command_moves_blind`: its up, down or vent, or a blinds group
    button; reported through `SmartPlaceData.command_listeners` from
    `_async_issue`), or the blind reports another position than at the
-   end of the alarm.
+   end of the alarm. "All blinds up/down" send a blind its own command,
+   and only if it is not reported at that end: a wait for a blind that is
+   reported as fully up goes on after "All blinds up" (with the vendor's
+   group command, until 2026-11-14, it ended).
 4. When the wait is over (`due`): only if the switch is on, the
    connection is healthy, the blind is not blocked again and it is not
    already moving down (see below), `JALDOW<id>` is sent once, whatever
@@ -1533,7 +1538,14 @@ pure `motion.BlindMotion` (injectable clock, `tests/test_motion.py`):
     (this is the stop);
   - any other up or down, also a blinds group button of any plan: that
     direction, for 6 s, then the positions keep it going. Nothing starts
-    at the end the command moves to, or without a position;
+    without a position;
+  - at the end the command moves to, the blind's own up or down: that
+    direction for the blind's run time (`BlindConfig.runtime_s`, 29 to
+    60 s here; 6 s if the server lists none). The reported position can
+    be wrong, and then the blind moves without a position following
+    (2026-11-13; user decision, 2026-11-14). `BlindMotion.remaining` says
+    how long a direction lasts without a new position; the cover's timer
+    uses it. A group button starts nothing there;
   - vent and a sub-menu's own group message: at rest until the positions
     say otherwise.
 
@@ -1559,14 +1571,16 @@ Limits, all because the server says nothing when a blind stops:
   sends that command and starts the blind again.
 - A blind started from outside Home Assistant less than about a second
   ago is not known to move: a close sent then stops it.
-- A blind whose reported position is wrong (see "Blinds" in the control
-  protocol): a command towards the end it is reported at is sent and
-  moves it, but counts as starting nothing. The cover keeps its state and
-  offers no stop, and a second call for that direction is sent and stops
-  the blind (2026-11-13).
-- For 6 s after a blinds group button every blind counts as moving that
-  way, also one the vendor system leaves out of the group command: its
-  own command for that direction is not sent in that time.
+- A blind that really is at the end it is reported at counts as moving
+  for its run time after a command towards that end. In that time a
+  command for the same direction is left out, and a stop sends that
+  command.
+- A blind whose reported position is wrong and that is moved from
+  outside Home Assistant: no position follows, so nothing is known.
+- For 6 s after a blinds group command every blind counts as moving that
+  way, also one the vendor system leaves out of it. The integration no
+  longer sends the plan-wide group commands, so this only concerns the
+  button of another blinds sub-menu (disabled by default).
 - Assumed, not tried: the opposite command turns a moving blind round
   (if it stops the blind instead, the direction is wrong for up to 6 s),
   and a group command does not stop a blind that already moves that way.
@@ -1864,13 +1878,29 @@ preceding "off" the "on" button does nothing. The "off" button stores
 the set as extra restore data, so it survives a restart. Unique ids
 `<entry_id>_all_heating_off` / `_heating_back_on`.
 
-`SmartPlaceGroupButton`, on the main device: the blinds sub-menu that
-covers its whole plan (group message `JALZENTRAL<plan>`) gets "all up"
-and "all down" (`JALUPZENTRAL<plan>` / `JALDOWZENTRAL<plan>`); any other
-blinds sub-menu gets one button that sends its own group message,
-disabled by default because its effect is untested. A group message is
-only sent back when it has the expected shape (a `JAL…<n>` frame name);
-otherwise the sub-menu gets no button.
+`SmartPlaceAllBlindsButton`, on the main device: the blinds sub-menu
+that covers its whole plan (group message `JALZENTRAL<plan>`) gets "all
+up" and "all down". A press calls `cover.open_cover` (or `close_cover`)
+for every blind of that plan through its cover entity, one call after
+the other, with the context of the press. Left out: a blind whose cover
+has no position (disabled, unavailable, or held by a weather alarm, when
+the cover offers no command) and a blind that is reported at that end,
+unless its cover reads as moving away from it ("all up" right after "all
+down", before the first position); the cover itself sends nothing to a
+blind that already moves that way.
+The vendor's group commands `JALUPZENTRAL<plan>` / `JALDOWZENTRAL<plan>`
+are not used any more (user decision, 2026-11-14): they leave out blinds
+2 and 7 here, and which blinds follow is set inside the vendor system.
+`Commands.BlindsGroupUp` / `BlindsGroupDown` stay declared only. The
+unique ids are unchanged (`<entry_id>_blinds_group_up_<menu>` /
+`_down_<menu>`). Not tried on the real system: up to ten blind commands
+in a row.
+
+`SmartPlaceGroupButton`, on the main device: any other blinds sub-menu
+gets one button that sends its own group message, disabled by default
+because its effect is untested. A group message is only sent back when
+it has the expected shape (a `JAL…<n>` frame name); otherwise the
+sub-menu gets no button.
 
 ### Polling
 

@@ -19,10 +19,12 @@ through the zones' own entities, and remembers which zones it switched.
 the target it had (``climate.py``). A zone that was off before stays off.
 
 The vendor app's blinds sub-menus add group buttons: the one that covers
-its whole plan gets "all up" and "all down" for the blinds of that plan;
-any other blinds sub-menu gets one button that sends its own group
-message (what the server does with it is untested, so that button is
-disabled by default).
+its whole plan gets "all up" and "all down" for the blinds of that plan,
+which move every blind through its own entity as well. The vendor's
+group command for this is not used: it leaves out blinds, and which ones
+is set inside the vendor system. Any other blinds sub-menu gets one
+button that sends its own group message (what the server does with it is
+untested, so that button is disabled by default).
 """
 
 from __future__ import annotations
@@ -35,7 +37,17 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.components.climate import ATTR_HVAC_MODE, DOMAIN as CLIMATE_DOMAIN, SERVICE_SET_HVAC_MODE, HVACMode
-from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_ON, STATE_OFF, STATE_ON, Platform
+from homeassistant.components.cover import ATTR_CURRENT_POSITION, CoverState
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    SERVICE_CLOSE_COVER,
+    SERVICE_OPEN_COVER,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    STATE_OFF,
+    STATE_ON,
+    Platform,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.restore_state import ExtraStoredData
@@ -76,16 +88,16 @@ async def async_setup_entry(
                 found["all_heating", on] = partial(SmartPlaceAllHeatingButton, entry, data, on=on)
         for menu in state.blind_sub_menus.values():
             if (plan_id := blinds_menu_plan(menu)) is not None:
-                for direction, command in (("up", Commands.BlindsGroupUp), ("down", Commands.BlindsGroupDown)):
+                for direction in ("up", "down"):
                     found[f"blinds_group_{direction}", menu.id] = partial(
-                        SmartPlaceGroupButton,
+                        SmartPlaceAllBlindsButton,
                         entry,
                         data,
                         name=f"{menu.name} blinds {direction}",
                         unique_id=f"blinds_group_{direction}_{menu.id}",
                         translation_key=f"blinds_group_{direction}",
-                        command=command,
-                        argument=plan_id,
+                        plan_id=plan_id,
+                        up=direction == "up",
                     )
                 continue
             # Any other sub-menu must not move the whole plan: it sends its own
@@ -250,8 +262,64 @@ class SmartPlaceAllHeatingButton(SmartPlacePushEntity, ButtonEntity):
                 remembered.discard(zone_id)
 
 
+class SmartPlaceAllBlindsButton(SmartPlacePushEntity, ButtonEntity):
+    """Move every blind of a plan up, or down.
+
+    Each blind that is not reported at that end, or that moves away from
+    it, gets its own open (or close) call, one after the other. A blind
+    held by a weather alarm is left alone, and the cover sends nothing to
+    a blind that already moves that way. The vendor's group command
+    (``JALUPZENTRAL<plan>`` / ``JALDOWZENTRAL<plan>``) is not used: here
+    it leaves out the two blinds at the outer edge of the balconies
+    (2026-11-14).
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        entry: SmartPlaceConfigEntry,
+        data: SmartPlaceData,
+        *,
+        name: str,
+        unique_id: str,
+        translation_key: str,
+        plan_id: int,
+        up: bool,
+    ) -> None:
+        """Wire the plan, the direction, the button's name and unique_id."""
+        self._data = data
+        self._entry_id = entry.entry_id
+        self._plan_id = plan_id
+        self._service, self._end, self._away = (
+            (SERVICE_OPEN_COVER, 100, CoverState.CLOSING) if up else (SERVICE_CLOSE_COVER, 0, CoverState.OPENING)
+        )
+        self._attr_name = name
+        self._attr_translation_key = translation_key
+        self._attr_unique_id = f"{entry.entry_id}_{unique_id}"
+        self._attr_device_info = main_device_info(entry)
+
+    async def async_press(self) -> None:
+        """Call open (or close) for every blind of the plan that is not at rest at that end."""
+        registry = er.async_get(self.hass)
+        for blind in self._data.state.blinds.values():
+            if blind.plan_id != self._plan_id:
+                continue
+            entity_id = registry.async_get_entity_id(Platform.COVER, DOMAIN, f"{self._entry_id}_blind_{blind.id}")
+            if entity_id is None or (state := self.hass.states.get(entity_id)) is None:
+                continue
+            position = state.attributes.get(ATTR_CURRENT_POSITION)
+            # No position: the cover is unavailable, or a weather alarm holds the blind. A blind
+            # that was just sent the other way is still reported at this end.
+            if position is None or (position == self._end and state.state != self._away):
+                continue
+            await self.hass.services.async_call(
+                Platform.COVER, self._service, {ATTR_ENTITY_ID: entity_id}, blocking=True, context=self._context
+            )
+
+
 class SmartPlaceGroupButton(SmartPlacePushEntity, ButtonEntity):
-    """A blinds sub-menu group button: all blinds up, all blinds down, a group of blinds."""
+    """The button of a blinds sub-menu that does not cover its whole plan: it sends the sub-menu's own group message."""
 
     _attr_has_entity_name = True
 

@@ -15,7 +15,10 @@ its positions and the commands Home Assistant sends for it) and
 - sends nothing for an open or close while the blind already moves that
   way, so a second call does not stop it;
 - offers stop: the command for the direction the blind moves in, and
-  nothing for a blind at rest.
+  nothing for a blind at rest;
+- takes a blind to move for its run time after a command towards the end
+  it is reported at: the reported position can be wrong, and then the
+  blind moves without a position following.
 
 The position is the server's own time-based estimate, hence
 ``assumed_state``: Home Assistant then keeps both direction buttons
@@ -44,7 +47,6 @@ from .smart_place_client import (
     BLIND_KIND_AWNING,
     BLIND_KIND_FABRIC,
     BLIND_KIND_SLATTED,
-    BLIND_MOTION_TIMEOUT,
     BlindAlarm,
     BlindConfig,
     BlindMotion,
@@ -127,7 +129,7 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
         # Seeded here: the features are read when the entity is registered.
         self._alarm = BlindAlarm()
         self._alarm.update(self._value())
-        self._motion = BlindMotion()
+        self._motion = BlindMotion(run_time=blind.runtime_s)
         self._motion_timer: CALLBACK_TYPE | None = None
         self._opened_at: float | None = None
 
@@ -202,13 +204,12 @@ class SmartPlaceCover(SmartPlacePushEntity, CoverEntity):
 
     @callback
     def _async_watch_motion(self) -> None:
-        """Look at the direction again after the timeout: the server says nothing when a blind stops."""
+        """Look at the direction again when its time is over: the server says nothing when a blind stops."""
         self._async_cancel_motion_timer()
-        self._motion_timer = async_call_later(
-            self.hass,
-            BLIND_MOTION_TIMEOUT + _MOTION_TIMER_MARGIN,
-            self._async_motion_timed_out,
-        )
+        if (remaining := self._motion.remaining) is not None:
+            self._motion_timer = async_call_later(
+                self.hass, remaining + _MOTION_TIMER_MARGIN, self._async_motion_timed_out
+            )
 
     @callback
     def _async_motion_timed_out(self, _now: datetime) -> None:

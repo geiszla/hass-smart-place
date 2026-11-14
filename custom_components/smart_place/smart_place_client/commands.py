@@ -390,7 +390,10 @@ class Commands:
             "Move every blind of floor plan <plan> up (wire: ``JALUPZENTRAL<plan>``), "
             "the 'All up' button of the plan-wide blinds sub-menu. The number is the "
             "plan id. The vendor app offers it for that sub-menu only; any other "
-            "blinds sub-menu sends its own group message (``BlindsGroupMessage``)."
+            "blinds sub-menu sends its own group message (``BlindsGroupMessage``). "
+            "Which blinds follow is set inside the vendor system; in the reference "
+            "installation two do not. The integration does not issue it: its 'all "
+            "blinds' buttons move each blind through its own entity."
         ),
         encode=_encode_blinds_group_up,
         example="JALUPZENTRAL1",
@@ -399,7 +402,10 @@ class Commands:
     )
     BlindsGroupDown = CommandDefinition(
         name="BlindsGroupDown",
-        description="Move every blind of floor plan <plan> down (wire: ``JALDOWZENTRAL<plan>``).",
+        description=(
+            "Move every blind of floor plan <plan> down (wire: ``JALDOWZENTRAL<plan>``). "
+            "As ``BlindsGroupUp``: not every blind follows, and the integration does not issue it."
+        ),
         encode=_encode_blinds_group_down,
         example="JALDOWZENTRAL1",
         example_args=(1,),
