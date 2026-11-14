@@ -2176,3 +2176,15 @@ rest, because they are still reported up.
   sends nothing; the state never reads "closing", so the plan shows no
   Stop; the same for an open at the upper end.
 
+
+### On the box (installed 2026-11-14, commit 37819fb)
+
+- Pushed to `main`, `ha-live update --version 37819fb`, no Marketplace
+  error in the core journal, restart. The entry loaded; the Connection
+  sensor is on; no entity of the integration is unavailable; no log
+  entry of the integration; the update entity reports 37819fb as
+  installed and latest.
+- Not seen: a command for a blind that is reported at that end, and a
+  press of "All blinds up/down". No command was sent from here.
+- The look at the logs on 2026-11-21 also prepares the decision on what
+  such a command should do in the end.
