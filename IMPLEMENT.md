@@ -2020,3 +2020,13 @@ shows it, offers stop and sends no second command.
   the 26 checks for covers, stop and a moving blind pass, and 2 new ones
   for the log line (a call with and without a user, a second close that
   is not sent, a stop at rest).
+
+### On the box (installed 2026-11-14, commit 6be8dba)
+
+- Pushed to `main`, `ha-live update --version 6be8dba`, no Marketplace
+  error in the core journal, restart. The entry loaded after the core's
+  start-up; the Connection sensor is on; no entity of the integration is
+  unavailable; no log entry of the integration; the update entity
+  reports 6be8dba as installed and latest.
+- Not seen: the new log line. No command was sent; it appears with the
+  next call for a blind.
