@@ -145,6 +145,33 @@ def test_consumption_warning_covers_both_levels_with_a_title_each() -> None:
     assert trigger["not_from"] == ["unknown", "unavailable"]
 
 
+def test_package_notification_is_removed_when_the_pin_is_gone() -> None:
+    blueprint = _load(blueprint_install.BLUEPRINTS / "package_delivered.yaml")
+    delivered, collected = blueprint["triggers"]
+    assert delivered["id"] == "delivered"
+    # Only from a PIN: after a restart or a reconnect the sensor goes from "unavailable" to "unknown" as well.
+    assert collected == {
+        "trigger": "state",
+        "entity_id": "pin_sensor",
+        "not_from": ["unknown", "unavailable"],
+        "to": "unknown",
+        "id": "collected",
+    }
+    [step] = blueprint["actions"]
+    assert step["if"] == [{"condition": "trigger", "id": "collected"}]
+    [removal] = step["then"]
+    [message] = removal["repeat"]["sequence"]
+    # The same tag as the notification, or the phone removes nothing.
+    assert message["data"] == {
+        "message": "clear_notification",
+        "data": {"ttl": 0, "priority": "high", "tag": "parcel-box"},
+    }
+    [notification] = step["else"][-1]["repeat"]["sequence"]
+    assert "'tag': 'parcel-box'" in notification["data"]["data"]
+    # Queued: a removal that arrives while a notification is being sent must not be skipped.
+    assert blueprint["mode"] == "queued"
+
+
 def test_installer_copies_every_blueprint_into_a_new_folder(tmp_path: Path) -> None:
     target = tmp_path / "blueprints" / "automation" / "smart_place"
     assert blueprint_install.install_blueprints(target) == _NAMES

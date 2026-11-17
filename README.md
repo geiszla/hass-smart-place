@@ -758,7 +758,10 @@ with the history, on your default dashboard.
 **Smart Place: package delivered.** Sends the PIN of the parcel box when a
 package is delivered, that is when the sensor "Package delivery PIN" gets a
 new value. A new notification replaces the previous one. A tap opens the PIN
-sensor.
+sensor. When the package is collected, the notification is removed from every
+phone: Smart Place then no longer shows the delivery and the sensor has no
+PIN. A pickup while Home Assistant restarts or has no connection to Smart
+Place is not seen; that notification stays until you remove it.
 
 **Smart Place: new info board entry.** Sends the text of a new entry on the
 building's info board. A tap on the notification opens the Smart Place web

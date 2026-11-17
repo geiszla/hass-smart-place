@@ -2188,3 +2188,73 @@ rest, because they are still reported up.
   press of "All blinds up/down". No command was sent from here.
 - The look at the logs on 2026-11-21 also prepares the decision on what
   such a command should do in the end.
+
+## 2026-11-17 — Blueprint "package delivered": the notification is removed when the package is collected
+
+The user asked whether the package notification can be removed
+automatically when the package is collected. It can.
+
+### What the server does
+
+- A delivery is the text in `PERSINFO` (with the PIN). When there is no
+  delivery, the server sends `PERSINFO:Read`; the PIN sensor then reads
+  "unknown".
+- The vendor web app only shows or hides this text. Unlike the info
+  board, it has no click that tells the server "read"
+  (`javallg.js`: the `PERSINFO` branch sets `display` only). So the
+  server takes the delivery back by itself.
+- Seen: the text with a PIN in the capture of 2026-06-25, and
+  `PERSINFO:Read` in every capture and on the box after the delivery of
+  2026-10-29.
+- Not seen: the moment itself. Nothing was captured during a pickup, and
+  the box's history of 2026-10-29 is no longer kept. That the text ends
+  when the box is opened with the PIN is the likely reading, not a
+  measured one. Check it at the next delivery: the notification should
+  disappear when the package is taken out.
+
+### The change
+
+`package_delivered.yaml` has a second trigger, `collected`: the PIN
+sensor goes from a PIN to "unknown". It sends `clear_notification` with
+the tag `parcel-box` to every phone that has the app, as the wind
+reminder does. The mode is `queued` now (it was `single`), so that a
+removal is never skipped while a notification is being sent.
+
+Only from a PIN, not from "unavailable": after every restart and every
+reconnect the sensor goes from "unavailable" to "unknown", and each of
+those would send a silent message to every phone. What this leaves out:
+a pickup while Home Assistant restarts or has no connection. That
+notification stays until it is swiped away. A reconnect while the
+package waits changes nothing: the sensor reads the PIN again, no second
+notification is sent, and the pickup afterwards removes the first one.
+
+Not changed: the info board notification (it has no tag and stays after
+the entry was read) and the intercom notification (it stays after the
+ring ended). Both could be removed the same way.
+
+### How it was checked
+
+- `./scripts/lint-check`: clean. `./scripts/test`: all pass, one new
+  test for the trigger, the removal message and the mode.
+- On a real Home Assistant 2026.11.1 core with two stand-in phones
+  (five checks): a new PIN notifies both; "unknown" after a PIN sends
+  `clear_notification` with the tag to both; a second PIN sends a new
+  notification and no removal; "unavailable" and back to the PIN sends
+  nothing, and the pickup after it removes; "unavailable" to "unknown"
+  sends nothing.
+
+### On the box (2026-11-17)
+
+- The blueprint on the box was the repository's version before the
+  change (`blueprint/substitute` gave the same triggers, actions and
+  mode).
+- Written with `./scripts/ha-live ws blueprint/save` (`allow_override`),
+  from the working tree, without a push. Home Assistant reloaded the
+  automations made from this blueprint, that is "New Package" only. The
+  integration was not reloaded.
+- After it: "New Package" is on, its mode is `queued`, its inputs and
+  its last run (2026-10-29) are unchanged, `blueprint/substitute` gives
+  exactly the repository's new version, nothing was logged.
+- Not seen: a delivery and a pickup. No notification was sent from here.
+- "Re-import blueprint" on the box takes the file from `main` on GitHub:
+  the same version once this commit is pushed there.

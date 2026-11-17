@@ -1,11 +1,13 @@
 blueprint:
   name: "Smart Place: package delivered"
   description: |
-    Sends a notification with the PIN of the parcel box when a package is delivered.
+    Sends a notification with the PIN of the parcel box when a package is delivered, and removes it when the
+    package is collected.
 
     The notification goes to every phone that has the Home Assistant app. It is sent when the sensor
     "Package delivery PIN" of the Smart Place integration gets a new PIN. A new notification replaces the
-    previous one.
+    previous one. It is removed from every phone when the sensor has no PIN any more: Smart Place then no
+    longer shows the delivery.
 
     Title and message can contain templates. `{{ value }}` is the PIN.
   domain: automation
@@ -46,28 +48,55 @@ triggers:
     not_to:
       - unknown
       - unavailable
+    id: delivered
+  # Only from a PIN: after a restart or a reconnect the sensor goes from "unavailable" to "unknown" as well.
+  - trigger: state
+    entity_id: !input pin_sensor
+    not_from:
+      - unknown
+      - unavailable
+    to: unknown
+    id: collected
 
 actions:
-  - variables:
-      pin_sensor: !input pin_sensor
-      channel: !input channel
-      value: "{{ trigger.to_state.state }}"
-      # A tap opens the sensor's details on the default dashboard.
-      tap_target: "/?more-info-entity-id={{ pin_sensor }}"
-  - repeat:
-      # Every phone with the Home Assistant app has a notify entity.
-      for_each: >
-        {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
-      sequence:
-        # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's device.
-        - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
-          data:
-            title: !input title
-            message: !input message
-            # ttl 0 and priority high: delivered at once, also to a sleeping phone.
-            # The Android app reads clickAction, the iOS app url.
-            data: >
-              {{ {'ttl': 0, 'priority': 'high', 'tag': 'parcel-box', 'clickAction': tap_target, 'url': tap_target}
-                 | combine({'channel': channel} if channel else {}) }}
+  - if:
+      - condition: trigger
+        id: collected
+    then:
+      - repeat:
+          # Every phone with the Home Assistant app has a notify entity.
+          for_each: >
+            {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+          sequence:
+            - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+              data:
+                message: clear_notification
+                data:
+                  ttl: 0
+                  priority: high
+                  tag: parcel-box
+    else:
+      - variables:
+          pin_sensor: !input pin_sensor
+          channel: !input channel
+          value: "{{ trigger.to_state.state }}"
+          # A tap opens the sensor's details on the default dashboard.
+          tap_target: "/?more-info-entity-id={{ pin_sensor }}"
+      - repeat:
+          for_each: >
+            {{ integration_entities('mobile_app') | select('match', 'notify\.') | list }}
+          sequence:
+            # notify.send_message cannot carry "data". The app's own action can; it is named after the phone's
+            # device.
+            - action: "notify.{{ ('mobile_app_' ~ device_attr(repeat.item, 'name')) | slugify }}"
+              data:
+                title: !input title
+                message: !input message
+                # ttl 0 and priority high: delivered at once, also to a sleeping phone.
+                # The Android app reads clickAction, the iOS app url.
+                data: >
+                  {{ {'ttl': 0, 'priority': 'high', 'tag': 'parcel-box', 'clickAction': tap_target, 'url': tap_target}
+                     | combine({'channel': channel} if channel else {}) }}
 
-mode: single
+# Queued, so that removing the notification waits for one that is being sent and is never skipped.
+mode: queued
